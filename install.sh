@@ -18,6 +18,7 @@ set -e
 # Check if the venv folder already exists in the libraries folder
 if [ -d ".venv" ]; then
 	rm -rf .venv
+fi
 
 # Detect the operating system
 OS="$(uname -s)"
