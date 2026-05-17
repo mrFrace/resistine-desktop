@@ -17,16 +17,7 @@ set -e
 
 # Check if the venv folder already exists in the libraries folder
 if [ -d ".venv" ]; then
-	echo ".venv folder already exists. Do you want to delete it? (y/n)"
-	read delete_venv
-	if [ "$delete_venv" == "y" ]; then
-		rm -rf .venv
-	else
-		echo "In case you want to run the app, just run the ./run.sh.
-        In case you want to reinstall it, please delete the .venv folder and run this script again."
-		exit 1
-	fi
-fi
+	rm -rf .venv
 
 # Detect the operating system
 OS="$(uname -s)"
