@@ -29,6 +29,7 @@ build-job:       # This job runs in the build stage, which runs first.
     - set -e
     - echo "Compiling the code..."
     - bash
+    - ln -snf /usr/share/zoneinfo/$CONTAINER_TIMEZONE /etc/localtime && echo $CONTAINER_TIMEZONE > /etc/timezone
     - OS="$(uname -s)"
     - apt update -y 
     - apt install -y python3-dev python3-pip sudo
