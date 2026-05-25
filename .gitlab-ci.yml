@@ -36,7 +36,7 @@ build-job:       # This job runs in the build stage, which runs first.
     - uv venv
     - source .venv/bin/activate
     - id 
-    - echo -e 'ubuntu ALL=(ALL:ALL)    NOPASSWD: ALL' >/etc/sudoers.d/ubuntu.sudoers
+    - cp ./utils/ubuntu.sudoers >/etc/sudoers.d/ubuntu.sudoers
     - echo "ubuntu"
     - chmod +x install.sh && ./install.sh
     - echo "Compile complete."
