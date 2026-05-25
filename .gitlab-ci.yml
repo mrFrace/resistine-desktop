@@ -29,6 +29,11 @@ build-job:       # This job runs in the build stage, which runs first.
     - echo "Compiling the code..."
     - bash
     - OS="$(uname -s)"
+    - apt update -y 
+    - apt install -y python3-dev python3-pip
+    - pip install uv
+    - uv venv
+    - source .venv/bin/activate
     - chmod +x install.sh && ./install.sh
     - echo "Compile complete."
 
