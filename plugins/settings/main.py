@@ -126,38 +126,56 @@ class Plugin(BasePlugin):
 
         _section_title(profile_card, "Profile", 0)
 
-        email = settings.get("auth", "email", "None")
+        logged_in = settings.get("auth", "logged_in", False)
+        email = settings.get("auth", "email", None)
+        email_label_text = f"Email: {email}" if email else "Not signed in"
 
         customtkinter.CTkLabel(
             profile_card,
-            text=f"Email: {email}",
+            text=email_label_text,
             font=customtkinter.CTkFont(size=13),
             text_color=text_secondary,
         ).grid(row=2, column=0, padx=16, pady=(0, 10), sticky="w")
 
-        # Load sign-out icon
+        # Load sign-out icon (only shown when logged in)
         signout_icon = None
-        try:
-            from PIL import Image
-            plugin_dir = os.path.dirname(os.path.realpath(__file__))
-            signout_light = Image.open(os.path.join(plugin_dir, "signout_light.png"))
-            signout_dark = Image.open(os.path.join(plugin_dir, "signout_dark.png"))
-            signout_icon = customtkinter.CTkImage(
-                light_image=signout_light, dark_image=signout_dark, size=(18, 18)
-            )
-        except Exception:
-            pass
+        if logged_in:
+            try:
+                from PIL import Image
+                plugin_dir = os.path.dirname(os.path.realpath(__file__))
+                signout_light = Image.open(os.path.join(plugin_dir, "signout_light.png"))
+                signout_dark = Image.open(os.path.join(plugin_dir, "signout_dark.png"))
+                signout_icon = customtkinter.CTkImage(
+                    light_image=signout_light, dark_image=signout_dark, size=(18, 18)
+                )
+            except Exception:
+                pass
+
+        # Button text/color/action mirrors auth state: logged in -> Log Out
+        # (red, destructive); logged out -> Log In (primary blue, action).
+        if logged_in:
+            btn_text = "Log Out"
+            btn_fg = "#DC3545"
+            btn_hover = "#C82333"
+            btn_command = self._handle_logout
+            btn_image = signout_icon
+        else:
+            btn_text = "Log In"
+            btn_fg = "#0D5394"
+            btn_hover = "#0a4376"
+            btn_command = self._handle_login
+            btn_image = None
 
         self.logout_button = customtkinter.CTkButton(
             profile_card,
-            text="Log Out",
-            image=signout_icon,
+            text=btn_text,
+            image=btn_image,
             compound="left",
             height=34,
             corner_radius=8,
-            fg_color="#DC3545",
-            hover_color="#C82333",
-            command=self._handle_logout,
+            fg_color=btn_fg,
+            hover_color=btn_hover,
+            command=btn_command,
         )
         self.logout_button.grid(row=3, column=0, padx=16, pady=(0, 16), sticky="w")
 
@@ -465,7 +483,30 @@ class Plugin(BasePlugin):
             success, message = uninstall.run_uninstall(self.app, progress_callback=_progress)
 
             if success:
-                self.app.destroy()
+                self.uninstall_status_label.configure(
+                    text="Uninstalled. Closing…",
+                    text_color=("#0D5394", "#60A5FA"))
+                self.app.update_idletasks()
+                try:
+                    self.app.destroy()
+                except Exception:
+                    pass
+                if sys.platform == 'darwin':
+                    # macOS: keep the 0.3s deferred hard-exit so the Tk teardown
+                    # finishes flushing.
+                    import os as _os
+                    import threading as _th
+                    _th.Timer(0.3, lambda: _os._exit(0)).start()
+                else:
+                    # Windows/Linux: orderly shutdown so any spawned uninstaller
+                    # process (Inno's unins000.exe on Windows) and WinSparkle
+                    # finish cleanly. Their teardown is independent of ours.
+                    try:
+                        from utils import updates
+                        updates.shutdown()
+                    except Exception:
+                        pass
+                    sys.exit(0)
             else:
                 self.uninstall_button.configure(state="normal")
                 self.uninstall_status_label.configure(text=message, text_color="red")
@@ -476,6 +517,21 @@ class Plugin(BasePlugin):
 
     def _handle_logout(self):
         """Handle the Log Out button click with confirmation."""
+        # Without the Login plugin installed there's no way to sign back in,
+        # so refuse the logout up-front rather than stranding the user on a
+        # broken bootstrap path.
+        login_installed = any(
+            getattr(p, "id", None) == "007"
+            for p in getattr(self.app, "plugin_list", []) or []
+        )
+        if not login_installed:
+            self.app.show_notification(
+                "Please install the Login plugin from the Store first.",
+                type="warning",
+                centered=True,
+            )
+            return
+
         import tkinter.messagebox
 
         confirmed = tkinter.messagebox.askyesno(
@@ -502,20 +558,33 @@ class Plugin(BasePlugin):
 
         # Tear down dashboard and show login screen
         try:
-            from plugins.login.main import Plugin as LoginPlugin
-
-            for widget in self.app.winfo_children():
-                widget.destroy()
-
-            self.app.grid_rowconfigure(0, weight=1)
-            self.app.grid_columnconfigure(0, weight=1)
-            self.app.grid_columnconfigure(1, weight=0)
-
-            login_plugin = LoginPlugin(self.app)
-            login_plugin.show()
+            self.app.show_login_screen()
         except Exception as e:
             logger.error(f"Failed to show login screen: {e}")
             self.app.show_notification(f"Logout failed: {e}", type="error")
+
+    def _handle_login(self):
+        """Bring up the full-screen login. No data is cleared — auth namespace
+        was already clean (user is logged out / skipped). Guarded the same
+        way as logout: if the Login plugin was uninstalled, ask the user to
+        reinstall it before continuing.
+        """
+        login_installed = any(
+            getattr(p, "id", None) == "007"
+            for p in getattr(self.app, "plugin_list", []) or []
+        )
+        if not login_installed:
+            self.app.show_notification(
+                "Please install the Login plugin from the Store first.",
+                type="warning",
+                centered=True,
+            )
+            return
+        try:
+            self.app.show_login_screen()
+        except Exception as e:
+            logger.error(f"Failed to show login screen: {e}")
+            self.app.show_notification(f"Could not open sign-in: {e}", type="error")
 
     def _disconnect_vpn(self):
         """Disconnect the VPN tunnel (platform-specific)."""

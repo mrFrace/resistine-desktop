@@ -12,11 +12,19 @@ Licensed under the GNU General Public License v2 or later
 
 import glob
 import os
+import sys
 import threading
 import time
 
 from utils import settings
 from utils.logger import logger
+
+# This module orchestrates the ClamAV setup state machine, but every concrete
+# implementation it calls into (_launch_clamav_postinstall, _SYSTEM_*, FDA
+# checks, fcntl-based locking) is macOS-only. Importing platform modules from
+# inside helpers on Linux/Windows would raise, so each public entry point
+# short-circuits with a safe default on non-Darwin platforms.
+_IS_DARWIN = sys.platform == "darwin"
 
 # ---------------------------------------------------------------------------
 # Setup state constants (persisted lifecycle — one-time setup progress)
@@ -59,6 +67,8 @@ _MIN_CVD_SIZE = 1_000_000  # 1 MB — main.cvd is ~160 MB
 
 def get_setup_state() -> str:
     """Return current persisted setup lifecycle state."""
+    if not _IS_DARWIN:
+        return STATE_NOT_STARTED
     return settings.get(_NAMESPACE, "setup_state", STATE_NOT_STARTED)
 
 
@@ -67,6 +77,8 @@ def get_runtime_state() -> str:
 
     Only meaningful when setup_state == completed.
     """
+    if not _IS_DARWIN:
+        return RUNTIME_OFFLINE
     from plugins.antivirus.clamav_common import _ping_socket
     from plugins.antivirus.clamav_platform_darwin import (
         _SYSTEM_CLAMD_SOCKET,
@@ -101,11 +113,15 @@ def get_runtime_state() -> str:
 
 def get_failure_reason() -> str:
     """Return the last failure reason, or empty string."""
+    if not _IS_DARWIN:
+        return ""
     return settings.get(_NAMESPACE, "failure_reason", "")
 
 
 def get_failure_detail() -> str:
     """Return structured failure detail for support debugging."""
+    if not _IS_DARWIN:
+        return ""
     return settings.get(_NAMESPACE, "failure_detail", "")
 
 
@@ -115,6 +131,8 @@ def ensure_db_seed_started():
     No admin required. Call from: login success, app startup. Thread-safe.
     Uses fcntl.flock() to prevent concurrent freshclam processes.
     """
+    if not _IS_DARWIN:
+        return
     with _lock:
         state = get_setup_state()
 
@@ -146,6 +164,8 @@ def trigger_system_setup() -> bool:
 
     Returns True if the script launched successfully.
     """
+    if not _IS_DARWIN:
+        return False
     from plugins.antivirus.clamav_platform_darwin import (
         _launch_clamav_postinstall,
     )
@@ -171,6 +191,8 @@ def trigger_system_setup() -> bool:
 
 def poll_setup_progress() -> dict:
     """Poll status file. Returns {finished, success, step, error}."""
+    if not _IS_DARWIN:
+        return {"finished": True, "success": False, "step": "", "error": "unsupported_platform"}
     from plugins.antivirus.clamav_platform_darwin import _poll_setup_status
 
     status_file = settings.get(_NAMESPACE, "install_status_file", "")
@@ -230,6 +252,8 @@ def poll_setup_progress() -> dict:
 
 def mark_completed():
     """Transition to completed state. Thread-safe public API."""
+    if not _IS_DARWIN:
+        return
     with _lock:
         _set_state(STATE_COMPLETED)
         settings.set(_NAMESPACE, "retry_count", 0)
@@ -237,12 +261,32 @@ def mark_completed():
 
 def check_and_advance():
     """State machine tick. Resume pending work. Call on app start."""
+    if not _IS_DARWIN:
+        return
     with _lock:
         state = get_setup_state()
 
-    # Already completed — nothing to do
+    # Already completed — but verify the system install still exists on
+    # disk. An uninstall (or manual cleanup) can wipe the system-level
+    # ClamAV files while leaving the user-level setup_state=completed,
+    # which strands a *reinstall* showing "Start Protection" for daemons
+    # that crash-loop with no config file. Self-heal by resetting to
+    # NOT_STARTED so seeding + the admin postinstall re-run. Bundle mode
+    # only — dev mode has no system install to validate.
     if state == STATE_COMPLETED:
-        return
+        if _system_install_intact():
+            return
+        logger.warning(
+            "[AV-INSTALLER] setup_state=completed but system ClamAV install "
+            "is missing (likely wiped by a prior uninstall) — resetting to "
+            "re-run setup",
+        )
+        with _lock:
+            _set_state(STATE_NOT_STARTED)
+            settings.set(_NAMESPACE, "retry_count", 0)
+            settings.set(_NAMESPACE, "last_attempt_ts", 0.0)
+        state = STATE_NOT_STARTED
+        # Fall through — the NOT_STARTED handling below re-seeds the DB.
 
     # If system setup is already done (daemons running), mark completed
     from plugins.antivirus.clamav_common import _ping_socket
@@ -312,6 +356,8 @@ def check_and_advance():
 
 def retry():
     """Manual retry. Reset backoff, restart current phase."""
+    if not _IS_DARWIN:
+        return
     with _lock:
         settings.set(_NAMESPACE, "retry_count", 0)
         settings.set(_NAMESPACE, "last_attempt_ts", 0.0)
@@ -391,6 +437,35 @@ def _validate_database() -> bool:
             except OSError:
                 continue
     return False
+
+
+def _system_install_intact() -> bool:
+    """Return True if the system-level ClamAV install is present on disk.
+
+    A bundle install places clamd.conf plus a seeded CVD under the system
+    ClamAV dir via the admin postinstall. If those are gone (e.g. an
+    uninstall wiped the directory) a persisted setup_state=completed is
+    stale and setup must re-run. In dev mode (no app bundle) there is no
+    system install to validate, so treat it as intact and let the live
+    runtime checks handle health.
+    """
+    from plugins.antivirus.clamav_platform_darwin import (
+        _SYSTEM_CLAMD_CONF,
+        _SYSTEM_DB_DIR,
+        is_app_bundle,
+    )
+
+    if not is_app_bundle():
+        return True
+
+    if not os.path.isfile(_SYSTEM_CLAMD_CONF):
+        return False
+
+    return any(
+        os.path.getsize(f) > _MIN_CVD_SIZE
+        for f in glob.glob(os.path.join(_SYSTEM_DB_DIR, "*.cvd"))
+        if os.path.isfile(f)
+    )
 
 
 def _do_db_seed():

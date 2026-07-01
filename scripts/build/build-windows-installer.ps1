@@ -22,6 +22,51 @@ function Get-AppVersion {
     return $match.Matches[0].Groups[1].Value
 }
 
+function Convert-LicenseMdToTxt {
+    <#
+    .SYNOPSIS
+    Generates LICENSE.txt at the repo root from LICENSE.md, stripping the
+    bits of Markdown syntax that would render as visible noise in Inno
+    Setup's license-acceptance dialog (which renders text verbatim).
+
+    Inno Setup's LicenseFile= directive wants .txt or .rtf; .md works
+    syntactically but shows the literal "#" / "##" / "---" characters
+    where headers and rules should be. This converter:
+      - Drops leading markdown header markers (# / ## / ### …)
+      - Converts horizontal rules (---, ***, ___) into plain dividers
+      - Keeps everything else verbatim — GPL text doesn't use any other
+        markdown the GPL preamble might rely on
+    Writes UTF-8 with Windows line endings (CRLF) since this is a Windows
+    artifact consumed by ISCC.
+    #>
+    param(
+        [Parameter(Mandatory)] [string]$SourceMd,
+        [Parameter(Mandatory)] [string]$TargetTxt
+    )
+
+    if (-not (Test-Path $SourceMd)) {
+        throw "Convert-LicenseMdToTxt: source not found: $SourceMd"
+    }
+
+    $divider = '=' * 60
+    $raw     = Get-Content -Raw $SourceMd -Encoding UTF8
+    $lines   = $raw -split "`r?`n"
+    $out     = foreach ($line in $lines) {
+        # Strip leading "#"/"##"/… (markdown headers) — keep the title text
+        $stripped = $line -replace '^\s*#{1,6}\s+', ''
+        # Replace markdown horizontal rules with a plain ASCII divider
+        if ($stripped -match '^\s*(-{3,}|\*{3,}|_{3,})\s*$') {
+            $stripped = $divider
+        }
+        $stripped
+    }
+
+    # Use CRLF for the on-disk file so Inno Setup / Windows Notepad render
+    # it as a single logical document with proper line breaks.
+    $out -join "`r`n" | Set-Content -Path $TargetTxt -Encoding UTF8 -NoNewline
+    Write-Host "  Wrote $TargetTxt ($($out.Count) lines)"
+}
+
 function Resolve-InnoCompiler {
     $fromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
     if ($fromPath -and (Test-Path $fromPath.Path)) {
@@ -122,6 +167,15 @@ if (Test-Path $depsScript) {
 
 $outputDir = Join-Path $ProjectRoot "dist\installers"
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+
+# Generate LICENSE.txt from LICENSE.md so the Inno Setup license-acceptance
+# screen renders cleanly (without literal "#" / "##" / "---" leaking from
+# the source markdown). The .txt is gitignored and regenerated on every
+# build, so LICENSE.md remains the single source of truth.
+Write-Host "Generating LICENSE.txt for Inno Setup..."
+Convert-LicenseMdToTxt `
+    -SourceMd (Join-Path $ProjectRoot "LICENSE.md") `
+    -TargetTxt (Join-Path $ProjectRoot "LICENSE.txt")
 
 $version = Get-AppVersion
 $iscc = Resolve-InnoCompiler

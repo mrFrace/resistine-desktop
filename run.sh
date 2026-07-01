@@ -59,6 +59,18 @@ Darwin*)
 	# Install/update requirements if needed
 	export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
 	python3 -m pip install -U -q -r scripts/requirements/requirements-mac.txt
+
+	# Dev escape hatch (macOS only): assume the VPN is up. When you're
+	# running this script alongside an installed .pkg whose NetworkExtension
+	# already holds the tunnel up, this process's traffic routes through the
+	# system tunnel even though *this* instance's internal VPN state stays
+	# "Stopped". Setting this var makes plugins.vpn.main.is_vpn_connected()
+	# return True so VPN-gated features (the chat access gate, wazuh_overview
+	# API fetches, etc.) actually run. If the .pkg tunnel ISN'T up the
+	# downstream network calls will just fail — the obvious and expected
+	# failure mode in dev. Linux/Windows have different VPN backends, so
+	# this export is intentionally scoped to the Darwin arm only.
+	export RESISTINE_DEV_VPN_CONNECTED=1
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)

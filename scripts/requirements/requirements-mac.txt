@@ -39,7 +39,7 @@ tkinterweb
 tqdm
 typing_extensions
 urllib3
-pyinstaller
+pyinstaller==6.20.0  # pinned: keep the build toolchain reproducible across releases (avoid layout churn between bundles); updates ship as full DMG/PKG, not deltas
 pyobjc
 loguru
 opentelemetry-api

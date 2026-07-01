@@ -193,7 +193,9 @@ def build_scan_exclusions(plugin, parent, row):
 
 def build_siem_card(plugin, parent, row):
     """Build the SIEM Forwarding card (threat log + Wazuh setup)."""
-    from plugins.antivirus.threat_log import get_log_display, is_wazuh_installed
+    from plugins.antivirus.threat_log import (
+        get_log_display, is_forwarding_enabled, is_wazuh_installed,
+    )
 
     card = make_card(parent, row)
     card.grid_columnconfigure(0, weight=1)
@@ -216,38 +218,40 @@ def build_siem_card(plugin, parent, row):
 
     add_separator(card, 4)
 
-    if is_wazuh_installed():
-        plugin._siem_status_label = customtkinter.CTkLabel(
-            card, text="Wazuh agent detected",
-            font=font(12), text_color=_ok_text(),
-        )
-        plugin._siem_status_label.grid(
-            row=5, column=0, padx=16, pady=(8, 4), sticky="w",
-        )
+    # Forwarding switch. It's auto-enabled when the endpoint agent installs
+    # (the installer injects the Defender localfile on Windows), so a present
+    # agent shows it on. With no agent, flipping it on routes the user to the
+    # Endpoint page to install the agent first (handled in _on_forwarding_toggle).
+    installed = is_wazuh_installed()
+    forwarding_on = is_forwarding_enabled()
 
-        plugin._siem_btn = customtkinter.CTkButton(
-            card, text="Configure Forwarding", height=30,
-            corner_radius=8, font=font(12),
-            fg_color="transparent", border_width=1,
-            border_color=_btn_border(),
-            text_color=_btn_border(),
-            hover_color=_btn_hover(),
-            command=plugin._setup_wazuh_forwarding,
-        )
-        plugin._siem_btn.grid(
-            row=6, column=0, columnspan=2,
-            padx=16, pady=(4, 14), sticky="ew",
-        )
+    plugin._siem_switch = customtkinter.CTkSwitch(
+        card, text="Forward AV detections to the SIEM",
+        font=font(12), command=plugin._on_forwarding_toggle,
+        onvalue=1, offvalue=0,
+    )
+    if forwarding_on:
+        plugin._siem_switch.select()
     else:
-        customtkinter.CTkLabel(
-            card, text="Wazuh agent not installed",
-            font=font(12), text_color=_muted(),
-        ).grid(row=5, column=0, padx=16, pady=(8, 4), sticky="w")
+        plugin._siem_switch.deselect()
+    plugin._siem_switch.grid(
+        row=5, column=0, columnspan=2, padx=16, pady=(8, 2), sticky="w",
+    )
 
-        customtkinter.CTkLabel(
-            card, text="Threat events are logged locally.",
-            font=font(11), text_color=_muted(),
-        ).grid(row=6, column=0, padx=16, pady=(0, 14), sticky="w")
+    if forwarding_on:
+        _status_text, _status_color = "Forwarding active", _ok_text()
+    elif installed:
+        _status_text, _status_color = (
+            "Ready — turn on to forward AV detections", _muted())
+    else:
+        _status_text, _status_color = (
+            "Install the endpoint agent to enable forwarding", _muted())
+    plugin._siem_status_label = customtkinter.CTkLabel(
+        card, text=_status_text, font=font(11), text_color=_status_color,
+    )
+    plugin._siem_status_label.grid(
+        row=6, column=0, columnspan=2, padx=16, pady=(0, 14), sticky="w",
+    )
 
     return row + 1
 
@@ -276,6 +280,8 @@ def _build_db_info_rows(plugin, card, start_row):
 
 
 def _build_auto_update_toggle(plugin, card, row):
+    import platform
+
     auto_row = customtkinter.CTkFrame(card, fg_color="transparent")
     auto_row.grid(
         row=row, column=0, columnspan=2, sticky="ew", padx=16, pady=(6, 0),
@@ -288,6 +294,23 @@ def _build_auto_update_toggle(plugin, card, row):
     customtkinter.CTkLabel(
         left, text="Auto-update signatures", font=font(12),
     ).grid(row=0, column=0, sticky="w")
+
+    if platform.system() == "Darwin":
+        # macOS: a root LaunchDaemon updates signatures even when the app is
+        # closed, so auto-update is always on \u2014 no toggle to defeat its
+        # purpose. Show a read-only "Automatic" status instead of a switch.
+        customtkinter.CTkLabel(
+            left, text="Checks every ~4 hours, even when the app is closed",
+            font=font(11), text_color=_muted(),
+        ).grid(row=1, column=0, sticky="w")
+        customtkinter.CTkLabel(
+            auto_row, text="Automatic", font=font(12), text_color=_muted(),
+        ).grid(row=0, column=1, sticky="e", pady=4)
+        plugin._auto_update_switch = None
+        return row + 1
+
+    # Linux/Windows: the in-process scheduler is the only updater, and the
+    # user-facing toggle is retained unchanged.
     customtkinter.CTkLabel(
         left, text="Daily around 4:00 AM (\u00b12 hrs)",
         font=font(11), text_color=_muted(),

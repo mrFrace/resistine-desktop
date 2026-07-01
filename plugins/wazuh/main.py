@@ -83,6 +83,23 @@ _FONT_TITLE = dict(family="Inter", size=18, weight="bold")
 _POLL_INTERVAL_MS = 10_000
 
 
+def is_agent_running():
+    """Return True if the SIEM agent service is currently running.
+
+    Cross-platform; returns False on unsupported platforms or any error.
+    Unlike is_agent_installed(), this reflects the live service state, so the
+    chat access gate re-locks the instant the agent is toggled off. We have no
+    readable "connected to manager" signal (the agent state file is root-owned),
+    so a running service is the best silent proxy for "connected".
+    """
+    if not _platform_supported:
+        return False
+    try:
+        return get_agent_status() == "Running"
+    except Exception:
+        return False
+
+
 class Plugin(BasePlugin):
     """Plugin class for the Wazuh SIEM agent."""
 
@@ -340,6 +357,19 @@ class Plugin(BasePlugin):
             row=row, column=0, columnspan=2, sticky="ew", padx=20, pady=(8, 20)
         )
         row += 1
+
+        # Indeterminate progress bar, hidden until install starts — the direct
+        # install runs several download/MSI/elevation phases with only the text
+        # label as feedback, which can look frozen on a slow machine. Revealed
+        # and animated by _start_installation_direct.
+        self._install_bar = customtkinter.CTkProgressBar(
+            card, mode="indeterminate", width=300,
+        )
+        self._install_bar.grid(
+            row=row, column=0, columnspan=2, padx=20, pady=(0, 20), sticky="ew"
+        )
+        self._install_bar.grid_remove()
+        row += 1
         return row
 
     def _build_install_section_darwin(self, card, row):
@@ -471,8 +501,25 @@ class Plugin(BasePlugin):
                 "script_failed": "Installation script encountered an error.",
                 "pkg_corrupted": "Package file is corrupted. Retry to re-download.",
                 "no_status_file": "Installation was interrupted. Click Retry.",
+                "duplicate_name": (
+                    "This device is already registered on the SIEM manager. "
+                    "Retry to enroll under a new identifier."
+                ),
+                "manager_unreachable": (
+                    "Couldn't reach the SIEM manager. Connect the VPN and retry."
+                ),
+                "enroll_failed": (
+                    "Enrollment with the SIEM manager failed. "
+                    "Connect the VPN and retry."
+                ),
             }
-            msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
+            if reason.startswith("enroll_rc_"):
+                msg = (
+                    "Enrollment with the SIEM manager failed. "
+                    "Connect the VPN and retry."
+                )
+            else:
+                msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
             customtkinter.CTkLabel(
                 card, text=msg,
                 font=customtkinter.CTkFont(size=13),
@@ -588,6 +635,9 @@ class Plugin(BasePlugin):
         self._installing = True
         if hasattr(self, "_install_btn") and self._install_btn.winfo_exists():
             self._install_btn.configure(state="disabled", text="Installing...")
+        if hasattr(self, "_install_bar") and self._install_bar.winfo_exists():
+            self._install_bar.grid()
+            self._install_bar.start()
 
         def _progress(msg):
             if hasattr(self, "_progress_label") and self._progress_label.winfo_exists():
@@ -809,7 +859,18 @@ class Plugin(BasePlugin):
     # --- Helpers ---
 
     def _refresh_screen(self):
-        """Rebuild the plugin screen if it is currently displayed."""
+        """Refresh status and rebuild the screen if it is currently displayed.
+
+        self.status is updated unconditionally so the dashboard tile reflects
+        the new state even when the install finished after the user navigated
+        away. The in-place rebuild only runs when the Endpoint screen is the one
+        on display; otherwise the next navigation rebuilds it fresh (Endpoint
+        isn't cached).
+        """
+        try:
+            self.status = self.check_status()
+        except Exception:
+            pass
         current = getattr(self.app, "current_frame_name", "")
         if current != f"frame_{self.get_name()}":
             return

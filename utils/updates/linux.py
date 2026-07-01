@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -386,7 +387,8 @@ def _restart_app():
 
     if os.path.isfile(run_script):
         try:
-            os.execv("/bin/bash", ["bash", run_script])
+            bash = shutil.which("bash") or "/bin/bash"
+            os.execv(bash, [bash, run_script])
         except OSError as e:
             logger.error(f"[UPDATE-LINUX] execv failed: {e}")
 

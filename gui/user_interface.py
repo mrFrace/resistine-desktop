@@ -285,8 +285,16 @@ class AppUI(customtkinter.CTk):
             curr = container_frame
             while curr and not hasattr(curr, "select_frame_by_name"):
                 curr = curr.master
-            if curr:
-                curr.select_frame_by_name(f"frame_{plugin.get_name()}")
+            if not curr:
+                return
+            # Login plugin's create_main_screen() does a full-window takeover
+            # (parents to the App root, grids at 0,0). Routing it through
+            # select_frame_by_name would re-grid it into the content column
+            # and produce a broken half-rendered login. Special-case it here.
+            if getattr(plugin, "id", None) == "007" and hasattr(curr, "show_login_screen"):
+                curr.show_login_screen()
+                return
+            curr.select_frame_by_name(f"frame_{plugin.get_name()}")
 
         _hovered = [False]
 
@@ -456,7 +464,15 @@ class AppUI(customtkinter.CTk):
             try:
                 if not container.winfo_exists():
                     return
-                _scale = getattr(container.winfo_toplevel(), "_hidpi_factor", 1.0)
+                # CTk's widget scaling is the real OS-DPI ratio on every
+                # platform (2.0 at 200% on Windows, 1.0 on macOS, == _hidpi_factor
+                # on Linux). _hidpi_factor alone is 1.0 on Windows even when CTk
+                # scales 2x, which left card heights mis-proportioned there.
+                try:
+                    _scale = customtkinter.ScalingTracker.get_widget_scaling(container)
+                except Exception:
+                    _scale = getattr(
+                        container.winfo_toplevel(), "_hidpi_factor", 1.0) or 1.0
                 # force_width (from hint) is already in logical units;
                 # winfo_width() is physical pixels — normalise to logical.
                 if force_width:
@@ -542,11 +558,14 @@ class AppUI(customtkinter.CTk):
         self.frames = {}
         row = 2
         for plugin in self.plugin_list:
-            frame_name = f"frame_{plugin.get_name()}"
-            self.frames[frame_name] = plugin
-            
+            # Plugins with order <= 0 aren't navigable from the dashboard
+            # (no sidebar button, no card click-through). Login is the
+            # canonical case: its create_main_screen() takes over the whole
+            # window for the auth flow, not a content-column widget.
             if plugin.order <= 0:
                 continue
+            frame_name = f"frame_{plugin.get_name()}"
+            self.frames[frame_name] = plugin
 
             try:
                 # Create sidebar button
@@ -719,7 +738,7 @@ class AppUI(customtkinter.CTk):
                 if nav_w < 100: nav_w = 250  # Fallback for unmapped frame
 
                 # Windows CTkScrollableFrame scrollbar is ~20px wider than macOS overlay scrollbar
-                _scroll_offset = 60 if platform.system() == "Windows" else 40
+                _scroll_offset = 60 if platform.system() in ("Windows", "Linux") else 40
                 self._content_width_hint = total_w - nav_w - _scroll_offset
         except:
             self._content_width_hint = None
@@ -1163,6 +1182,21 @@ class AppUI(customtkinter.CTk):
         handlers = getattr(self, "_smooth_scroll_handlers", None)
         if not handlers:
             return None
+
+        # CTk 5.x exposed CTkScrollableFrame.check_if_master_is_canvas; CTk
+        # 6.0 removed it. Walk the master chain inline to stay portable.
+        def _is_inside(scroll_frame, widget):
+            canvas = getattr(scroll_frame, "_parent_canvas", None)
+            cur = widget
+            while cur is not None:
+                if cur is canvas:
+                    return True
+                try:
+                    cur = cur.master
+                except Exception:
+                    return False
+            return False
+
         target = None
         alive = []
         for sc, fn in handlers:
@@ -1174,7 +1208,7 @@ class AppUI(customtkinter.CTk):
             alive.append((sc, fn))
             if target is None:
                 try:
-                    if sc.check_if_master_is_canvas(event.widget):
+                    if _is_inside(sc, event.widget):
                         target = fn
                 except Exception:
                     pass
@@ -1211,6 +1245,7 @@ class AppUI(customtkinter.CTk):
         state = {"vel": 0.0, "job": None}
 
         _is_mac = platform.system() == "Darwin"
+        _is_win = platform.system() == "Windows"
 
         def _step():
             try:
@@ -1226,6 +1261,15 @@ class AppUI(customtkinter.CTk):
                 before = canvas.yview()
                 scroll_px = int(round(v)) or (1 if v > 0 else -1)
                 canvas.yview_scroll(-scroll_px, "units")
+                # Windows leaves ghost/smear trails when a Tk canvas with
+                # embedded windows is scrolled (CTkScrollableFrame's content is
+                # one embedded window, itself full of nested CTk canvases): Tk
+                # repositions them but doesn't repaint the exposed regions during
+                # the move. Force a synchronous repaint each step so they redraw
+                # cleanly. macOS/Linux repaint correctly on their own, so this is
+                # Windows-only to avoid the per-step flush cost elsewhere.
+                if _is_win:
+                    canvas.update_idletasks()
                 after = canvas.yview()
 
                 # Hit boundary — stop
@@ -1299,7 +1343,8 @@ class AppUI(customtkinter.CTk):
         # which attaches last), the others stopped scrolling everywhere except
         # widgets that explicitly forward the wheel. The dispatcher sends the
         # event to whichever registered frame the cursor is actually over, so
-        # they all coexist.
+        # they all coexist. As a side benefit, this avoids CTk 5.x's
+        # ``check_if_master_is_canvas`` method which was removed in CTk 6.0.
         if not hasattr(self, "_smooth_scroll_handlers"):
             self._smooth_scroll_handlers = []
         if not any(s is scrollable for s, _ in self._smooth_scroll_handlers):
@@ -1316,12 +1361,27 @@ class AppUI(customtkinter.CTk):
 
         # bind_all for <Button-4>/<Button-5> on Linux so child widgets are covered
         if _is_linux:
+            # Inline ancestor-walk for the Linux button-scroll path. Mirrors
+            # the helper in _smooth_wheel_dispatch but stays per-frame so we
+            # don't have to plumb a separate registry through bind_all.
+            def _inside_this(widget, _sc=scrollable):
+                canvas = getattr(_sc, "_parent_canvas", None)
+                cur = widget
+                while cur is not None:
+                    if cur is canvas:
+                        return True
+                    try:
+                        cur = cur.master
+                    except Exception:
+                        return False
+                return False
+
             def _bind_all_button4(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _inside_this(event.widget):
                     return _on_linux_scroll_up(event)
 
             def _bind_all_button5(event):
-                if scrollable.check_if_master_is_canvas(event.widget):
+                if _inside_this(event.widget):
                     return _on_linux_scroll_down(event)
 
             scrollable.bind_all("<Button-4>", _bind_all_button4, add="+")

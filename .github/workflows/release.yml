@@ -82,7 +82,54 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install -r scripts/requirements/requirements-mac.txt
+          pip install "cyclonedx-bom>=7.0.0"
           brew install create-dmg
+
+      # --- Regenerate SBOM + LICENSE-3rd-Party.md from the installed env ---
+      # cyclonedx-py walks the exact venv we just provisioned, so both
+      # artifacts match what actually ships in this release. The generator
+      # also enforces the AGPL/SSPL/BUSL/Commons-Clause deny-list and aborts
+      # the build if any prod dep ships under one of those licenses.
+      - name: Generate SBOM + third-party license file
+        run: |
+          source .venv/bin/activate
+          python scripts/sbom/generate_sbom.py
+
+      # --- Verify committed sbom.cdx.json + LICENSE-3rd-Party.md are fresh
+      # Forces developers to regenerate and commit before tagging a release.
+      # Catches the "I added a pip dep but forgot to regenerate" mistake at
+      # the latest possible moment.
+      - name: Verify SBOM artifacts are committed and up to date
+        run: |
+          if ! git diff --exit-code sbom.cdx.json LICENSE-3rd-Party.md; then
+            echo ""
+            echo "============================================================"
+            echo "ERROR: SBOM artifacts are out of date."
+            echo ""
+            echo "A pip dependency was added or changed without regenerating"
+            echo "the SBOM. Fix this before re-tagging:"
+            echo ""
+            echo "  source .venv/bin/activate"
+            echo "  pip install -r scripts/requirements/requirements-mac.txt"
+            echo "  pip install 'cyclonedx-bom>=7.0.0'"
+            echo "  python scripts/sbom/generate_sbom.py"
+            echo "  git add sbom.cdx.json LICENSE-3rd-Party.md"
+            echo "  git commit -m 'chore: regenerate SBOM and third-party license file'"
+            echo "  git tag -d ${GITHUB_REF_NAME} && git push --delete origin ${GITHUB_REF_NAME}"
+            echo "  git tag ${GITHUB_REF_NAME} && git push origin ${GITHUB_REF_NAME}"
+            echo "============================================================"
+            exit 1
+          fi
+          echo "sbom.cdx.json and LICENSE-3rd-Party.md match the freshly-generated versions."
+
+      # --- Upload SBOM as a release artifact for procurement/security ---
+      - name: Upload SBOM as release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90
 
       # --- Build the app + DMG ---
       - name: Build distribution

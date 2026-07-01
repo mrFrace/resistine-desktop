@@ -42,6 +42,15 @@ SolidCompression=yes
   ArchitecturesInstallIn64BitMode=x64compatible
 #endif
 PrivilegesRequired=admin
+; Auto-update robustness: an older build's in-app updater only hides to the
+; tray instead of quitting, leaving its files locked. CloseApplications=force
+; makes Setup forcibly terminate the running app (via RestartManager, then a
+; hard kill) so the update can proceed without a "files in use" prompt — which
+; is what lets already-deployed buggy versions auto-update without a manual
+; reinstall. RestartApplications=no leaves the relaunch to the single [Run]
+; entry (runasoriginaluser, no 'skipifsilent') so we don't double-launch.
+CloseApplications=force
+RestartApplications=no
 WizardStyle=modern
 DisableDirPage=auto
 DisableReadyPage=yes
@@ -49,6 +58,16 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
 UninstallDisplayIcon={app}\Resistine.exe
 SetupLogging=yes
+; Show the GPL-2.0-or-later text on the install acceptance screen. Inno
+; reads this at compile time and displays the contents as plain text in
+; the License Agreement dialog. LICENSE.txt is generated from LICENSE.md
+; by scripts/build/build-windows-installer.ps1 (markdown stripped so the
+; "#"/"##"/"---" syntax doesn't render as literal noise). The .txt is
+; gitignored and produced fresh on every build. Third-party licenses
+; are shipped as a separate file inside the install dir (see [Files]
+; below) since they're 370+ lines and would dominate the acceptance
+; dialog if combined.
+LicenseFile=..\..\LICENSE.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -59,6 +78,13 @@ Name: "startup"; Description: "Start Resistine when I sign in"; Flags: unchecked
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; License files — installed next to the app so end users, auditors, and
+; security teams can find them via the install directory without needing to
+; go to GitHub. LICENSE.md is also shown at the install acceptance screen
+; (see LicenseFile= in [Setup] above).
+Source: "..\..\LICENSE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\LICENSE-3rd-Party.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\..\sbom.cdx.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Bundled dependency installers — only extracted when the dep is missing
 Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedPythonInstall
 Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall
@@ -74,7 +100,10 @@ Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Versi
 Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent; Check: ShouldPerformInstallAction
+; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
+; auto-update, and we still want the app relaunched afterward (otherwise the
+; update applies but "nothing happens" — the app just stays closed).
+Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
 
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
@@ -732,6 +761,16 @@ begin
   DependencyInstallWarnings := DependencyInstallWarnings + WarningText;
 end;
 
+{ Update the wizard's status line during the post-extraction phase and force an
+  immediate repaint, so the blocking dependency/service installs below read as
+  real progress instead of a frozen full bar. Inno pumps the message loop during
+  Exec(...ewWaitUntilTerminated), so this caption stays visible while they run. }
+procedure SetInstallStatus(const Msg: string);
+begin
+  WizardForm.StatusLabel.Caption := Msg;
+  WizardForm.StatusLabel.Update;
+end;
+
 function RunWingetDependencyInstall(const FriendlyName, PackageId, DetectPath, DownloadUrl: string): Boolean;
 var
   ResultCode: Integer;
@@ -757,6 +796,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing ' + FriendlyName + '...');
   if not RunHiddenCmd(
     'winget install -e --id ' + QuotePath(PackageId) +
     ' --accept-package-agreements --accept-source-agreements --silent --disable-interactivity',
@@ -792,6 +832,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing Python runtime (this can take a minute)...');
   Log('Installing bundled Python 3.13...');
   if Exec(InstallerPath,
     '/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_launcher=1',
@@ -827,6 +868,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Installing WireGuard...');
   Log('Installing bundled WireGuard...');
   if Exec('msiexec.exe',
     '/i "' + InstallerPath + '" /qn /norestart DO_NOT_LAUNCH=1',
@@ -918,6 +960,7 @@ begin
     exit;
   end;
 
+  SetInstallStatus('Registering the Resistine VPN service...');
   if not Exec(ExpandConstant('{cmd}'),
     '/D /C call ' + QuotePath(ScriptPath) + ' /quiet',
     ExpandConstant('{app}'),
@@ -1760,10 +1803,22 @@ begin
   if not ShouldPerformInstallAction then
     exit;
 
-  RestoreDataAfterReinstallIfNeeded;
-  ApplyStartupTaskSelection;
-  InstallMissingDependenciesWithFeedback;
-  RunVpnServiceSetupRequired;
+  { File extraction is done (the bar is full), but the steps below still run for
+    several seconds — installing missing prerequisites and registering the VPN
+    service. Switch the bar to an animated marquee and show a status caption for
+    each step so the wizard clearly reads as "working" instead of frozen. }
+  WizardForm.ProgressGauge.Style := npbstMarquee;
+  try
+    SetInstallStatus('Finishing setup...');
+    RestoreDataAfterReinstallIfNeeded;
+    ApplyStartupTaskSelection;
+    InstallMissingDependenciesWithFeedback;
+    RunVpnServiceSetupRequired;
+  finally
+    WizardForm.ProgressGauge.Style := npbstNormal;
+    WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Max;
+    SetInstallStatus('Finishing installation...');
+  end;
 end;
 
 function InitializeUninstall(): Boolean;

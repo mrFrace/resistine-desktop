@@ -225,12 +225,30 @@ class TestHandleLogout:
 
     def test_user_cancels(self, settings_plugin):
         self._set_messagebox(False)
+        mock_login = MagicMock(); mock_login.id = "007"
+        settings_plugin.app.plugin_list = [mock_login]
         settings_plugin._handle_logout()
+
+    def test_refuses_when_login_plugin_uninstalled(self, settings_plugin):
+        """Without the Login plugin installed the user can't sign back in,
+        so logout must short-circuit with a user-facing notification."""
+        settings_plugin.app.plugin_list = []  # login absent
+        settings_plugin.app.show_notification = MagicMock()
+        # askyesno would normally be the user-visible step; assert we never
+        # got that far.
+        self._set_messagebox(True)
+        settings_plugin._handle_logout()
+        settings_plugin.app.show_notification.assert_called_once()
+        msg = settings_plugin.app.show_notification.call_args[0][0]
+        assert "Login plugin" in msg and "Store" in msg
 
     def test_clears_auth_on_confirm(self, settings_plugin, isolated_settings):
         isolated_settings.set("auth", "logged_in", True)
         isolated_settings.set("auth", "email", "alice@example.com")
         self._set_messagebox(True)
+        # Logout is gated on the Login plugin being installed.
+        mock_login = MagicMock(); mock_login.id = "007"
+        settings_plugin.app.plugin_list = [mock_login]
         mock_mgr = MagicMock()
         mock_mgr.get_active_config_path.return_value = None
         with patch("platform.system", return_value="Darwin"), \
@@ -256,6 +274,8 @@ class TestHandleLogout:
         """_handle_logout must call _remove_wazuh_agent so the service is
         stopped and enrollment keys are wiped, not just settings cleared."""
         self._set_messagebox(True)
+        mock_login = MagicMock(); mock_login.id = "007"
+        settings_plugin.app.plugin_list = [mock_login]
         mock_mgr = MagicMock()
         mock_mgr.get_active_config_path.return_value = None
         with patch("platform.system", return_value="Darwin"), \

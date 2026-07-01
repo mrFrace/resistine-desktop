@@ -90,6 +90,35 @@ class App(AppUI):
         except Exception:
             pass
 
+        if sys.platform.startswith('win'):
+            try:
+                import ctypes
+                # Per-monitor v2 (-4) is best; degrade gracefully on older Windows.
+                # Without this, Win10/11 at 150-200% rasterises Tk at logical px
+                # then DWM bitmap-stretches → blurry text on HiDPI laptops.
+                ctypes.windll.shcore.SetProcessDpiAwarenessContext(-4)
+            except (AttributeError, OSError):
+                try:
+                    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                except (AttributeError, OSError):
+                    try:
+                        ctypes.windll.user32.SetProcessDPIAware()
+                    except Exception:
+                        pass
+
+        if sys.platform.startswith("linux"):
+            self._apply_hidpi_scaling()
+
+        # Stay fully transparent until the first screen is built, mapped,
+        # measured, and settled — then reveal in a single step (see the
+        # update()/_settle_screen()/alpha=1 sequence below). This is what
+        # prevents the window from appearing at a provisional size/layout and
+        # then visibly reconfiguring on startup.
+        try:
+            self.attributes("-alpha", 0.0)
+        except Exception:
+            pass
+
         # Fix Ctrl+A select-all on Linux (Tk default is cursor-to-start)
         patch_linux_keybindings(self)
 
@@ -106,13 +135,19 @@ class App(AppUI):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         scale = getattr(self, "_hidpi_factor", 1.0)
-        # Window dimensions are LOGICAL, anchored to the 1080p reference
-        # (~47% of 1920x1080, i.e. ~1/3 smaller than the previous 70% default).
+        # Window dimensions are LOGICAL, anchored to the 1080p reference.
         # set_window_scaling() multiplies these by `scale` to produce the actual
         # physical pixel size, so the logical layout is identical at every
         # resolution and aspect ratio.
-        window_width = int(_REF_WIDTH * 0.47)
-        window_height = int(_REF_HEIGHT * 0.47)
+        #
+        # Mac uses 0.7 (1344x756 at 1080p ref) — the historical default that
+        # leaves the dashboard cards and chat enough room to breathe and
+        # matches what users had before the Windows-optim window-shrink work.
+        # Windows / Linux use 0.54 (1036x583) which suits their denser font
+        # rendering and HiDPI scaling fixes.
+        _win_scale = 0.7 if sys.platform == "darwin" else 0.54
+        window_width = int(_REF_WIDTH * _win_scale)
+        window_height = int(_REF_HEIGHT * _win_scale)
         min_width = 750
         min_height = 350
         # Centre the window on the physical screen.
@@ -129,9 +164,15 @@ class App(AppUI):
         # no post-paint correction timers, no visible reflow.
         self.update_idletasks()
 
-        # Check if already logged in
-        if settings.get("auth", "logged_in", False):
-            logger.info("✅ User already logged in.")
+        # Login plugin is uninstallable via the Store; respect that here so
+        # users who removed it don't get the login screen on next launch.
+        login_uninstalled = self._is_login_plugin_uninstalled()
+
+        if settings.get("auth", "logged_in", False) or login_uninstalled:
+            if login_uninstalled:
+                logger.info("ℹ️  Login plugin uninstalled — skipping login screen.")
+            else:
+                logger.info("✅ User already logged in.")
             self.create_dashboard()
             # Resume any pending Wazuh install
             if sys.platform == "darwin":
@@ -146,10 +187,7 @@ class App(AppUI):
             # Always show login screen since we're using Odoo authentication
             logger.info("🔐 Creating login screen...")
             try:
-                from plugins.login.main import Plugin as LoginPlugin
-
-                login_plugin = LoginPlugin(self)
-                login_plugin.show()
+                self.show_login_screen()
                 logger.info("✅ Login screen created")
             except (ImportError, ModuleNotFoundError):
                 logger.warning("⚠️ Login plugin not found. Skipping login screen.")
@@ -212,6 +250,13 @@ class App(AppUI):
             logger.debug(f"Desktop entry setup skipped: {e}")
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+        # macOS: route Cmd-Q through our normal shutdown path
+        if sys.platform == "darwin":
+            try:
+                self.tk.createcommand("::tk::mac::Quit", self._on_closing)
+            except Exception:
+                pass
 
         # Start system tray icon in a background thread (Windows only).
         # In dev mode, run.bat launches tray.py as a separate process, but in
@@ -323,6 +368,43 @@ class App(AppUI):
         else:
             self._full_quit()
 
+    def show_login_screen(self):
+        """Tear down whatever is visible and show the full-screen login flow.
+
+        Called from the startup bootstrap, the Settings logout/login
+        buttons, and the Login card on the dashboard. Centralizes the
+        destroy → grid-reset → Login.show() sequence.
+        """
+        from plugins.login.main import Plugin as LoginPlugin
+        for w in self.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=0)
+        LoginPlugin(self).show()
+
+    def _is_login_plugin_uninstalled(self):
+        """Return True if the user uninstalled the Login plugin via the Store.
+
+        Reads plugin_state.json directly so the check works before
+        PluginManager has loaded plugins.
+        """
+        try:
+            from utils.settings import get_config_dir
+            import json
+            state_path = os.path.join(get_config_dir(), "plugin_state.json")
+            if not os.path.exists(state_path):
+                return False
+            with open(state_path, "r", encoding="utf-8") as f:
+                state = json.load(f)
+            return "007" in state.get("uninstalled", [])
+        except Exception as e:
+            logger.warning(f"Could not read plugin state: {e}")
+            return False
+
     def _full_quit(self):
         """Actually exit the application (called from tray Quit or if no tray)."""
         try:
@@ -408,16 +490,28 @@ if __name__ == "__main__":
         # Attach Inspector
         app.inspector = RuntimeInspector(app)
 
-    # Handle Ctrl+C gracefully
+    # Handle Ctrl+C gracefully. The handler only ends the Tk loop; the actual
+    # process exit happens after mainloop() returns (see the hard-exit below).
     def _handle_sigint(signum, frame):
-        """Close the app gracefully on Ctrl+C."""
+        """End the Tk loop on Ctrl+C; process exit follows mainloop()."""
         try:
-            app.destroy()
+            app.quit()
         except Exception:
             pass
-        sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_sigint)
+
+    # Keep signals responsive: while Tk is blocked in its C mainloop, a pending
+    # SIGINT handler can't run until the interpreter returns to Python. Pumping
+    # a no-op through the event loop every 200 ms guarantees Ctrl+C is handled
+    # promptly instead of only on the next Tk event (mouse move, redraw, etc.).
+    def _signal_pump():
+        try:
+            app.after(200, _signal_pump)
+        except Exception:
+            pass
+
+    app.after(200, _signal_pump)
 
     # Bring the window to the front on launch
     app.lift()
@@ -446,4 +540,23 @@ if __name__ == "__main__":
             ])
 
     # Application loop - run!
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        pass
+
+    # The Tk loop has ended (window closed, tray Quit, or Ctrl+C). Non-daemon
+    # background threads — the OTEL log-export worker retrying against an
+    # unreachable collector, the tray icon, keyring — would otherwise keep the
+    # process (and the terminal) alive indefinitely. Best-effort flush, then
+    # hard-exit so the shell returns immediately.
+    try:
+        from utils import updates
+        updates.shutdown()
+    except Exception:
+        pass
+    try:
+        logger.complete()  # drain any enqueued Loguru sinks before exit
+    except Exception:
+        pass
+    os._exit(0)

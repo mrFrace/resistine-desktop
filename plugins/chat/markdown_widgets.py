@@ -249,12 +249,29 @@ class SelectableLabel(tk.Text):
             return None
         return "break"
 
+    def _display_lines(self) -> int:
+        """Number of display lines the text occupies.
+
+        Tk's ``count -displaylines`` reports the number of line *breaks*
+        between the two indices (N-1 for N display lines), so it reads one
+        short. Add 1 to get the real line count — without this, every
+        multi-line message rendered one line too short (and the old ``or 1``
+        only happened to mask the single-line case).
+        """
+        try:
+            result = self.count("1.0", "end-1c", "displaylines")
+            n = result[0] if isinstance(result, (list, tuple)) else result
+            return (int(n) + 1) if n is not None else 1
+        except Exception:
+            return 1
+
     def _autoheight(self, _event=None) -> None:
         if self._in_autoheight:
             return
         self._in_autoheight = True
         try:
-            new_h = max(1, self._displayline_count())
+            lines = self._displayline_count()
+            new_h = max(1, lines)
             cur_h = int(self.cget("height"))
             if new_h != cur_h:
                 self.configure(height=new_h)
@@ -363,7 +380,9 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         self._copy_btn.pack(side="right", padx=(0, 10), pady=5)
 
         # -- Code body ------------------------------------------------------
-        mono_font = fonts["code"]
+        # code_block font is ~20% smaller than prose so the monospace text
+        # doesn't visually dominate the conversation.
+        mono_font = fonts["code_block"]
         self.pack_propagate(False)
 
         self._code_widget = tk.Text(
@@ -378,30 +397,12 @@ class CodeBlockWidget(customtkinter.CTkFrame):
         line_count = code_text.count("\n") + 1
         visible = min(line_count, 25)
         self._code_widget.configure(state="disabled", height=visible)
-        self._code_widget.pack(
-            fill="both", expand=True, padx=0, pady=(0, 0))
 
-        # Set frame height: header(32) + text lines + padding + scrollbar
-        import tkinter.font as tkfont
-        try:
-            line_h = tkfont.Font(font=mono_font).metrics("linespace")
-        except Exception:
-            line_h = 20
-        # header(32) + text(lines*lineheight + pady*2) + scrollbar(14) + buffer
-        frame_h = 32 + visible * line_h + 20 + 14 + 10
-        # frame_h is a PHYSICAL measurement (line_h from raw tkfont metrics);
-        # CTk's configure(height=) multiplies by display scaling, so divide it
-        # out or the code block is scaling-factor times too tall on a Windows
-        # 125% display (which also inflates the bubble height).
-        try:
-            _s = customtkinter.ScalingTracker.get_widget_scaling(self)
-            if _s:
-                frame_h = int(round(frame_h / _s))
-        except Exception:
-            pass
-        self.configure(height=frame_h)
-
-        # -- Horizontal scrollbar (always visible) --------------------------
+        # -- Horizontal scrollbar -------------------------------------------
+        # Packed at the BOTTOM *before* the code body so it always keeps its
+        # row; the body (packed after, expand=True) fills the space above it.
+        # Packing the body first lets its expand swallow the whole frame and
+        # squeeze the scrollbar out of view.
         scrollbar = customtkinter.CTkScrollbar(
             self, orientation="horizontal",
             command=self._code_widget.xview,
@@ -409,9 +410,32 @@ class CodeBlockWidget(customtkinter.CTkFrame):
             fg_color=colors["code_bg"],
             button_color=sb_color,
             button_hover_color=sb_hover)
-        self._code_widget.configure(
-            xscrollcommand=scrollbar.set)
-        scrollbar.pack(fill="x", padx=8, pady=(0, 4))
+        self._code_widget.configure(xscrollcommand=scrollbar.set)
+        scrollbar.pack(side="bottom", fill="x", padx=8, pady=(0, 4))
+
+        self._code_widget.pack(
+            side="top", fill="both", expand=True, padx=0, pady=(0, 0))
+
+        # -- Frame height ---------------------------------------------------
+        import tkinter.font as tkfont
+        try:
+            line_h = tkfont.Font(font=mono_font).metrics("linespace")
+        except Exception:
+            line_h = 20
+        # The code body is a raw tk.Text (physical px, not CTk-scaled). The
+        # header and scrollbar are CTk widgets whose physical height scales with
+        # the display factor, so budget them in LOGICAL units (CTk re-applies the
+        # factor) while converting the physical text height to logical. Using
+        # fixed physical constants for the header/scrollbar under-budgeted them
+        # on HiDPI (Windows >=125%) and clipped the scrollbar off the bottom.
+        try:
+            _s = customtkinter.ScalingTracker.get_widget_scaling(self) or 1.0
+        except Exception:
+            _s = 1.0
+        code_h_physical = visible * line_h + 20       # tk.Text lines + pady*2
+        header_sb_logical = 32 + 14 + 10              # header + scrollbar + buffer
+        frame_h = header_sb_logical + int(round(code_h_physical / _s))
+        self.configure(height=frame_h)
 
     # -- Clipboard ----------------------------------------------------------
 
@@ -486,10 +510,11 @@ class TableWidget(customtkinter.CTkFrame):
                 for j in range(self._num_cols))
             for cells, _h in all_rows)
 
-        # Shared chat body/bold fonts so table text matches the conversation.
+        # Dedicated table fonts (~20% smaller than prose, matching code blocks)
+        # so tabular content doesn't render larger than the conversation text.
         _tbl_fonts = get_fonts(is_dark)
-        header_font = _tbl_fonts["bold"]
-        body_font = _tbl_fonts["body"]
+        header_font = _tbl_fonts["table_bold"]
+        body_font = _tbl_fonts["table"]
 
         # Per-column pixel width: widest cell measured in the font it ACTUALLY
         # renders in (the header is bold and wider). +24 for the gutter.

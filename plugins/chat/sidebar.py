@@ -39,7 +39,15 @@ class ChatSidebar(customtkinter.CTkFrame):
         **kwargs: object,
     ) -> None:
         bg = "#161618" if is_dark else "#ECECEE"
-        border = "#2A2A2A" if is_dark else "#D1D1D6"
+        # Right-edge border: must be DARKER than the dimmed-chat color to
+        # the right, otherwise it shows as a bright line at the seam.
+        # In dark mode the dim Toplevel renders at roughly
+        # 0.6 * chat_bg + 0.4 * black ≈ #0E0E0E. The previous #2A2A2A was
+        # MUCH lighter than that — the bright vertical line the user
+        # reported. Drop a couple of stops below the dimmed value so the
+        # edge reads as a subtle inset shadow. Light-mode value
+        # unchanged (the contrast there worked fine).
+        border = "#050505" if is_dark else "#D1D1D6"
         super().__init__(
             master, fg_color=bg, corner_radius=0,
             width=self._WIDTH, **kwargs)
@@ -89,13 +97,21 @@ class ChatSidebar(customtkinter.CTkFrame):
     # -- public API --------------------------------------------------------
 
     def refresh(self, sessions: list[dict], active_id: str | None) -> None:
-        """Rebuild the entire history item list."""
-        for w in self._list.winfo_children():
-            w.destroy()
-        self._items.clear()
+        """Diff against the current item list and apply minimal mutations.
+
+        The previous implementation destroyed every row and rebuilt it on
+        every call — ~4N widget creations per refresh. Called from every
+        stream completion and every nav, this was the visible
+        sidebar-flash. Now we mutate existing rows in place and only
+        create/destroy when sessions actually appear or disappear.
+        """
         self._active_id = active_id
 
+        # Empty-state handling — bail early, clear everything if needed.
         if not sessions:
+            for w in self._list.winfo_children():
+                w.destroy()
+            self._items.clear()
             customtkinter.CTkLabel(
                 self._list, text="No conversations",
                 font=customtkinter.CTkFont(family=ui_family(), size=12),
@@ -103,10 +119,51 @@ class ChatSidebar(customtkinter.CTkFrame):
             ).pack(pady=30)
             return
 
+        # If a "No conversations" placeholder is up, clear it before
+        # adding the real rows.
+        if not self._items and self._list.winfo_children():
+            for w in self._list.winfo_children():
+                w.destroy()
+
+        new_ids = {s["id"] for s in sessions}
+
+        # Remove rows whose sessions are gone.
+        for sid in list(self._items):
+            if sid not in new_ids:
+                try:
+                    self._items[sid].destroy()
+                except Exception:
+                    pass
+                del self._items[sid]
+
+        # Walk sessions in order. Mutate existing rows; create missing.
+        # Use pack_forget+pack to re-order rows in-place so the visible
+        # order matches `sessions`.
+        active_bg = "#1A2F45" if self._is_dark else "#D6E4F0"
         for s in sessions:
-            self._add_item(
-                s["id"], s.get("title", "New Chat"),
-                s.get("updated_at", 0))
+            sid = s["id"]
+            title = s.get("title", "New Chat")
+            updated = s.get("updated_at", 0)
+            row = self._items.get(sid)
+            if row is None:
+                self._add_item(sid, title, updated)
+                continue
+            # Mutate in place — no widget recreation.
+            try:
+                tl = getattr(row, "_resistine_title_lbl", None)
+                if tl is not None:
+                    tl.configure(text=title)
+                ml = getattr(row, "_resistine_meta_lbl", None)
+                if ml is not None:
+                    ml.configure(text=_time_ago(updated))
+                row.configure(
+                    fg_color=active_bg if sid == active_id else "transparent")
+                # Re-pack to enforce the desired order (cheap when the
+                # row is already in the right slot).
+                row.pack_forget()
+                row.pack(fill="x", pady=1)
+            except Exception:
+                pass
 
     def set_active(self, session_id: str | None) -> None:
         """Update which item is highlighted."""
@@ -139,11 +196,17 @@ class ChatSidebar(customtkinter.CTkFrame):
             text_color=fg, anchor="w")
         lbl.grid(row=0, column=0, padx=(8, 2), sticky="ew")
 
-        customtkinter.CTkLabel(
+        meta = customtkinter.CTkLabel(
             row, text=_time_ago(updated),
             font=customtkinter.CTkFont(family=ui_family(), size=10),
             text_color="#6B7280", width=24,
-        ).grid(row=0, column=1, padx=2)
+        )
+        meta.grid(row=0, column=1, padx=2)
+
+        # Stash refs on the row so refresh() can mutate them in place
+        # without destroying-and-recreating the whole row.
+        row._resistine_title_lbl = lbl  # type: ignore[attr-defined]
+        row._resistine_meta_lbl = meta  # type: ignore[attr-defined]
 
         customtkinter.CTkButton(
             row, text="\u2715", width=24, height=24,

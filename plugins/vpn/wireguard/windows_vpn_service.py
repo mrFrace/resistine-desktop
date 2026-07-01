@@ -43,11 +43,49 @@ ALLOWED_COMMANDS = {
 
 PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
 CONFIG_BASE = os.path.join(PROGRAMDATA, "Resistine", "wireguard")
-os.makedirs(CONFIG_BASE, exist_ok=True)
 
 # IPC token — generated once on first service start and shared via ProgramData
 # so the GUI client (running as the current user) can authenticate requests.
 IPC_TOKEN_FILE = os.path.join(CONFIG_BASE, ".ipc_token")
+
+# Populated by _init_runtime() when the service / CLI actually starts.
+# Module import (e.g. by pytest collecting tests on macOS/Linux) must not
+# touch the filesystem or create files in %PROGRAMDATA%.
+IPC_TOKEN: str = ""
+
+
+def _restrict_token_acl(token_path: str) -> None:
+    """Restrict the IPC token file's ACL on Windows via icacls.
+
+    Grants SYSTEM:F, Administrators:F, and read-only to the current user.
+    Disables inheritance so other users cannot read the token. A no-op on
+    non-Windows platforms; failures are swallowed so a flaky icacls run
+    cannot break the service or GUI.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import getpass
+
+        user = os.environ.get("USERNAME") or getpass.getuser()
+        subprocess.run(
+            [
+                "icacls", token_path,
+                "/inheritance:r",
+                "/grant", "SYSTEM:F",
+                "/grant", "Administrators:F",
+                "/grant", f"{user}:R",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=5,
+            # Suppress the console window so icacls doesn't flash a cmd
+            # window when the service runs in a user session (debug mode).
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception:
+        # Best-effort hardening — never fail the caller on ACL issues.
+        pass
 
 
 def _get_or_create_ipc_token() -> str:
@@ -57,6 +95,8 @@ def _get_or_create_ipc_token() -> str:
             with open(IPC_TOKEN_FILE, "r") as fh:
                 token = fh.read().strip()
             if len(token) >= 32:
+                # Re-apply ACL on every read to heal any inherited perms.
+                _restrict_token_acl(IPC_TOKEN_FILE)
                 return token
         except OSError:
             pass
@@ -66,12 +106,10 @@ def _get_or_create_ipc_token() -> str:
         os.makedirs(os.path.dirname(IPC_TOKEN_FILE), exist_ok=True)
         with open(IPC_TOKEN_FILE, "w") as fh:
             fh.write(token)
+        _restrict_token_acl(IPC_TOKEN_FILE)
     except OSError as e:
         logging.getLogger("ResistineVPN").error("Could not persist IPC token: %s", e)
     return token
-
-
-IPC_TOKEN = _get_or_create_ipc_token()
 
 
 def _find_wireguard_exe() -> str:
@@ -115,24 +153,56 @@ def _get_log_file() -> str:
         return appdata_log
 
 
-LOG_FILE = _get_log_file()
-
 TRACE = 5
 logging.addLevelName(TRACE, "TRACE")
+
 
 def _trace(self, message, *args, **kwargs):
     if self.isEnabledFor(TRACE):
         self._log(TRACE, message, args, **kwargs)
 
+
 logging.Logger.trace = _trace
 
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.DEBUG,
-    format="%(asctime)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s",
-)
+# Populated by _init_runtime(); module import must not touch the filesystem.
+LOG_FILE: str = ""
 logger = logging.getLogger("ResistineVPN")
-logger.info(f"Service module loaded. Logging to: {LOG_FILE}")
+
+
+def _init_runtime() -> None:
+    """Initialize on-disk state (config dir, IPC token, log handlers).
+
+    Called from SvcDoRun() and the __main__ guard — *never* at import time
+    so this module remains safe to import on macOS/Linux (e.g. by tests).
+    Safe to call multiple times.
+    """
+    global IPC_TOKEN, LOG_FILE
+
+    try:
+        os.makedirs(CONFIG_BASE, exist_ok=True)
+    except OSError:
+        pass
+
+    if not IPC_TOKEN:
+        IPC_TOKEN = _get_or_create_ipc_token()
+
+    if not LOG_FILE:
+        LOG_FILE = _get_log_file()
+        # Only attach a file handler once.
+        if not any(
+            isinstance(h, logging.FileHandler)
+            and getattr(h, "baseFilename", None) == LOG_FILE
+            for h in logger.handlers
+        ):
+            handler = logging.FileHandler(LOG_FILE)
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s | %(levelname)s | %(funcName)s:%(lineno)d | %(message)s",
+                ),
+            )
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
+            logger.info(f"Service module loaded. Logging to: {LOG_FILE}")
 
 
 # ---------------- Helpers ----------------
@@ -505,6 +575,11 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
         win32event.SetEvent(self.hWaitStop)
 
     def SvcDoRun(self):
+        # Defer all filesystem / token / log-handler setup until the service
+        # actually runs. Keeping it out of module import means the module is
+        # safe to import on non-Windows platforms (and in tests).
+        _init_runtime()
+
         servicemanager.LogInfoMsg("ResistineVPN starting")
 
         # Report RUNNING immediately — SCM requires response within 30s
@@ -571,4 +646,5 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
 
 
 if __name__ == "__main__":
+    _init_runtime()
     win32serviceutil.HandleCommandLine(ResistineVPNService)

@@ -61,7 +61,26 @@ my_vpn_status = "Stopped"
 
 
 def is_vpn_connected():
-    """Return True if VPN is currently connected."""
+    """Return True if VPN is currently connected.
+
+    Dev escape hatch (macOS only): when running ``./run.sh`` alongside an
+    installed ``.pkg`` whose NetworkExtension already holds the tunnel up,
+    this process's internal ``my_vpn_status`` stays ``"Stopped"`` because
+    the dev instance never toggled the VPN itself — even though traffic is
+    already routing through the system tunnel. Setting
+    ``RESISTINE_DEV_VPN_CONNECTED=1`` forces this gate to True so
+    VPN-gated features (e.g. the chat access gate, wazuh_overview API
+    fetches) work in source mode without the dev instance needing to
+    actually drive the tunnel.
+
+    Gated on ``platform.system() == "Darwin"`` so Linux/Windows behavior
+    is unchanged — those platforms have different VPN backends and the
+    escape hatch is irrelevant there. ``run.sh`` only exports the env
+    var on Darwin too, so this is defense in depth.
+    """
+    if (platform.system() == "Darwin"
+            and os.environ.get("RESISTINE_DEV_VPN_CONNECTED") == "1"):
+        return True
     return my_vpn_status == "Running"
 
 # --- Config Manager (module-level for use in init) ---
@@ -810,9 +829,16 @@ class Plugin(BasePlugin):
             # Content area = total window width minus the fixed sidebar.
             # Using app.winfo_width() is reliable; main_container.winfo_width()
             # can be stale or wrong depending on when Configure fires.
-            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL,
-            # so convert via _hidpi_factor and re-scale the minsize at the end.
-            _scale = getattr(self.app, "_hidpi_factor", 1.0)
+            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
+            # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at
+            # 200% on Windows, 1.0 on macOS, == _hidpi_factor on Linux) and
+            # re-scale the minsize at the end. _hidpi_factor alone is 1.0 on
+            # Windows even when CTk scales 2x, which left the content column
+            # sized in physical px and rendered it half-width.
+            try:
+                _scale = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
+            except Exception:
+                _scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
             app_w = self.app.winfo_width() / _scale
             if app_w < 10:
                 return
@@ -947,7 +973,7 @@ class Plugin(BasePlugin):
             self.app.show_notification("Config file not found", type="error")
             return
 
-        with open(conf_file_path, 'r') as f:
+        with open(conf_file_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         dialog = customtkinter.CTkToplevel(self.app)
@@ -1107,7 +1133,7 @@ class Plugin(BasePlugin):
         data = {}
 
         if os.path.exists(conf_file_path):
-            with open(conf_file_path, 'r') as conf_file:
+            with open(conf_file_path, 'r', encoding='utf-8') as conf_file:
                 for line in conf_file:
                     if '=' in line:
                         key, value = line.split('=', 1)

@@ -42,6 +42,7 @@ env/
 build/build/
 build/dist/
 *.manifest
+!packaging/windows/Resistine.exe.manifest
 
 # IDEs
 .vscode/
@@ -153,3 +154,18 @@ resistine.github.io/
 dist/installer/
 *.exe
 VERSION
+
+# Generated from LICENSE.md by scripts/build/build-windows-installer.ps1
+# for Inno Setup's license-acceptance screen. Regenerated on every build.
+LICENSE.txt
+
+# Local SBOM-generation helper venv (scripts/sbom/run.sh). NOT the dev
+# venv — this one is a prod-only environment used solely by the SBOM
+# generator so cyclonedx-py doesn't pick up pytest et al.
+.sbom-venv/
+
+# Stray cyclonedx-py output if anyone runs the CLI directly without our
+# wrapper. The canonical SBOM is sbom.cdx.json at the repo root.
+/bom.json
+/bom.xml
+/*.cdx.xml

@@ -43,8 +43,12 @@ def is_available():
 def run_uninstall(app, progress_callback=None):
     """Execute the full macOS uninstall sequence.
 
-    Collects all commands that need admin privileges and runs them in a
-    single ``osascript`` call so the user only sees one password prompt.
+    SINGLE password prompt: every command that requires admin privileges
+    (Wazuh agent removal, ClamAV cleanup, system-level config, app-bundle
+    removal) is collected into one shell script and run via ONE
+    ``osascript with administrator privileges`` call. Previous versions
+    asked for the password 2-3 times because Wazuh removal and app-bundle
+    removal each had their own prompt — those are now batched in.
     """
 
     def _progress(msg):
@@ -60,14 +64,13 @@ def run_uninstall(app, progress_callback=None):
 
     # -- Phase 1: Non-privileged work + collect admin commands ---------------
 
-    # Wazuh — plugin path triggers its own admin prompt (unavoidable);
-    # fallback path adds commands to admin_cmds instead.
-    _progress("Removing SIEM agent...")
+    # Wazuh — emits commands into admin_cmds (no separate prompt anymore).
+    _progress("Preparing SIEM agent removal...")
     try:
-        _remove_wazuh_agent(admin_cmds)
+        _collect_wazuh_admin_cmds(admin_cmds)
     except Exception as e:
-        logger.error(f"[UNINSTALL] Failed — SIEM agent: {e}")
-        errors.append(f"SIEM agent: {e}")
+        logger.error(f"[UNINSTALL] Failed — SIEM agent prep: {e}")
+        errors.append(f"SIEM agent prep: {e}")
 
     # ClamAV — SMAppService (no admin), then collect admin commands
     _progress("Stopping ClamAV daemons...")
@@ -104,27 +107,38 @@ def run_uninstall(app, progress_callback=None):
         logger.error(f"[UNINSTALL] Failed — App config: {e}")
         errors.append(f"App config: {e}")
 
-    # -- Phase 2: Run all privileged commands in one admin prompt -------------
+    # App bundle removal — append to admin_cmds so it runs in the same
+    # prompt instead of asking for the password again.
+    try:
+        _collect_app_bundle_admin_cmd(admin_cmds)
+    except Exception as e:
+        logger.error(f"[UNINSTALL] Failed — App bundle prep: {e}")
+        errors.append(f"App bundle prep: {e}")
+
+    # -- Phase 2: Run all privileged commands in ONE admin prompt -----------
 
     if admin_cmds:
-        _progress("Running privileged cleanup...")
+        _progress("Authenticating for system cleanup...")
         try:
             _run_privileged(admin_cmds)
+        except _UserCancelled:
+            # User clicked Cancel on the password dialog. Distinguish
+            # from an actual failure — the rest of the uninstall ran
+            # but the privileged steps were skipped at the user's
+            # request, so don't blast a red error label at them.
+            return (False, "Uninstall cancelled at password prompt.")
         except Exception as e:
             logger.error(f"[UNINSTALL] Failed — Privileged cleanup: {e}")
             errors.append(f"Privileged cleanup: {e}")
 
-    # -- Phase 3: Remove app bundle (may need its own admin prompt) ----------
-    _progress("Removing application...")
-    try:
-        _remove_app_bundle()
-    except Exception as e:
-        logger.error(f"[UNINSTALL] Failed — App bundle: {e}")
-        errors.append(f"App bundle: {e}")
-
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
     return (True, "Resistine has been uninstalled successfully.")
+
+
+class _UserCancelled(Exception):
+    """User clicked Cancel on the admin password prompt."""
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -132,21 +146,129 @@ def run_uninstall(app, progress_callback=None):
 # ---------------------------------------------------------------------------
 
 
+_STEP_LOG = "/tmp/resistine-uninstall.log"
+
+
+def _instrument_cmds(cmds):
+    """Wrap each command with a step-log line so a post-mortem reveals
+    exactly which command died when the shell exits with a signal.
+
+    The log file at ``/tmp/resistine-uninstall.log`` is overwritten at the
+    start of every uninstall and gets a `STEP N/TOTAL: <command>` line
+    BEFORE each command, plus a final `DONE` sentinel. When the shell is
+    SIGKILL'd mid-run the file contains every step that started — the
+    last `STEP` entry is the one that was running when the kernel
+    pulled the rug. ``_run_privileged`` reads the log on nonzero return
+    and surfaces "died after step N: <description>" in the error so we
+    can stop guessing which operation triggers the kill.
+    """
+    instrumented = [f"true > {_STEP_LOG} 2>/dev/null"]
+    n_total = len(cmds)
+    for i, c in enumerate(cmds, 1):
+        # First 80 chars of the command so the log stays grep-able. Escape
+        # any double-quotes in the description so the echo doesn't break.
+        desc = c[:80].replace('"', "'")
+        instrumented.append(
+            f'echo "STEP {i}/{n_total}: {desc}" >> {_STEP_LOG} 2>/dev/null'
+        )
+        instrumented.append(c)
+    instrumented.append(f'echo DONE >> {_STEP_LOG} 2>/dev/null')
+    return instrumented
+
+
+def _read_last_step():
+    """Return the last `STEP N/TOTAL: ...` line written to the log, or
+    None if the log doesn't exist or is empty. Used by _run_privileged
+    to attribute a SIGKILL to a specific command.
+    """
+    try:
+        with open(_STEP_LOG, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.strip() for ln in f.readlines() if ln.strip()]
+    except OSError:
+        return None
+    if not lines:
+        return None
+    if lines[-1] == "DONE":
+        return "DONE (all steps completed)"
+    for ln in reversed(lines):
+        if ln.startswith("STEP "):
+            return ln
+    return None
+
+
 def _run_privileged(cmds):
-    """Run a list of shell commands in a single admin osascript prompt."""
-    script = "; ".join(cmds)
+    """Run a list of shell commands in a single admin osascript prompt.
+
+    Each command is joined with `;` so a failure in one doesn't abort the
+    rest — every command also has its own `|| true` fallback inside
+    sub-helpers so transient state (e.g. plist already gone) doesn't
+    short-circuit the cleanup. Every command is preceded by a STEP marker
+    that gets appended to ``/tmp/resistine-uninstall.log`` so when the
+    privileged shell is SIGKILL'd by some external actor (corporate EDR
+    hooking the AuthorizationExecuteWithPrivileges trampoline; macOS
+    EndpointSecurity teardown of Wazuh's ES subscription during bootout;
+    etc.) we can attribute the kill to a specific step.
+
+    On failure, the prior version raised "Privileged cleanup failed: "
+    with an empty message because osascript surfaces error text via
+    stdout, not stderr. Capture both streams, the exit code, AND the
+    last-completed step from the log so the UI shows something actionable.
+    """
+    script = "; ".join(_instrument_cmds(cmds))
     escaped = script.replace("\\", "\\\\").replace('"', '\\"')
     cmd = [
         "osascript", "-e",
         f'do shell script "{escaped}" with administrator privileges',
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    # 5-minute timeout: a slow Wazuh shutdown + system extension dance
+    # can take 30-60 s; the 60 s ceiling was tight.
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode == 0:
         logger.info("[UNINSTALL] Privileged cleanup completed")
+        return
+    # Capture BOTH streams so a future error has actionable detail.
+    err = (result.stderr or "").strip()
+    out = (result.stdout or "").strip()
+    combined = "\n".join(s for s in (err, out) if s).strip()
+    # Distinguish user-cancelled from a real failure. osascript surfaces
+    # the cancel as exit code 1 (or -128 on some macOS versions) with
+    # the phrase "User canceled" / "User cancelled" / "-128".
+    if (result.returncode == -128
+            or "User canceled" in combined
+            or "User cancelled" in combined
+            or "-128" in combined):
+        logger.info("[UNINSTALL] User cancelled the admin prompt")
+        raise _UserCancelled()
+    # Always include the exit code, even when stderr/stdout is non-empty.
+    # The previous version dropped the code when stderr had any content,
+    # which made signal kills (exit 9 = SIGKILL, exit 137 = OOM-kill) and
+    # other non-textual failures indistinguishable from script errors.
+    last_step = _read_last_step()
+    if last_step:
+        logger.error(f"[UNINSTALL] Last privileged step: {last_step}")
+    if combined:
+        detail = f"{combined} (exit code {result.returncode})"
     else:
-        raise OSError(
-            f"Privileged cleanup failed: {result.stderr.strip()}"
-        )
+        # Most useful generic hint when the script returned no output —
+        # tends to be the OS killing osascript, not osascript itself
+        # erroring out. Surface the signal name when we recognize it.
+        sig_names = {
+            1: "SIGHUP", 2: "SIGINT", 9: "SIGKILL", 11: "SIGSEGV",
+            13: "SIGPIPE", 15: "SIGTERM", 137: "SIGKILL (OOM-killed)",
+        }
+        sig = sig_names.get(result.returncode, "")
+        detail = f"exit code {result.returncode}"
+        if sig:
+            detail += f" ({sig})"
+        if last_step:
+            detail += f" — died after {last_step}"
+        else:
+            detail += (
+                " — privileged shell died with no output; "
+                "log file missing too. See /tmp/resistine-uninstall.log "
+                "if it exists."
+            )
+    raise OSError(detail)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +282,7 @@ def _remove_clamav_daemons(admin_cmds):
 
     # 1. SMAppService unregistration (no admin needed)
     _smappservice_plist_names = [
+        "com.resistine.desktop.freshclam.plist",
         "com.resistine.desktop.clamonacc.plist",
         "com.resistine.desktop.clamd.plist",
         "com.resistine.clamonacc.plist",
@@ -190,12 +313,41 @@ def _remove_clamav_daemons(admin_cmds):
     except ImportError:
         logger.debug("[UNINSTALL] ServiceManagement not available")
 
-    # 2. Collect admin commands for legacy plist cleanup + process kill + data
+    # ORDER MATTERS (same reason as _collect_wazuh_admin_cmds): kill the
+    # ClamAV daemon processes FIRST, then bootout the launchd plists.
+    # `clamonacc` is a macOS EndpointSecurity client (subscribes to
+    # file-creation/write events to drive on-access scanning). When
+    # launchctl boots out an ES-subscribed daemon the ES framework's
+    # teardown path has been observed to SIGKILL processes that have
+    # active subscriptions or events in-flight, which has cascaded onto
+    # the privileged shell osascript spawned (`exit code -9` with no
+    # output). Killing first means the ES subscription is gone before
+    # launchd's bootout-time cleanup runs.
+    #
+    # `[f]` regex trick — `pkill -f` matches against the full command
+    # line, and our own admin shell script (passed verbatim to
+    # `osascript -e`) contains the literal text we'd otherwise be
+    # searching for. Without the bracket trick, pkill matches its own
+    # parent shell/osascript and SIGKILLs them, surfacing to the user
+    # as `exit code -9` with no output. `[f]reshclam-update.sh`
+    # matches `freshclam-update.sh` in REAL process command lines via
+    # the one-char character class, but the literal string
+    # `[f]reshclam-update.sh` doesn't appear anywhere else.
+    admin_cmds.append("pkill -f '[f]reshclam-update.sh' 2>/dev/null || true")
+    admin_cmds.append("pkill -x freshclam 2>/dev/null || true")
+    admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
+    admin_cmds.append("pkill -x clamd 2>/dev/null || true")
+    # Brief sleep to let the ES framework process daemon-death notifications
+    # before we tear down the launchd plists they're bound to.
+    admin_cmds.append("sleep 0.2")
+
+    # Collect admin commands for legacy plist cleanup
     legacy_plists = [
         "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
         "/Library/LaunchDaemons/com.resistine.clamd.plist",
         "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
         "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
+        "/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist",
     ]
     for plist in legacy_plists:
         if os.path.exists(plist):
@@ -204,6 +356,7 @@ def _remove_clamav_daemons(admin_cmds):
 
     # Bootout by label in case plists are gone but daemons still loaded
     for label in (
+        "com.resistine.desktop.freshclam",
         "com.resistine.desktop.clamd",
         "com.resistine.desktop.clamonacc",
         "com.resistine.clamd",
@@ -213,55 +366,119 @@ def _remove_clamav_daemons(admin_cmds):
             f"launchctl bootout system/{label} 2>/dev/null || true",
         )
 
-    # Kill running ClamAV processes (root-owned, needs admin)
-    admin_cmds.append("pkill -x clamonacc 2>/dev/null || true")
-    admin_cmds.append("pkill -x clamd 2>/dev/null || true")
-
     # Remove system-level ClamAV data (signatures, configs, logs)
     if os.path.exists(_SYSTEM_CLAMAV_DIR):
         admin_cmds.append(f"rm -rf '{_SYSTEM_CLAMAV_DIR}'")
 
 
-def _remove_wazuh_agent(admin_cmds):
-    """Stop and remove the Wazuh SIEM agent if installed.
+def _collect_wazuh_admin_cmds(admin_cmds):
+    """Append every Wazuh-agent teardown command into ``admin_cmds``.
 
-    When the Wazuh plugin is available, delegates to its ``remove_agent()``
-    (which triggers its own admin prompt — unavoidable).  The key backup
-    deletion is added to ``admin_cmds`` so it runs in the batched prompt.
-
-    When the plugin is unavailable, all commands go into ``admin_cmds``.
+    Previously delegated to ``plugins.wazuh.agent.wazuh_functions_darwin.
+    remove_agent()`` which ran its OWN ``osascript with administrator
+    privileges`` — that's the second of the user's three password
+    prompts. Now we emit the same commands inline so they batch with
+    the rest of the privileged cleanup. wipe_keys=True semantics
+    (logout-style full identity wipe) is embedded directly: delete
+    /Library/Ossec, the launchd plist, the key backup file, and the
+    System Keychain entry.
     """
+    # Wazuh constants — keep in sync with plugins.wazuh.config /
+    # wazuh_functions_darwin. Imported lazily so an environment without
+    # the Wazuh plugin (e.g. dev/test) still uninstalls cleanly.
     try:
         from plugins.wazuh.agent.wazuh_functions_darwin import (
-            _KEY_BACKUP,
-            remove_agent,
+            _KEY_BACKUP, _KC_ACCOUNT, _KC_SERVICE, _KEYCHAIN,
+            _WAZUH_CONTROL, is_agent_installed, _is_service_loaded,
+            _has_keychain_entry,
         )
-        remove_agent()
-        # Batch key backup deletion with the other admin commands
-        if os.path.exists(_KEY_BACKUP):
-            escaped = _KEY_BACKUP.replace("'", "'\\''")
-            admin_cmds.append(f"rm -f '{escaped}'")
-        return
+        from plugins.wazuh.config import (
+            WAZUH_INSTALL_DIR, WAZUH_LAUNCHD_PLIST,
+        )
+        agent_present = (
+            is_agent_installed()
+            or _is_service_loaded()
+            or os.path.exists(_KEY_BACKUP)
+            or _has_keychain_entry()
+        )
     except ImportError:
-        logger.info("[UNINSTALL] Wazuh plugin not available, using inline removal")
+        # Fallback paths matching the plugin's defaults.
+        _WAZUH_CONTROL = "/Library/Ossec/bin/wazuh-control"
+        WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
+        WAZUH_INSTALL_DIR = "/Library/Ossec"
+        _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
+        _KC_SERVICE = "com.resistine.wazuh.client.keys"
+        _KC_ACCOUNT = "wazuh-agent"
+        _KEYCHAIN = "/Library/Keychains/System.keychain"
+        agent_present = (
+            os.path.exists(WAZUH_INSTALL_DIR)
+            or os.path.exists(WAZUH_LAUNCHD_PLIST)
+            or os.path.exists(_KEY_BACKUP)
+        )
 
-    # Fallback: collect inline removal commands
-    wazuh_control = "/Library/Ossec/bin/wazuh-control"
-    wazuh_plist = "/Library/LaunchDaemons/com.wazuh.agent.plist"
-    ossec_dir = "/Library/Ossec"
-    key_backup = "/Library/Application Support/Resistine/wazuh_client.keys"
-
-    if not os.path.exists(ossec_dir) and not os.path.exists(wazuh_plist):
+    if not agent_present:
         logger.info("[UNINSTALL] Wazuh agent not installed, skipping")
         return
 
-    admin_cmds.append(f"'{wazuh_control}' stop 2>/dev/null || true")
+    # Shell-quote keychain account/service to defend against any future
+    # rename containing a quote.
+    def _sq(s: str) -> str:
+        return s.replace("'", "'\\''")
+
+    # DO NOT pkill -9 the wazuh-* processes. Empirically that triggered
+    # a SIGKILL cascade onto the privileged shell — most likely Wazuh's
+    # anti-tampering or a sibling daemon (wazuh-execd / wazuh-modulesd
+    # / wazuh-syscheckd) reacting to wazuh-agentd's forced death by
+    # killing the killer's parent process. Symptom: `exit code -9`
+    # surfacing at the first command AFTER the pkill (a no-op `sleep`),
+    # which is when the retaliatory SIGKILL lands on our osascript-
+    # spawned shell.
+    #
+    # Graceful shutdown sequence instead:
+    #   1. `wazuh-control stop` — Wazuh's own teardown, which disables
+    #      its protection hooks BEFORE the daemons exit.
+    #   2. `launchctl disable system/<plist>` — tell launchd not to
+    #      respawn the daemon and not to monitor it (KeepAlive=true
+    #      otherwise re-launches agentd while we're trying to remove
+    #      its files).
+    #   3. 1s sleep — give the graceful shutdown time to actually
+    #      flush ES subscriptions, close sockets, deregister with
+    #      launchd. 200 ms was empirically too short.
+    #   4. `launchctl bootout` — now the daemon is already supposed
+    #      to be gone; bootout is a no-op for any live ES subscription
+    #      and the kernel ES framework has nothing to cascade.
+    #
+    # If wazuh-control stop fails (binary missing, ossec dir corrupted,
+    # etc.) we still proceed to bootout + rm — the worst case is leftover
+    # files we'll clean on the next launchctl call. We do NOT attempt a
+    # forceful kill anymore; the anti-tamper response is worse than
+    # leaving a defunct process around for 30 s while launchd reaps it.
     admin_cmds.append(
-        f"launchctl bootout system '{wazuh_plist}' 2>/dev/null || true",
+        f"'{_sq(_WAZUH_CONTROL)}' stop 2>/dev/null || true")
+    # Extract the bare label from the plist path so launchctl disable
+    # accepts the system/<label> form. WAZUH_LAUNCHD_PLIST is the
+    # /Library/LaunchDaemons/<label>.plist path; the label is the
+    # basename minus .plist. Hardcode the fallback to match the
+    # `com.wazuh.agent` ImportError default earlier in this function.
+    _wazuh_label = (
+        os.path.basename(WAZUH_LAUNCHD_PLIST).removesuffix(".plist")
+        or "com.wazuh.agent"
     )
-    admin_cmds.append(f"rm -rf '{ossec_dir}'")
-    admin_cmds.append(f"rm -f '{wazuh_plist}'")
-    admin_cmds.append(f"rm -f '{key_backup}'")
+    admin_cmds.append(
+        f"launchctl disable system/{_sq(_wazuh_label)} 2>/dev/null || true")
+    # Give wazuh-control stop time to actually complete its teardown +
+    # let launchd process the disable. 1 s is the empirical minimum
+    # observed to consistently avoid retaliation.
+    admin_cmds.append("sleep 1")
+    admin_cmds.append(
+        f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
+    # Identity wipe — same semantics as remove_agent(wipe_keys=True).
+    admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
+    admin_cmds.append(
+        f"security delete-generic-password -s '{_sq(_KC_SERVICE)}' "
+        f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
+    admin_cmds.append(f"rm -rf '{_sq(WAZUH_INSTALL_DIR)}'")
+    admin_cmds.append(f"rm -f '{_sq(WAZUH_LAUNCHD_PLIST)}'")
 
 
 def _stop_vpn_tunnel():
@@ -286,14 +503,71 @@ def _stop_vpn_tunnel():
         )
 
 
+_DEACTIVATOR_CLASS = None
+_DEACTIVATION_STATE = {"done_event": None, "error": None}
+
+
+def _get_deactivator_class():
+    """Cache the ``_Deactivator`` NSObject subclass at module level.
+
+    PyObjC registers a Python class as an Objective-C class the first
+    time it's defined. Re-running the class definition (e.g. on a
+    second uninstall click) logs the warning the user saw —
+    "_Deactivator is overriding existing Objective-C class". That
+    message was being treated as an error by the uninstall flow, so
+    a click that otherwise succeeded showed up red. Define the class
+    ONCE, lazily, and reuse the cached reference forever after.
+    """
+    global _DEACTIVATOR_CLASS
+    if _DEACTIVATOR_CLASS is not None:
+        return _DEACTIVATOR_CLASS
+    from Foundation import NSObject
+
+    class _Deactivator(NSObject):
+        # Talks to module-level _DEACTIVATION_STATE rather than capturing
+        # closures over per-call locals — locals from the first call
+        # would otherwise persist for every subsequent invocation.
+        def request_didFinishWithResult_(self, request, result):
+            logger.info(
+                f"[UNINSTALL] Extension deactivation finished: {result}")
+            ev = _DEACTIVATION_STATE.get("done_event")
+            if ev is not None:
+                ev.set()
+
+        def request_didFailWithError_(self, request, error):
+            msg = error.localizedDescription()
+            logger.error(f"[UNINSTALL] Extension deactivation failed: {msg}")
+            _DEACTIVATION_STATE["error"] = msg
+            ev = _DEACTIVATION_STATE.get("done_event")
+            if ev is not None:
+                ev.set()
+
+        def requestNeedsUserApproval_(self, request):
+            logger.info(
+                "[UNINSTALL] Extension deactivation needs user approval")
+
+        def request_actionForReplacingExtension_withExtension_(
+            self, request, existing, extension
+        ):
+            return 1  # Replace
+
+    _DEACTIVATOR_CLASS = _Deactivator
+    return _Deactivator
+
+
 def _deactivate_system_extension():
     """Deactivate the network extension via SystemExtensions framework.
 
     Blocks up to 15 seconds for the delegate callback, so the uninstall
     doesn't remove the app bundle while deactivation is still in flight.
+
+    If the extension isn't installed (because the app was never run, or
+    a prior uninstall already removed it), the OSSystemExtensionManager
+    returns a "no such extension" error which we treat as success — the
+    end state matches the goal.
     """
     try:
-        from Foundation import NSObject, NSOperationQueue
+        from Foundation import NSOperationQueue
         from SystemExtensions import (
             OSSystemExtensionManager,
             OSSystemExtensionRequest,
@@ -304,26 +578,9 @@ def _deactivate_system_extension():
 
     import threading
     done_event = threading.Event()
-    deactivation_error = []
-
-    class _Deactivator(NSObject):
-        def request_didFinishWithResult_(self, request, result):
-            logger.info(f"[UNINSTALL] Extension deactivation finished: {result}")
-            done_event.set()
-
-        def request_didFailWithError_(self, request, error):
-            msg = error.localizedDescription()
-            logger.error(f"[UNINSTALL] Extension deactivation failed: {msg}")
-            deactivation_error.append(msg)
-            done_event.set()
-
-        def requestNeedsUserApproval_(self, request):
-            logger.info("[UNINSTALL] Extension deactivation needs user approval")
-
-        def request_actionForReplacingExtension_withExtension_(
-            self, request, existing, extension
-        ):
-            return 1  # Replace
+    _DEACTIVATION_STATE["done_event"] = done_event
+    _DEACTIVATION_STATE["error"] = None
+    _Deactivator = _get_deactivator_class()
 
     try:
         deactivator = _Deactivator.alloc().init()
@@ -345,10 +602,23 @@ def _deactivate_system_extension():
                 "[UNINSTALL] Extension deactivation timed out after 15s "
                 "— continuing anyway"
             )
-        elif deactivation_error:
-            raise OSError(
-                f"Extension deactivation failed: {deactivation_error[0]}"
-            )
+            return
+        err = _DEACTIVATION_STATE.get("error")
+        if err:
+            # "no extension installed" is the desired end state, not
+            # an error — happens when the user clicks Uninstall a
+            # second time after the first one already deactivated.
+            low = err.lower()
+            if any(s in low for s in (
+                "no such extension",
+                "not found",
+                "no installed",
+                "is not installed",
+            )):
+                logger.info(
+                    "[UNINSTALL] Extension already deactivated, treating as success")
+                return
+            raise OSError(f"Extension deactivation failed: {err}")
     except OSError:
         raise
     except Exception as e:
@@ -485,13 +755,19 @@ def _remove_keychain_items():
         )
 
 
-def _remove_app_bundle():
-    """Remove the Resistine.app bundle.
+def _collect_app_bundle_admin_cmd(admin_cmds):
+    """Append the ``rm -rf /Applications/Resistine.app`` command into
+    ``admin_cmds`` so it runs in the SAME osascript prompt as everything
+    else. Previously the bundle removal had its own prompt — the third
+    of the user's three password requests.
 
-    The bundle in /Applications is typically root-owned, so we use an
-    admin ``osascript`` prompt.  macOS allows deleting files that are in
-    use — the kernel keeps the data until the last file descriptor closes,
-    so the running process won't crash.
+    macOS allows deleting files that are in use — the kernel keeps the
+    data until the last file descriptor closes — so the running process
+    can issue its own deletion and remain alive long enough to display
+    the success message and exit cleanly.
+
+    Returns silently when there's nothing to remove (dev mode / source
+    run / already gone).
     """
     if not getattr(sys, "frozen", False):
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
@@ -506,32 +782,11 @@ def _remove_app_bundle():
         return
 
     if not os.path.exists(app_bundle):
-        logger.info("[UNINSTALL] App bundle not found")
+        logger.info("[UNINSTALL] App bundle not found, skipping")
         return
 
     escaped = app_bundle.replace("'", "'\\''")
-
-    # Try non-privileged first (works if user-owned)
-    try:
-        shutil.rmtree(app_bundle)
-        logger.info(f"[UNINSTALL] Removed {app_bundle}")
-        return
-    except PermissionError:
-        logger.debug("[UNINSTALL] App bundle requires admin to remove")
-
-    # Fall back to admin removal
-    cmd = [
-        "osascript", "-e",
-        f"do shell script \"rm -rf '{escaped}'\" "
-        f"with administrator privileges",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    if result.returncode == 0:
-        logger.info(f"[UNINSTALL] Removed {app_bundle} (admin)")
-    else:
-        raise OSError(
-            f"App bundle removal failed: {result.stderr.strip()}"
-        )
+    admin_cmds.append(f"rm -rf '{escaped}'")
 
 
 def _find_cli_path():

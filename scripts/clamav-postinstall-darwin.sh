@@ -83,6 +83,19 @@ write_status() {
 
 CURRENT_STEP="init"
 
+# The freshclam LaunchDaemon plist is shipped static and code-signed, so its
+# ProgramArguments and CVD_CERTS_DIR hardcode /Applications/Resistine.app. We
+# cannot rewrite a signed plist at install time, so refuse to set up the
+# daemons from any other location rather than register a daemon pointing at a
+# path that does not exist (every scheduled run would fail to exec). Most
+# signed macOS security apps require /Applications for the same reason. This
+# runs after write_status() is defined so the UI sees the failure reason.
+if [ "$APP_CONTENTS" != "/Applications/Resistine.app/Contents" ]; then
+    write_status "{\"status\":\"failed\",\"step\":\"validate\",\"error\":\"Resistine must be installed in /Applications (found: $APP_CONTENTS)\",\"error_code\":\"WRONG_INSTALL_LOCATION\",\"exit_code\":1,\"pid\":$$,\"ts\":$(date +%s)}"
+    echo "Resistine must be installed in /Applications. Move Resistine.app to /Applications and reopen it." >&2
+    exit 1
+fi
+
 # --- Logging ---
 exec 2>>"$LOG_FILE"
 set -x
@@ -90,6 +103,7 @@ set -x
 # --- Cleanup on Failure ---
 cleanup_failed_install() {
     # Bootout any daemons we may have loaded
+    launchctl bootout system/com.resistine.desktop.freshclam 2>/dev/null || true
     launchctl bootout system/com.resistine.desktop.clamonacc 2>/dev/null || true
     launchctl bootout system/com.resistine.desktop.clamd 2>/dev/null || true
     # Remove config files (safe to retry)
@@ -146,6 +160,11 @@ LogFileMaxSize 2M
 LogTime yes
 DatabaseMirror database.clamav.net
 NotifyClamd $CLAMD_CONF
+# Run by the root LaunchDaemon. Without this, freshclam drops privileges to
+# the default "clamav" user (which does not exist on macOS) and fails to open
+# the root-owned UpdateLogFile — "Problem with internal logger / libfreshclam
+# init failed" — so signatures silently never update. Pin to root.
+DatabaseOwner root
 FRESHCLAM_EOF
 
 # Append CVDCertsDirectory if certs exist in app bundle
@@ -186,7 +205,7 @@ rm -f /Library/LaunchDaemons/com.resistine.clamonacc.plist 2>/dev/null || true
 CURRENT_STEP="load_daemons"
 write_status '{"status":"running","step":"load_daemons","pid":'"$$"',"ts":'"$(date +%s)"'}'
 
-for PLIST_NAME in com.resistine.desktop.clamd.plist com.resistine.desktop.clamonacc.plist; do
+for PLIST_NAME in com.resistine.desktop.clamd.plist com.resistine.desktop.clamonacc.plist com.resistine.desktop.freshclam.plist; do
     LABEL="${PLIST_NAME%.plist}"
     PLIST_PATH="$LAUNCHD_DIR/$PLIST_NAME"
     if [ ! -f "$PLIST_PATH" ]; then

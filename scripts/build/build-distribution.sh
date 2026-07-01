@@ -62,22 +62,58 @@ SKIP_NOTARIZE=${SKIP_NOTARIZE:-false}
 if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (SKIP_NOTARIZE=true)"
 else
-    # Verify notarization credentials are stored
+    # Probe notarytool. Capture both streams so we can distinguish:
+    #   (a) credentials genuinely missing       → tell user to store them
+    #   (b) Apple agreement expired (HTTP 403)  → tell user to accept it
+    #   (c) auth failure (bad password/Team ID) → tell user to re-store
+    #   (d) network down                        → suggest retry
+    # The previous version swallowed all four into "credentials not
+    # found", which was wrong for 3 of the 4 cases.
     echo "  Checking notarization credentials..."
-    if ! xcrun notarytool history --keychain-profile "resistine-notarize" > /dev/null 2>&1; then
+    # `set -e` is active and command substitution propagates non-zero
+    # exits from the inner command — meaning a plain
+    #   notarize_probe="$(xcrun notarytool history ...)"
+    # would kill the entire build script on Apple's 403 / 401 / network
+    # errors before we ever get to print a diagnostic. Wrapping the
+    # assignment in an `if` block catches the failure so `set -e`
+    # doesn't trip, AND lets us record the exit code AND the output.
+    if notarize_probe="$(xcrun notarytool history --keychain-profile "resistine-notarize" 2>&1)"; then
+        notarize_rc=0
+    else
+        notarize_rc=$?
+    fi
+    if [ $notarize_rc -eq 0 ]; then
+        echo "  Notarization credentials found"
+    else
         echo ""
-        echo "  Warning: Notarization credentials not found."
-        echo "  Store them with:"
-        echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
-        echo "      --apple-id \"jackie@resistine.com\" \\"
-        echo "      --team-id \"$TEAM_ID\" \\"
-        echo "      --password \"<your-app-specific-password>\""
+        echo "  ! Notarization pre-check failed:"
+        echo "$notarize_probe" | sed 's/^/      /'
         echo ""
-        echo "  Press Enter to continue without notarization, or Ctrl+C to cancel..."
+        if echo "$notarize_probe" | grep -qiE "agreement is missing or has expired|required agreement"; then
+            echo "  Apple Developer team agreement needs to be (re-)accepted."
+            echo "  An Account Holder / Admin on Team ID $TEAM_ID must:"
+            echo "    1. Sign in to https://developer.apple.com/account"
+            echo "    2. Accept the pending agreement(s) banner at the top"
+            echo "    3. Re-run this script — no credential re-storage needed"
+        elif echo "$notarize_probe" | grep -qiE "could not find|no such keychain|profile not found"; then
+            echo "  Notarization keychain profile is missing. Store it with:"
+            echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
+            echo "      --apple-id \"jackie@resistine.com\" \\"
+            echo "      --team-id \"$TEAM_ID\" \\"
+            echo "      --password \"<app-specific-password from appleid.apple.com>\""
+        elif echo "$notarize_probe" | grep -qiE "401|unauthorized|invalid credentials"; then
+            echo "  Stored credentials were rejected by Apple. Re-store with"
+            echo "  a fresh app-specific password from appleid.apple.com."
+        elif echo "$notarize_probe" | grep -qiE "could not connect|network|timeout"; then
+            echo "  Could not reach Apple's notarization service. Check VPN /"
+            echo "  network connectivity and retry."
+        fi
+        echo ""
+        echo "  Press Enter to continue WITHOUT notarization (the resulting"
+        echo "  app will need notarization done manually before distribution),"
+        echo "  or Ctrl+C to cancel and fix the problem first..."
         read -r
         SKIP_NOTARIZE=true
-    else
-        echo "  Notarization credentials found"
     fi
 fi
 
@@ -226,6 +262,41 @@ if [ ! -d "$PYTHON_APP" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------
+# Bundle consistency gate — fail fast on a broken Python framework.
+#
+# The PyInstaller bootloader loads Frameworks/Python at launch. If that symlink
+# resolves to a missing or mismatched runtime, the app crashes with exit 255
+# ("Failed to load Python shared library"). This check verifies the freshly
+# built bundle is internally consistent BEFORE we sign, notarize, and ship it,
+# so a structurally broken DMG/PKG can never reach users again.
+# ------------------------------------------------------------
+echo "  - Verifying Python framework consistency..."
+_PYLINK="$PYTHON_APP/Contents/Frameworks/Python"
+if [ ! -e "$_PYLINK" ]; then
+    echo "  Error: $_PYLINK is missing — bundle has no Python runtime."
+    exit 1
+fi
+# Resolve the symlink target and confirm the file actually exists.
+if ! _PYREAL=$(cd "$(dirname "$_PYLINK")" && readlink -f "$(readlink "$_PYLINK" 2>/dev/null || echo Python)" 2>/dev/null); then
+    _PYREAL=""
+fi
+if [ ! -f "$_PYLINK" ]; then
+    echo "  Error: Frameworks/Python does not resolve to a real file (dangling symlink)."
+    echo "         Target: $(readlink "$_PYLINK" 2>/dev/null)"
+    ls -la "$PYTHON_APP/Contents/Frameworks/Python.framework/Versions/" 2>/dev/null
+    exit 1
+fi
+# Confirm exactly one Python version directory is present (no stale extras).
+_PYVERS=$(ls -1 "$PYTHON_APP/Contents/Frameworks/Python.framework/Versions/" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+$' | sort -u)
+_PYVCOUNT=$(echo "$_PYVERS" | grep -c . || true)
+if [ "$_PYVCOUNT" -ne 1 ]; then
+    echo "  Error: expected exactly one Python version in the bundle, found:"
+    echo "$_PYVERS" | sed 's/^/         /'
+    exit 1
+fi
+echo "    Python framework OK (version $_PYVERS)"
+
 # Resolve VPN component sources (pre-built artifacts or local archive)
 if [ "$USE_PREBUILT_VPN" = true ]; then
     CLI_SOURCE="$VPN_ARTIFACTS_DIR/resistine-vpn-cli"
@@ -352,6 +423,15 @@ PLISTEOF
         fi
     done
 
+    # First-party freshclam auto-update wrapper → Contents/Helpers/
+    # Run by the root LaunchDaemon com.resistine.desktop.freshclam.
+    if [ -f "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" ]; then
+        cp "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" \
+            "$PYTHON_APP/Contents/Helpers/freshclam-update.sh"
+        chmod 755 "$PYTHON_APP/Contents/Helpers/freshclam-update.sh"
+        echo "  - Placed freshclam-update.sh in Contents/Helpers/"
+    fi
+
     # CVD signature-verification certs → Contents/certs/
     if [ -d "$CLAMAV_ARTIFACTS_DIR/certs" ]; then
         mkdir -p "$PYTHON_APP/Contents/certs"
@@ -442,13 +522,26 @@ PLISTEOF
 
     # LaunchDaemon plists → Contents/Library/LaunchDaemons/
     # Registered at runtime via SMAppService (no manual launchctl needed).
+    # clamd/clamonacc plists ship from the ClamAV-Mac CI artifact (downloaded
+    # into the gitignored clamav-artifacts/ dir, which download-clamav-artifacts.sh
+    # wipes+repopulates each build).
     LAUNCHD_SRC="$CLAMAV_ARTIFACTS_DIR/launchd"
+    mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
     if [ -d "$LAUNCHD_SRC" ]; then
-        mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
         cp "$LAUNCHD_SRC/"*.plist "$PYTHON_APP/Contents/Library/LaunchDaemons/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
     else
         echo "  - Warning: No launchd plists found in artifacts"
+    fi
+
+    # First-party freshclam auto-update daemon plist (tracked in git, NOT a
+    # downloaded artifact — so it survives the artifacts-dir wipe and needs no
+    # ClamAV-Mac changes). Pairs with Contents/Helpers/freshclam-update.sh.
+    FRESHCLAM_PLIST_SRC="$PYTHON_UI_PATH/scripts/clamav/com.resistine.desktop.freshclam.plist"
+    if [ -f "$FRESHCLAM_PLIST_SRC" ]; then
+        cp "$FRESHCLAM_PLIST_SRC" \
+            "$PYTHON_APP/Contents/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist"
+        echo "  - Placed freshclam auto-update daemon plist"
     fi
 
     echo "  ClamAV components placed in bundle"
@@ -521,6 +614,37 @@ if [ -d "$SPARKLE_SOURCE" ]; then
     echo "    Sparkle.framework copied"
 else
     echo "    Warning: Sparkle.framework not found at $SPARKLE_SOURCE — skipping auto-update"
+fi
+
+# --- Copy LICENSE files into bundle Resources/ ---
+# Ship the GPL text and the auto-generated third-party license file inside
+# Contents/Resources/ so end users can find them via "Show Package Contents"
+# in Finder, and so compliance/auditor questions have a single canonical
+# answer that lives next to the app rather than only on GitHub.
+echo "  - Copying LICENSE files into bundle Resources/..."
+mkdir -p "$PYTHON_APP/Contents/Resources"
+if [ -f "$PYTHON_UI_PATH/LICENSE.md" ]; then
+    cp "$PYTHON_UI_PATH/LICENSE.md" "$PYTHON_APP/Contents/Resources/LICENSE.md"
+    echo "    LICENSE.md copied"
+else
+    echo "    Warning: LICENSE.md not found at $PYTHON_UI_PATH/LICENSE.md"
+fi
+if [ -f "$PYTHON_UI_PATH/LICENSE-3rd-Party.md" ]; then
+    cp "$PYTHON_UI_PATH/LICENSE-3rd-Party.md" "$PYTHON_APP/Contents/Resources/LICENSE-3rd-Party.md"
+    echo "    LICENSE-3rd-Party.md copied"
+else
+    # Don't fail the build — release.yml regenerates this before this step
+    # runs, but local dev builds may skip generation. Warn loudly so it's
+    # obvious in the build log.
+    echo "    Warning: LICENSE-3rd-Party.md not found at repo root."
+    echo "    Run ./scripts/sbom/run.sh to create it."
+fi
+if [ -f "$PYTHON_UI_PATH/sbom.cdx.json" ]; then
+    cp "$PYTHON_UI_PATH/sbom.cdx.json" "$PYTHON_APP/Contents/Resources/sbom.cdx.json"
+    echo "    sbom.cdx.json copied"
+else
+    echo "    Warning: sbom.cdx.json not found at repo root."
+    echo "    Run ./scripts/sbom/run.sh to create it."
 fi
 
 
@@ -631,8 +755,10 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
         exit 1
     }
 
-    # Sign other ClamAV binaries (hardened runtime for notarization)
-    for binary in clamd clamscan clamdscan freshclam; do
+    # Sign other ClamAV binaries (hardened runtime for notarization).
+    # freshclam-update.sh is the first-party auto-update wrapper — a signed
+    # shell script inside the notarized bundle.
+    for binary in clamd clamscan clamdscan freshclam freshclam-update.sh; do
         if [ -f "$PYTHON_APP/Contents/Helpers/$binary" ]; then
             codesign --force --sign "$SIGN_IDENTITY" \
                 --options runtime --timestamp \
@@ -812,9 +938,53 @@ else
     echo "  PKG will not be signed (install one for distribution)"
 fi
 
-# Create postinstall script for LaunchServices + pluginkit registration
+# Create install scripts for the pkg.
 PKG_SCRIPTS_DIR="$DIST_DIR/pkg-scripts"
 mkdir -p "$PKG_SCRIPTS_DIR"
+
+# Preinstall: remove any existing app bundle BEFORE the payload is laid down.
+#
+# CRITICAL: pkgbuild --install-location installs by MERGING the payload onto the
+# destination — it does NOT replace the existing bundle. Files the new payload
+# lacks are left behind. With a versioned framework like Python.framework, an
+# update from a bundle that shipped (e.g.) Python 3.14 to one shipping 3.13
+# leaves the old Versions/3.14 stranded while the Versions/3.13 overwrite can be
+# incomplete, producing a bundle whose Frameworks/Python symlink points at a
+# half-written runtime. The PyInstaller bootloader then fails with
+# "Failed to load Python shared library .../Frameworks/Python" and the app
+# crashes on launch (exit 255).
+#
+# DMG (drag-to-Applications) replaces the bundle atomically, which is why every
+# pre-pkg release updated cleanly. Deleting first restores that guarantee.
+cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
+#!/bin/bash
+# Quit the running app, then remove the previously installed bundle so the new
+# payload fully REPLACES it instead of MERGING onto stale files.
+#
+# Why this exists: pkgbuild --install-location merges the payload file-by-file
+# onto whatever is already at the destination; it never deletes old files the
+# new payload lacks. A versioned framework (Python.framework/Versions/3.X) at a
+# different version than the previous install therefore strands the old version
+# directory, leaving Frameworks/Python pointing at an incomplete runtime and the
+# app crashing on launch. A DMG (Finder drag) replaces the whole .app folder
+# atomically, which is why pre-pkg releases updated cleanly. Deleting first makes
+# the pkg behave the same way.
+#
+# We do NOT relaunch here: Sparkle relaunches the app (as the correct user)
+# after an auto-update, and a manual pkg install shows Installer's own success
+# screen. Launching from this script would run the app as root.
+
+# Quit the app gracefully, then force-kill any stragglers, before removing it.
+osascript -e 'quit app "Resistine"' 2>/dev/null || true
+pkill -x Resistine 2>/dev/null || true
+sleep 1
+
+if [ -d "/Applications/Resistine.app" ]; then
+    rm -rf "/Applications/Resistine.app" 2>/dev/null || true
+fi
+exit 0
+PREEOF
+chmod +x "$PKG_SCRIPTS_DIR/preinstall"
 
 cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
 #!/bin/bash

@@ -1553,3 +1553,247 @@ class TestOpenSettings:
             clamav.open_fda_settings()
 
 
+# ---------------------------------------------------------------------------
+# freshclam auto-update LaunchDaemon
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestFreshclamDaemon:
+    def test_daemon_plists_includes_freshclam(self):
+        # The freshclam plist must be registered (and last, after clamd
+        # and clamonacc) so ensure_daemons_registered/deactivate cover it.
+        assert (
+            "com.resistine.desktop.freshclam.plist"
+            in clamav_platform_darwin._DAEMON_PLISTS
+        )
+        assert clamav_platform_darwin._DAEMON_PLISTS[-1] == (
+            "com.resistine.desktop.freshclam.plist"
+        )
+
+    def test_enable_routes_through_ensure_registered(self, monkeypatch):
+        # Enabling must (re)register daemons, not run launchctl bootout.
+        calls = {"ensure": 0}
+
+        def _ensure():
+            calls["ensure"] += 1
+
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", _ensure,
+        )
+        ran = MagicMock()
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, _msg = clamav_platform_darwin.set_freshclam_daemon_enabled(True)
+
+        assert ok is True
+        assert calls["ensure"] == 1
+        ran.assert_not_called()  # no osascript on enable
+
+    def test_disable_boots_out_only_freshclam(self, monkeypatch):
+        # Disabling must bootout ONLY the freshclam label — never clamd or
+        # clamonacc — and must not call ensure_daemons_registered.
+        ensure = MagicMock()
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", ensure,
+        )
+        result = MagicMock(returncode=0, stderr="")
+        ran = MagicMock(return_value=result)
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, _msg = clamav_platform_darwin.set_freshclam_daemon_enabled(False)
+
+        assert ok is True
+        ensure.assert_not_called()
+        # The osascript shell script targets exactly the freshclam label.
+        script = " ".join(str(a) for a in ran.call_args[0][0])
+        assert "bootout system/com.resistine.desktop.freshclam" in script
+        assert "clamd" not in script
+        assert "clamonacc" not in script
+
+    def test_disable_returns_error_on_failure(self, monkeypatch):
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", MagicMock(),
+        )
+        result = MagicMock(returncode=1, stderr="User cancelled")
+        monkeypatch.setattr(
+            subprocess, "run", MagicMock(return_value=result),
+        )
+
+        ok, msg = clamav_platform_darwin.set_freshclam_daemon_enabled(False)
+
+        assert ok is False
+        assert "User cancelled" in msg
+
+    def test_enable_swallows_ensure_exception(self, monkeypatch):
+        # A failure inside ensure_daemons_registered must NOT propagate
+        # (it runs on the toggle's worker thread) — return (False, msg).
+        def _boom():
+            raise RuntimeError("BTM unavailable")
+
+        monkeypatch.setattr(
+            clamav_platform_darwin, "ensure_daemons_registered", _boom,
+        )
+        ran = MagicMock()
+        monkeypatch.setattr(subprocess, "run", ran)
+
+        ok, msg = clamav_platform_darwin.set_freshclam_daemon_enabled(True)
+
+        assert ok is False
+        assert "BTM unavailable" in msg
+        ran.assert_not_called()  # never falls through to osascript on enable
+
+
+class TestGetDbInfo:
+    """get_db_info reports sig count + "when this machine last updated".
+
+    "Last updated" must answer the user's question "when did MY computer last
+    pull an update", so it reports the newest DB file's mtime -- the most
+    recent successful freshclam write -- NOT the CVD header build date (which
+    is when ClamAV *published* the sigs, hours-to-days before download, in
+    UTC, and reads as confusingly off even when everything is working).
+    Taking the *max* mtime across files means an untouched base main.cvd
+    (older mtime) never masks a freshly written daily.
+    """
+
+    @staticmethod
+    def _write_cvd(path, date_field, sigs):
+        # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM +ZZZZ:ver:sigs:... padded
+        # to 512 bytes, exactly as ClamAV writes it.
+        header = f"ClamAV-VDB:{date_field}:58:{sigs}:60:x:x:x:x:x:x"
+        path.write_bytes(header.encode("ascii").ljust(512, b" "))
+
+    def test_reports_sig_count_from_headers(self, tmp_path, monkeypatch):
+        self._write_cvd(tmp_path / "daily.cld", "04 Jun 2026 06-24 +0000", 3_000_000)
+        self._write_cvd(tmp_path / "main.cvd", "16 Dec 2025 23-18 +0000", 600_000)
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        assert info["signatures"] == "3,600,000"
+
+    def test_last_updated_uses_newest_mtime_not_build_date(
+        self, tmp_path, monkeypatch,
+    ):
+        # daily has an OLD build date in its header but is the freshly written
+        # file (newest mtime); main has a stale mtime. The card must report
+        # daily's download time, not main's, and not either header build date.
+        import os
+        import time as _time
+
+        main = tmp_path / "main.cvd"
+        daily = tmp_path / "daily.cld"
+        self._write_cvd(main, "16 Dec 2025 23-18 +0000", 600_000)
+        self._write_cvd(daily, "04 Jun 2026 06-24 +0000", 3_000_000)
+        # Force main's mtime far in the past; daily is "just downloaded" (now).
+        old = _time.time() - 90 * 24 * 3600  # 90 days ago
+        os.utime(main, (old, old))
+        now = _time.time()
+        os.utime(daily, (now, now))
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        expected = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(now))
+        assert info["last_updated"] == expected
+        # And specifically NOT either header build date.
+        assert "2025-12" not in info["last_updated"]
+        assert "2026-06-04" not in info["last_updated"]
+
+    def test_reports_date_even_with_unparseable_header(self, tmp_path, monkeypatch):
+        # mtime is independent of header parsing, so a junk header still yields
+        # a real last-updated date (never the em-dash placeholder).
+        self._write_cvd(tmp_path / "daily.cld", "not-a-date", 3_000_000)
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        assert info["signatures"] == "3,000,000"
+        assert info["last_updated"] != "\u2014"
+
+    def test_no_db_files_returns_placeholders(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            clamav_common, "_effective_db_dir", lambda **kw: str(tmp_path),
+        )
+
+        info = clamav_common.get_db_info()
+
+        assert info == {"signatures": "\u2014", "last_updated": "\u2014"}
+
+
+class TestInstallerSelfHeal:
+    """check_and_advance() must not trust a persisted setup_state=completed
+    when the system-level ClamAV install has been wiped from disk.
+
+    Regression: a macOS uninstall removes /Library/Application Support/
+    Resistine/clamav but leaves the user-level setup_state=completed, so a
+    later reinstall showed "Start Protection" for daemons that crash-loop
+    with no config. The plugin must self-heal by re-running setup.
+    """
+
+    @pytest.fixture()
+    def svc(self, monkeypatch, tmp_path):
+        from plugins.antivirus import installer_service
+
+        # Force the darwin code paths regardless of host OS.
+        monkeypatch.setattr(installer_service, "_IS_DARWIN", True)
+
+        # Dict-backed fake settings store.
+        store = {}
+        fake = MagicMock()
+        fake.get.side_effect = (
+            lambda ns, key, default=None: store.get((ns, key), default)
+        )
+        fake.set.side_effect = (
+            lambda ns, key, value: store.__setitem__((ns, key), value)
+        )
+        monkeypatch.setattr(installer_service, "settings", fake)
+
+        # System install paths under tmp (empty dir == wiped install).
+        sysdir = tmp_path / "sys-clamav"
+        db_dir = sysdir / "db"
+        db_dir.mkdir(parents=True)
+        monkeypatch.setattr(
+            clamav_platform_darwin, "_SYSTEM_CLAMD_CONF",
+            str(sysdir / "clamd.conf"),
+        )
+        monkeypatch.setattr(
+            clamav_platform_darwin, "_SYSTEM_DB_DIR", str(db_dir),
+        )
+        monkeypatch.setattr(
+            clamav_platform_darwin, "is_app_bundle", lambda: True,
+        )
+        # clamd socket is dead (nothing running).
+        monkeypatch.setattr(
+            clamav_common, "_ping_socket", lambda *a, **k: False,
+        )
+        # Don't actually seed \u2014 just record that recovery was triggered.
+        monkeypatch.setattr(
+            installer_service, "ensure_db_seed_started", MagicMock(),
+        )
+        return installer_service, store, sysdir, db_dir
+
+    def test_completed_but_wiped_resets_and_reseeds(self, svc):
+        service, store, sysdir, db_dir = svc
+        store[("antivirus", "setup_state")] = service.STATE_COMPLETED
+
+        service.check_and_advance()
+
+        assert store[("antivirus", "setup_state")] == service.STATE_NOT_STARTED
+        service.ensure_db_seed_started.assert_called_once()
+
+    def test_completed_and_intact_is_left_alone(self, svc):
+        service, store, sysdir, db_dir = svc
+        (sysdir / "clamd.conf").write_text("x")
+        (db_dir / "main.cvd").write_bytes(b"0" * (service._MIN_CVD_SIZE + 1))
+        store[("antivirus", "setup_state")] = service.STATE_COMPLETED
+
+        service.check_and_advance()
+
+        assert store[("antivirus", "setup_state")] == service.STATE_COMPLETED
+        service.ensure_db_seed_started.assert_not_called()

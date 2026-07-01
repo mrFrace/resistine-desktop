@@ -159,15 +159,40 @@ def init_updater(app):
 
         @ctypes.CFUNCTYPE(None)
         def _shutdown_request():
+            # WinSparkle wants us to quit so the installer can replace our
+            # (locked) files and relaunch. FULLY terminate the process — the
+            # window-close handler (_on_closing) only hides to the tray, which
+            # kept the app running, made WinSparkle nag "force close", and left
+            # the files locked so the update silently failed.
+            def _quit():
+                try:
+                    if _app is not None:
+                        _app.destroy()
+                except Exception:
+                    pass
+                os._exit(0)
+
             if _app is not None:
-                _app.after(0, _app._on_closing)
+                try:
+                    _app.after(0, _quit)
+                    return
+                except Exception:
+                    pass
+            os._exit(0)
 
         @ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_wchar_p)
         def _run_installer(installer_path):
-            """Launch the downloaded installer with /SILENT for upgrades."""
+            """Launch the downloaded installer silently for seamless upgrades.
+
+            /SUPPRESSMSGBOXES auto-dismisses the "files in use" prompt (the app
+            is exiting via the shutdown callback); /NORESTART stops the
+            installer from rebooting. The installer's [Run] entry relaunches the
+            app afterward (its 'skipifsilent' flag was removed for this).
+            """
             import subprocess
             try:
-                subprocess.Popen([installer_path, "/SILENT"])
+                subprocess.Popen(
+                    [installer_path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
                 logger.info(f"[WINSPARKLE] Launched installer: {installer_path}")
                 return 1  # 1 = handled
             except Exception as e:

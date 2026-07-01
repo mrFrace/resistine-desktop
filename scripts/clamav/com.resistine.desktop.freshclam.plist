@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon for freshclam (ClamAV signature auto-updater).
+
+  Runs Contents/Helpers/freshclam-update.sh, a wrapper that updates the
+  signature DBs ONCE and exits. The cadence is owned by launchd via
+  StartCalendarInterval (every 4h at fixed wall-clock times), not by a
+  sleep-loop in the wrapper.
+
+  StartCalendarInterval — NOT StartInterval — is deliberate. StartInterval
+  whose whole interval elapses while the Mac is asleep is simply dropped:
+  launchd does not run it on the next wake. Observed in the field — a laptop
+  closed for ~2 days had freshclam run exactly once (RunAtLoad) and never
+  again across multiple lid-open wakes, leaving signatures days stale.
+  StartCalendarInterval fires the most recent missed occurrence once on wake,
+  so signatures refresh on the next wake instead of staying stale overnight.
+
+  The wrapper's once-per-hour CDN guard prevents the catch-up fire (or an
+  app-launch kickstart) from tripping ClamAV's rate limit.
+
+  Registered at runtime via SMAppService from Contents/Library/LaunchDaemons/
+  in the app bundle.
+
+  /bin/bash is explicit because the wrapper uses $RANDOM, which POSIX
+  /bin/sh lacks.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.resistine.desktop.freshclam</string>
+
+    <!-- Paths assume /Applications/Resistine.app install location -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Applications/Resistine.app/Contents/Helpers/freshclam-update.sh</string>
+    </array>
+
+    <!-- Run once at load, then at fixed 4h wall-clock marks (00/04/08/12/
+         16/20). launchd fires the run-once-and-exit wrapper on these marks
+         and, unlike StartInterval, runs the most recent missed mark once on
+         wake — so a closed laptop catches up instead of staying stale. No
+         KeepAlive: the wrapper is meant to exit after one update, and
+         relaunching it immediately would defeat the cadence. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>4</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>8</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>UserName</key>
+    <string>root</string>
+    <key>GroupName</key>
+    <string>wheel</string>
+
+    <!-- Override hardcoded CI certs path so freshclam can verify CVD
+         signatures, and point OpenSSL at the system CA bundle for TLS. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CVD_CERTS_DIR</key>
+        <string>/Applications/Resistine.app/Contents/certs</string>
+        <key>SSL_CERT_FILE</key>
+        <string>/etc/ssl/cert.pem</string>
+    </dict>
+
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/Library/Application Support/Resistine/clamav/log/freshclam-daemon.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Application Support/Resistine/clamav/log/freshclam-daemon.stderr.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+</dict>
+</plist>

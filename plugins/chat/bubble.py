@@ -16,7 +16,7 @@ import tkinter as tk
 import customtkinter
 
 from plugins.chat.assistant_bubble import AssistantBubble  # noqa: F401
-from plugins.chat.fonts import get_theme_colors, ui_family
+from plugins.chat.fonts import _BASE_SIZE, get_theme_colors, ui_family
 from plugins.chat.markdown_widgets import SelectableLabel
 
 # ---------------------------------------------------------------------------
@@ -120,7 +120,7 @@ class UserBubble(customtkinter.CTkFrame):
         self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
         self._label = SelectableLabel(
             self, text=text, bg=self._bg, fg=self._fg,
-            font=customtkinter.CTkFont(family=ui_family(), size=int(18 * self._scale)),
+            font=customtkinter.CTkFont(family=ui_family(), size=int(_BASE_SIZE * self._scale)),
             max_width=int(max_width * self._scale),
         )
         self._label.pack(
@@ -145,7 +145,7 @@ class UserBubble(customtkinter.CTkFrame):
         # are already correct and must not be scaled.
         self._scale = getattr(self.winfo_toplevel(), "_hidpi_factor", 1.0)
         _user_font = customtkinter.CTkFont(
-            family=ui_family(), size=int(18 * self._scale))
+            family=ui_family(), size=int(_BASE_SIZE * self._scale))
         tw = tk.Text(
             self, bg=self._bg, fg=self._fg, font=_user_font,
             wrap="word", borderwidth=0, highlightthickness=0,

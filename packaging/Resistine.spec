@@ -16,7 +16,7 @@ IS_WINDOWS = sys.platform == "win32"
 # Application metadata
 APP_NAME = 'Resistine'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.04.30'
+VERSION = '2026.06.30'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -88,6 +88,16 @@ if IS_MACOS:
         'objc',
     ])
 
+if sys.platform.startswith('linux'):
+    hiddenimports.extend([
+        'keyring.backends.SecretService', 'secretstorage',
+        'jeepney', 'jeepney.io.blocking',
+        'cairocffi', 'cffi'])
+if IS_WINDOWS:
+    hiddenimports.extend([
+        'keyring.backends.Windows', 'win32ctypes',
+        'win32ctypes.pywin32', 'pystray._win32'])
+
 # Analysis
 a = Analysis(
     [_src('main.py')],
@@ -133,6 +143,8 @@ if IS_MACOS:
     exe_kwargs['entitlements_file'] = _src(os.path.join('packaging', 'Resistine.entitlements'))
 if IS_WINDOWS:
     exe_kwargs['icon'] = _src(os.path.join('resources', 'icons', 'icon.ico'))
+if IS_WINDOWS:
+    exe_kwargs['manifest'] = _src(os.path.join('packaging', 'windows', 'Resistine.exe.manifest'))
 
 exe = EXE(
     pyz,

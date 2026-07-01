@@ -44,8 +44,11 @@ def get_config_dir() -> str:
             os.environ.get("APPDATA", os.path.expanduser("~")), "Resistine"
         )
     else:
-        # Linux / WSL
-        return os.path.expanduser("~/.config/resistine")
+        # Linux / WSL — honor XDG_CONFIG_HOME
+        return os.path.join(
+            os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+            "resistine",
+        )
 
 
 def _get_master_key() -> bytes:
@@ -148,7 +151,7 @@ def _load_json(namespace: str) -> Dict[str, Any]:
         return {}
 
     try:
-        with open(file_path, "r") as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         logger.error(f"Failed to load settings from {file_path}: {e}")
@@ -160,8 +163,8 @@ def _save_json(namespace: str, data: Dict[str, Any]) -> bool:
     file_path = _get_file_path(namespace)
     try:
         with _lock:
-            with open(file_path, "w") as f:
-                json.dump(data, f, indent=4)
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
 
             # Ensure secure permissions on the file
             if platform.system() != "Windows":

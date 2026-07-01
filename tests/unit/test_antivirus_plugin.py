@@ -297,10 +297,13 @@ class TestDestroy:
 
 @pytest.mark.unit
 class TestToggleAutoUpdate:
-    def test_toggle_on_persists_and_starts_scheduler(self, plugin):
+    def test_toggle_on_non_darwin_starts_scheduler(self, plugin):
+        # On Linux/Windows the in-process scheduler still drives updates.
         plugin._auto_update_switch = MagicMock()
         plugin._auto_update_switch.get.return_value = True
-        with patch("plugins.antivirus.main.settings") as mock_settings, \
+        with patch("platform.system", return_value="Linux"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch("plugins.antivirus.main.clamav") as mock_clamav, \
              patch.object(plugin, "_start_auto_update_scheduler") as mock_start:
             plugin._toggle_auto_update()
             assert plugin._auto_update_on is True
@@ -308,11 +311,15 @@ class TestToggleAutoUpdate:
                 "antivirus", "auto_update_enabled", True,
             )
             mock_start.assert_called_once()
+            # Linux/Windows must never touch the macOS freshclam daemon.
+            mock_clamav.set_freshclam_daemon_enabled.assert_not_called()
 
-    def test_toggle_off_persists_and_stops_scheduler(self, plugin):
+    def test_toggle_off_non_darwin_stops_scheduler(self, plugin):
         plugin._auto_update_switch = MagicMock()
         plugin._auto_update_switch.get.return_value = False
-        with patch("plugins.antivirus.main.settings") as mock_settings, \
+        with patch("platform.system", return_value="Linux"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch("plugins.antivirus.main.clamav") as mock_clamav, \
              patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
             plugin._toggle_auto_update()
             assert plugin._auto_update_on is False
@@ -320,11 +327,76 @@ class TestToggleAutoUpdate:
                 "antivirus", "auto_update_enabled", False,
             )
             mock_stop.assert_called_once()
+            mock_clamav.set_freshclam_daemon_enabled.assert_not_called()
+
+    def test_toggle_is_noop_on_darwin(self, plugin):
+        # macOS has no auto-update toggle — updates are always on via the OS
+        # freshclam daemon. _toggle_auto_update must do nothing there: no
+        # daemon call, no scheduler, no settings write.
+        plugin._auto_update_switch = None
+        with patch("platform.system", return_value="Darwin"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch.object(plugin, "_start_auto_update_scheduler") as mock_start, \
+             patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
+            plugin._toggle_auto_update()
+
+            mock_settings.set.assert_not_called()
+            mock_start.assert_not_called()
+            mock_stop.assert_not_called()
+            mock_clamav.set_freshclam_daemon_enabled.assert_not_called()
+
+    def test_toggle_noop_without_switch_widget(self, plugin):
+        # Defensive: even on a non-Darwin platform, calling the handler
+        # before the settings card built the switch must not crash.
+        plugin._auto_update_switch = None
+        with patch("platform.system", return_value="Linux"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch.object(plugin, "_start_auto_update_scheduler") as mock_start:
+            plugin._toggle_auto_update()  # must not raise
+            mock_settings.set.assert_not_called()
+            mock_start.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
 # Auto-update scheduler
 # ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestAutoUpdateInitGating:
+    def _build(self, system, auto_on):
+        """Construct a Plugin under a given platform + auto_update setting,
+        capturing whether _start_auto_update_scheduler ran in __init__."""
+        with patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch("plugins.antivirus.main.threading"), \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
+             patch("platform.system", return_value=system), \
+             patch.object(
+                 Plugin, "_start_auto_update_scheduler",
+             ) as mock_start:
+            mock_settings.get.return_value = auto_on
+            mock_clamav.get_realtime_status.return_value = {
+                "state": "protected", "installed": True, "db_present": True,
+                "approved": True, "fda_granted": True,
+                "clamd_running": True, "clamonacc_running": True,
+            }
+            mock_clamav.is_clamav_installed.return_value = True
+            Plugin(MagicMock())
+            return mock_start
+
+    def test_darwin_does_not_start_scheduler_even_when_enabled(self):
+        # macOS: the OS freshclam daemon owns updates; the thread stays off.
+        mock_start = self._build("Darwin", auto_on=True)
+        mock_start.assert_not_called()
+
+    def test_non_darwin_starts_scheduler_when_enabled(self):
+        mock_start = self._build("Linux", auto_on=True)
+        mock_start.assert_called_once()
+
+    def test_non_darwin_skips_scheduler_when_disabled(self):
+        mock_start = self._build("Linux", auto_on=False)
+        mock_start.assert_not_called()
+
 
 @pytest.mark.unit
 class TestAutoUpdateScheduler:
@@ -401,12 +473,53 @@ class TestAutoUpdateScheduler:
 class TestSetScanButtonsState:
     def test_enables_scan(self, plugin):
         plugin._set_scan_buttons_state("normal")
-        plugin._action_buttons["scan"].configure.assert_called_with(state="normal")
+        call_kwargs = plugin._action_buttons["scan"].configure.call_args.kwargs
+        # Production passes state + hover + fg_color + text_color so the
+        # button restores to a fully-active visual. Assert state and hover —
+        # color values are restored from the captured original `_enabled_*`
+        # attrs on the mock (MagicMock values), so we only assert keys exist.
+        assert call_kwargs.get("state") == "normal"
+        assert call_kwargs.get("hover") is True
+        assert "fg_color" in call_kwargs
+        assert "text_color" in call_kwargs
 
     def test_disables_scan(self, plugin):
         plugin._set_scan_buttons_state("disabled")
-        plugin._action_buttons["scan"].configure.assert_called_with(state="disabled")
+        call_kwargs = plugin._action_buttons["scan"].configure.call_args.kwargs
+        # Disabled state: production must mute BOTH the background (fg_color)
+        # AND the label text (text_color) the same way for the whole scan.
+        assert call_kwargs.get("state") == "disabled"
+        assert call_kwargs.get("hover") is False
+        assert call_kwargs.get("fg_color") == ("#D1D5DB", "#3A3A3C")
+        assert call_kwargs.get("text_color") == ("#9CA3AF", "#71717A")
 
     def test_missing_button_no_crash(self, plugin):
         plugin._action_buttons = {}
         plugin._set_scan_buttons_state("normal")  # Should not raise
+
+
+# ---------------------------------------------------------------------------
+# View switching (main <-> settings)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestViewSwitching:
+    def test_view_swap_reruns_layout_finalizer(self, plugin):
+        # Regression: swapping main<->settings must re-run the layout finalizer
+        # so the re-mapped CTkScrollableFrame refits and doesn't paint blank
+        # until the next window resize.
+        plugin.main_container = MagicMock()
+        plugin.main_frame = MagicMock()
+        plugin._settings_frame = MagicMock()  # already built -> no real widget
+        plugin._current_view = "main"
+
+        with patch.object(plugin, "_refresh_siem_switch"):
+            plugin._show_settings_view()
+        assert plugin._current_view == "settings"
+        plugin.main_frame.grid_remove.assert_called()
+        plugin.main_container._resistine_finalize.assert_called()  # regressed call
+
+        plugin._show_main_view()
+        assert plugin._current_view == "main"
+        plugin.main_frame.grid.assert_called()
+        assert plugin.main_container._resistine_finalize.call_count >= 2

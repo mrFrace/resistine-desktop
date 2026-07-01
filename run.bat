@@ -81,9 +81,9 @@ if "!SERVICE_RUNNING!"=="1" (
     )
 )
 
-:: Run the application
-echo Starting the application...
-python main.py %*
+:: Run the application (debug mode by default)
+echo Starting the application in debug mode...
+python main.py -d %*
 
 :: Deactivate is implicitly handled by script exit since we used call/local
 :: but we can be explicit if needed.

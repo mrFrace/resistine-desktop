@@ -40,11 +40,18 @@ class StreamController:
         self._on_done = on_done
         self._on_error = on_error
 
-        self._queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        # Bounded queue: if the main thread is blocked (heavy markdown
+        # render, modal) while the server streams thousands of tokens,
+        # an unbounded queue would let memory grow with no backpressure
+        # and then freeze the UI when draining. 4096 entries is plenty
+        # for any reasonable burst before the poll catches up.
+        self._queue: queue.Queue[tuple[str, object]] = queue.Queue(
+            maxsize=4096)
         self._cancel_event = threading.Event()
         self._active = False
         self._accumulated = ""
         self._poll_id: str | None = None
+        self._stream = None  # set in _worker so cancel() can close it
 
     # -- public API ----------------------------------------------------
 
@@ -75,7 +82,12 @@ class StreamController:
         self._active = True
         self._accumulated = ""
         self._cancel_event.clear()
-        self._queue = queue.Queue()
+        # Bounded — must match the maxsize set in __init__. The previous
+        # `queue.Queue()` (no maxsize) silently re-introduced the
+        # unbounded queue every send_message, defeating the backpressure
+        # the __init__ change was supposed to give us.
+        self._queue = queue.Queue(maxsize=4096)
+        self._stream = None
 
         thread = threading.Thread(
             target=self._worker,
@@ -86,10 +98,56 @@ class StreamController:
         self._schedule_poll()
 
     def cancel(self) -> None:
-        """Request cancellation; the thread exits and no further callbacks fire."""
+        """Request cancellation; the thread exits and no further callbacks fire.
+
+        Closes the underlying HTTP response so the OpenAI client's
+        `for chunk in stream` loop in the worker thread terminates on the
+        next read instead of waiting until the next chunk arrives — that
+        avoids the "user clicked Stop but tokens keep being billed" case.
+        """
+        if not self._active and not self._cancel_event.is_set():
+            return
         self._active = False
         self._cancel_event.set()
+        # Close the HTTP response on a daemon thread — response.close()
+        # can block on a TCP close handshake (hundreds of ms with a
+        # slow server). Doing it inline on the main thread is exactly
+        # the kind of stall that compounds the "freeze on chat-switch"
+        # complaint. The cancel_event short-circuits the worker so the
+        # iterator will terminate when the OS times out either way;
+        # main thread doesn't have to wait.
+        stream = self._stream
+        self._stream = None
+        if stream is not None:
+            threading.Thread(
+                target=self._close_stream, args=(stream,),
+                daemon=True,
+            ).start()
         self._stop_polling()
+
+    def _close_stream(self, stream) -> None:
+        """Release the HTTP response on a stream, best-effort.
+
+        Both cancel() and the worker's finally block call this so the
+        TLS socket is freed even if the user clicks Stop mid-handshake.
+        Both response.close() and stream.close() are idempotent in the
+        current OpenAI SDK; calling both is intentional in case a
+        future SDK version separates them.
+        """
+        if stream is None:
+            return
+        for closer in ("response", "_response"):
+            resp = getattr(stream, closer, None)
+            if resp is not None and hasattr(resp, "close"):
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+        if hasattr(stream, "close"):
+            try:
+                stream.close()
+            except Exception:
+                pass
 
     # -- background thread ---------------------------------------------
 
@@ -114,15 +172,33 @@ class StreamController:
                 kwargs["extra_body"] = extra_body
 
             stream = client.chat.completions.create(**kwargs)
+            self._stream = stream
+            # If cancel() fired between start() and the assignment above,
+            # close the response immediately rather than entering the
+            # iterator and reading at least one chunk. Otherwise a
+            # tight cancel→TLS-handshake race leaks the socket.
+            if self._cancel_event.is_set():
+                self._close_stream(stream)
+                self._safe_put(("cancel", _CANCELLED))
+                return
 
-            for chunk in stream:
-                if self._cancel_event.is_set():
-                    self._queue.put(("cancel", _CANCELLED))
-                    return
-                if chunk.choices and chunk.choices[0].delta.content:
-                    self._queue.put(("chunk", chunk.choices[0].delta.content))
+            try:
+                for chunk in stream:
+                    if self._cancel_event.is_set():
+                        self._safe_put(("cancel", _CANCELLED))
+                        return
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        self._safe_put(
+                            ("chunk", chunk.choices[0].delta.content))
+            finally:
+                # Always release the HTTP response, even on early-exit
+                # via cancel — the for-loop break above doesn't itself
+                # close the iterator.
+                self._close_stream(stream)
+                if self._stream is stream:
+                    self._stream = None
 
-            self._queue.put(("done", _DONE))
+            self._safe_put(("done", _DONE))
 
         except Exception as e:
             endpoint = base_url or "https://api.openai.com/v1"
@@ -144,7 +220,26 @@ class StreamController:
                 msg = f"{err} (endpoint: {endpoint})"
 
             logger.error(f"StreamController error: {msg}")
-            self._queue.put(("error", msg))
+            self._safe_put(("error", msg))
+
+    def _safe_put(self, item: tuple[str, object]) -> None:
+        """Bounded put that yields to the cancel signal on a full queue.
+
+        If the main thread is stalled (e.g. mid-render of a long markdown
+        block) we don't want the worker to block forever — that would
+        leak threads and keep the HTTP request open. Wait briefly, then
+        check cancel and try again. After a long stall, the burst is
+        coalesced by _poll's batching so the user-facing UI cost is
+        bounded.
+        """
+        while True:
+            if self._cancel_event.is_set():
+                return
+            try:
+                self._queue.put(item, timeout=0.25)
+                return
+            except queue.Full:
+                continue
 
     # -- main-thread polling -------------------------------------------
 
@@ -161,32 +256,52 @@ class StreamController:
             self._poll_id = None
 
     def _poll(self) -> None:
-        """Drain the queue and dispatch callbacks on the main thread."""
+        """Drain the queue and dispatch callbacks on the main thread.
+
+        Chunks are batched: all chunk messages drained in one tick are
+        coalesced into a single on_chunk call. This caps GUI updates at
+        ~20 Hz regardless of token rate and is the difference between
+        a smooth render and a jittery one at 30-60 tok/s.
+
+        Cancel is re-checked between every queue.get to drop any chunk/
+        done/error that arrived after the user clicked Stop.
+        """
+        chunk_buf: list[str] = []
+        terminal: tuple[str, object] | None = None
         try:
             while True:
+                if self._cancel_event.is_set():
+                    self._active = False
+                    return
                 msg_type, data = self._queue.get_nowait()
-
                 if msg_type == "chunk":
-                    self._accumulated += data
-                    if not self._cancel_event.is_set():
-                        self._on_chunk(data)
-
-                elif msg_type == "done":
-                    self._active = False
-                    self._on_done(self._accumulated)
-                    return
-
-                elif msg_type == "error":
-                    self._active = False
-                    self._on_error(data)
-                    return
-
-                elif msg_type == "cancel":
-                    self._active = False
-                    return
-
+                    chunk_buf.append(str(data))
+                else:
+                    terminal = (msg_type, data)
+                    break
         except queue.Empty:
             pass
+
+        # Single dispatch per tick — the bubble's append_streaming_chunk is
+        # O(len(delta)), so one batched call beats N per-token calls.
+        if chunk_buf and not self._cancel_event.is_set():
+            batched = "".join(chunk_buf)
+            self._accumulated += batched
+            self._on_chunk(batched)
+
+        if terminal is not None:
+            msg_type, data = terminal
+            if msg_type == "done":
+                self._active = False
+                self._on_done(self._accumulated)
+                return
+            if msg_type == "error":
+                self._active = False
+                self._on_error(data)
+                return
+            if msg_type == "cancel":
+                self._active = False
+                return
 
         if self._active and not self._cancel_event.is_set():
             self._schedule_poll()

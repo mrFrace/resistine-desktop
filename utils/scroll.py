@@ -15,8 +15,15 @@ _IS_LINUX = sys.platform.startswith("linux")
 CHAT_SCROLL_DELTA = 16.0 if _IS_LINUX else 0.5
 
 # Multiplier applied to MouseWheel event.delta.
-# macOS trackpad sends raw small deltas; Linux/Windows sends ±120 per notch.
-CHAT_WHEEL_SCALE = 0.4 if _IS_MAC else 16.0
+# Linux/Windows: deltas come in ±120 per notch (Win32 / X11). The handler
+# normalizes by /120 then multiplies by 16, so each notch contributes ±16
+# of velocity to the smooth-scroll integrator — same target on either OS.
+# macOS: deltas are raw (trackpad ~1-10 per event, mouse wheel typically 1
+# per notch), multiplied directly. 2.0 is the compromise — gives a Mac mouse
+# wheel ~2 velocity per notch (still slower than Win/Linux's 16, but visibly
+# more responsive than the previous 0.4 which made wheel scrolling feel
+# stuck) without sending the trackpad past CHAT_VEL_CLAMP on every flick.
+CHAT_WHEEL_SCALE = 2.0 if _IS_MAC else 16.0
 
 # Velocity is clamped to ±CHAT_VEL_CLAMP after every input event.
 CHAT_VEL_CLAMP = 20.0

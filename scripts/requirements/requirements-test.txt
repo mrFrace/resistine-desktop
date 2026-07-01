@@ -9,3 +9,9 @@ pytest-xdist>=3.5.0        # parallel test execution
 requests>=2.31.0
 cryptography>=42.0.0
 keyring>=25.0.0
+
+# SBOM + license attribution generation.
+# Used by scripts/build/generate_sbom.py to produce sbom.cdx.json
+# (CycloneDX 1.6) and the human-readable LICENSE-3rd-Party.md from the
+# installed env at release time.
+cyclonedx-bom>=7.0.0

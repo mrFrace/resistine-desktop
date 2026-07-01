@@ -304,6 +304,11 @@ def start_agent():
             f"fi; "
             f"fi"
         )
+    # Re-enable in case the prior uninstall path disabled this label (it does,
+    # to dodge Wazuh's anti-tampering kernel retaliation). Without this,
+    # bootstrap returns "5: Input/output error" on a previously-disabled
+    # service even when the plist + binary are healthy.
+    parts.append("launchctl enable system/com.wazuh.agent 2>/dev/null || true")
     parts.append(f"launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}'")
 
     script = "; ".join(parts)
@@ -351,6 +356,7 @@ def restore_client_key_if_needed():
         f"  if [ -s '{_CLIENT_KEYS}' ]; then "
         f"    chmod 640 '{_CLIENT_KEYS}' && chown root:wazuh '{_CLIENT_KEYS}' && "
         f"    launchctl bootout system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
+        f"    launchctl enable system/com.wazuh.agent 2>/dev/null; "
         f"    launchctl bootstrap system '{WAZUH_LAUNCHD_PLIST}' 2>/dev/null; "
         f"    echo KEY_RESTORED; "
         f"  fi; "

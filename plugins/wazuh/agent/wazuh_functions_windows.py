@@ -14,6 +14,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
 import winreg
 import zipfile
 
@@ -143,6 +144,11 @@ def get_agent_status():
         )
         if "RUNNING" in result.stdout:
             return "Running"
+        if "START_PENDING" in result.stdout:
+            # Service is mid-startup (common right after install). Treat it as
+            # running so the UI doesn't flash a Stopped/Error state during the
+            # transition; the next poll confirms the real state.
+            return "Running"
         if "STOPPED" in result.stdout:
             return "Stopped"
     except Exception as e:
@@ -203,37 +209,36 @@ def _download_file(url, dest_path, progress_callback=None, label="Downloading...
         return False
 
 
-def _install_sysmon(progress_callback=None):
-    """Download and install Sysmon with SwiftOnSecurity config.
+def _prepare_sysmon_download(progress_callback=None):
+    """Download and extract Sysmon (no elevation needed).
 
-    Returns True if Sysmon is already installed or was successfully installed.
+    Returns a {dir, exe, config} paths dict whose install PowerShell can be
+    folded into the combined elevated script, or None if Sysmon is already
+    installed or the download/extract failed. Sysmon is non-fatal for the
+    Wazuh install, so None simply means "skip Sysmon".
     """
     if _is_sysmon_installed():
         logger.info("Sysmon already installed, skipping")
-        if progress_callback:
-            progress_callback("Sysmon already installed")
-        return True
+        return None
 
     if progress_callback:
-        progress_callback("Setting up Sysmon...")
+        progress_callback("Downloading Sysmon...")
 
-    # Download and extract to a temp directory first (no admin needed)
+    # Download and extract to a temp directory (no admin needed)
     tmp_sysmon = os.path.join(tempfile.gettempdir(), "resistine_sysmon")
     os.makedirs(tmp_sysmon, exist_ok=True)
 
-    # Download Sysmon zip
     sysmon_zip = os.path.join(tmp_sysmon, "Sysmon.zip")
     if not _download_file(WINDOWS_SYSMON_ZIP_URL, sysmon_zip, progress_callback, "Downloading Sysmon..."):
-        return False
+        return None
 
-    # Extract
     try:
         with zipfile.ZipFile(sysmon_zip, "r") as zf:
             zf.extractall(tmp_sysmon)
         logger.info(f"Extracted Sysmon to {tmp_sysmon}")
     except Exception as e:
         logger.error(f"Failed to extract Sysmon: {e}")
-        return False
+        return None
 
     # Determine correct Sysmon executable (64-bit or 32-bit)
     tmp_sysmon_exe = os.path.join(tmp_sysmon, "Sysmon64.exe")
@@ -241,30 +246,22 @@ def _install_sysmon(progress_callback=None):
         tmp_sysmon_exe = os.path.join(tmp_sysmon, "Sysmon.exe")
         if not os.path.exists(tmp_sysmon_exe):
             logger.error("Sysmon executable not found after extraction")
-            return False
+            return None
 
-    # Download SwiftOnSecurity config
     tmp_sysmon_config = os.path.join(tmp_sysmon, "sysmonconfig-export.xml")
     if not _download_file(WINDOWS_SYSMON_CONFIG_URL, tmp_sysmon_config, progress_callback, "Downloading Sysmon config..."):
-        return False
+        return None
 
-    # Install Sysmon with config (requires admin) and copy files to Program Files
-    if progress_callback:
-        progress_callback("Installing Sysmon service...")
+    return {"dir": tmp_sysmon, "exe": tmp_sysmon_exe, "config": tmp_sysmon_config}
 
-    install_cmd = (
+
+def _sysmon_install_ps(sysmon):
+    """PowerShell that installs Sysmon from a prepared download dict."""
+    return (
         f"New-Item -ItemType Directory -Path '{_SYSMON_DIR}' -Force | Out-Null; "
-        f"Copy-Item -Path '{tmp_sysmon}\\*' -Destination '{_SYSMON_DIR}' -Recurse -Force; "
-        f"& '{tmp_sysmon_exe}' -accepteula -i '{tmp_sysmon_config}'"
+        f"Copy-Item -Path '{sysmon['dir']}\\*' -Destination '{_SYSMON_DIR}' -Recurse -Force; "
+        f"& '{sysmon['exe']}' -accepteula -i '{sysmon['config']}'"
     )
-    success, output = _run_privileged(install_cmd)
-
-    if not success and not _is_sysmon_installed():
-        logger.error(f"Failed to install Sysmon: {output}")
-        return False
-
-    logger.info("Sysmon installed successfully")
-    return True
 
 
 def _inject_ossec_localfiles(blocks):
@@ -285,8 +282,22 @@ def _inject_ossec_localfiles(blocks):
         logger.warning("ossec.conf not found, cannot inject localfile blocks")
         return False
 
-    # Markers and blocks go through Base64 to dodge any quoting headaches
-    # when embedded in the elevated PowerShell script.
+    success, output = _run_privileged(_localfile_injection_ps(blocks))
+    if success:
+        logger.info("Injected ossec.conf localfile blocks under elevation")
+    else:
+        logger.error(f"Failed to inject ossec.conf localfile blocks: {output}")
+    return success
+
+
+def _localfile_injection_ps(blocks):
+    """Build the elevated PowerShell that injects <localfile> blocks into
+    ossec.conf.
+
+    Markers and blocks go through Base64 to dodge any quoting headaches when
+    embedded in PowerShell. Used both standalone (via _inject_ossec_localfiles,
+    one UAC prompt) and inlined into the combined install script.
+    """
     entries_ps = []
     for marker, block in blocks:
         m_b64 = base64.b64encode(marker.encode("utf-8")).decode("ascii")
@@ -297,9 +308,13 @@ def _inject_ossec_localfiles(blocks):
             f"Block  = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{b_b64}')) "
             "}"
         )
-    entries_ps_str = ",`n".join(entries_ps)
+    # Separate array entries with comma + real newline. (A literal backtick-n
+    # here is NOT a newline outside a double-quoted string — it's a parse error:
+    # "Unexpected token '`n'". That was latent while injection ran in its own
+    # elevated call, but it breaks the whole batched install script.)
+    entries_ps_str = ",\n".join(entries_ps)
 
-    script = (
+    return (
         f"$conf = '{_OSSEC_CONF}'\n"
         "if (-not (Test-Path $conf)) { throw 'ossec.conf missing' }\n"
         "$utf8NoBom = New-Object System.Text.UTF8Encoding($false)\n"
@@ -323,13 +338,6 @@ def _inject_ossec_localfiles(blocks):
         "    }\n"
         "}\n"
     )
-
-    success, output = _run_privileged(script)
-    if success:
-        logger.info("Injected ossec.conf localfile blocks under elevation")
-    else:
-        logger.error(f"Failed to inject ossec.conf localfile blocks: {output}")
-    return success
 
 
 def _inject_sysmon_config():
@@ -486,118 +494,146 @@ def remove_agent(wipe_keys: bool = False):
     return success
 
 
-def full_install(progress_callback=None):
-    """Orchestrate the complete install flow:
-    1. Download & install Sysmon with SwiftOnSecurity config
-    2. Download Wazuh MSI
-    3. Install Wazuh agent
-    4. Configure ossec.conf (agent name, Sysmon monitoring)
-    5. Enroll or restore keys
-    6. Start the service
+def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir):
+    """Assemble ONE elevated PowerShell script for every privileged install step.
+
+    Batching the Sysmon install, the Wazuh MSI, the ossec.conf patch +
+    localfile injection, enrollment, key backup and service start into a single
+    elevated invocation means the user approves UAC once instead of ~8 times.
+    Each step is wrapped in its own try/catch so a soft failure in one (e.g.
+    Sysmon) can't abort the rest; real success is verified in Python afterwards
+    via is_agent_installed()/get_agent_status().
+
+    msiexec runs under Start-Process -Wait so the package fully installs
+    (creating ossec.conf, agent-auth.exe and the service) before the steps
+    that depend on it run.
     """
-    # Phase 1: Install Sysmon
-    if progress_callback:
-        progress_callback("Setting up Sysmon...")
-    if not _install_sysmon(progress_callback):
-        logger.warning("Sysmon installation failed, continuing with Wazuh install")
-        # Non-fatal: Wazuh can still work without Sysmon
+    def _guard(ps):
+        return f"try {{\n{ps}\n}} catch {{ }}"
 
-    # Phase 2: Download Wazuh MSI
-    if progress_callback:
-        progress_callback("Downloading Wazuh agent...")
-    msi_path = download_package(progress_callback)
-    if not msi_path:
-        if progress_callback:
-            progress_callback("Download failed")
-        return False
+    # msiexec args as a PowerShell ARRAY so Start-Process quotes each element
+    # itself. Passing a single pre-joined string makes Start-Process re-split on
+    # spaces, which corrupts an MSI path that contains spaces (e.g. a user named
+    # "Jane Doe"). Property values are space-free (see config.py); the package
+    # path is its own element so its spaces survive.
+    msi_args = ",".join([
+        "'/i'",
+        f"'{msi_path}'",
+        "'/qn'",
+        f"'WAZUH_MANAGER={WAZUH_MANAGER}'",
+        f"'WAZUH_MANAGER_PORT={WAZUH_MANAGER_PORT}'",
+        f"'WAZUH_PROTOCOL={WAZUH_PROTOCOL}'",
+        f"'WAZUH_REGISTRATION_SERVER={WAZUH_MANAGER}'",
+        f"'WAZUH_REGISTRATION_PORT={WAZUH_REGISTRATION_PORT}'",
+        f"'WAZUH_AGENT_NAME={agent_name}'",
+        f"'WAZUH_AGENT_GROUP={agent_group}'",
+    ])
 
-    # Phase 3: Resolve agent name/group (group auto-created server-side).
-    agent_name = get_agent_name()
-    agent_group = get_agent_group()
+    parts = ["$ErrorActionPreference = 'Continue'"]
 
-    # Phase 4: Install Wazuh via MSI (silent install with params)
-    if progress_callback:
-        progress_callback("Installing Wazuh agent (admin privileges required)...")
+    # Sysmon (optional — folded in only if it downloaded successfully).
+    if sysmon:
+        parts.append(_guard(_sysmon_install_ps(sysmon)))
 
-    install_cmd = (
-        f"msiexec.exe /i '{msi_path}' /qn "
-        f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
-        f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}' "
-        f"WAZUH_PROTOCOL='{WAZUH_PROTOCOL}' "
-        f"WAZUH_REGISTRATION_SERVER='{WAZUH_MANAGER}' "
-        f"WAZUH_REGISTRATION_PORT='{WAZUH_REGISTRATION_PORT}' "
-        f"WAZUH_AGENT_NAME='{agent_name}' "
-        f"WAZUH_AGENT_GROUP='{agent_group}'"
-    )
-    success, output = _run_privileged(install_cmd, timeout=300)
+    # Wazuh MSI — wait for full completion before configuring/enrolling.
+    parts.append(_guard(
+        f"Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @({msi_args})"
+    ))
 
-    if not success and not is_agent_installed():
-        logger.error(f"MSI install failed: {output}")
-        if progress_callback:
-            progress_callback("Installation failed")
-        return False
+    # Stop the service before enrollment so the final Start-Service loads the
+    # freshly enrolled client.keys (the MSI may register it as auto-start).
+    parts.append(_guard(
+        f"Stop-Service -Name '{_SERVICE_NAME}' -Force -ErrorAction SilentlyContinue"
+    ))
 
-    # Phase 5: Patch agent name in ossec.conf
-    if progress_callback:
-        progress_callback("Configuring agent...")
-
-    patch_cmd = (
+    # Patch manager address + agent name in ossec.conf.
+    parts.append(_guard(
+        f"if (Test-Path '{_OSSEC_CONF}') {{ "
         f"(Get-Content '{_OSSEC_CONF}') "
         f"-replace '<address>.*</address>', '<address>{WAZUH_MANAGER}</address>' "
         f"-replace '<agent_name>.*</agent_name>', '<agent_name>{agent_name}</agent_name>' | "
-        f"Set-Content '{_OSSEC_CONF}'"
-    )
-    _run_privileged(patch_cmd)
+        f"Set-Content '{_OSSEC_CONF}' }}"
+    ))
 
-    # Phase 6: Inject Sysmon and Defender monitoring into ossec.conf
-    # Single UAC prompt for both blocks.
-    _inject_ossec_localfiles([
+    # Inject Sysmon + Defender eventchannel monitoring.
+    parts.append(_guard(_localfile_injection_ps([
         ("Microsoft-Windows-Sysmon/Operational", _SYSMON_LOCALFILE_BLOCK),
         ("Microsoft-Windows-Windows Defender/Operational", _DEFENDER_LOCALFILE_BLOCK),
-    ])
+    ])))
 
-    # Phase 7: Enrollment — always re-enroll so the manager receives the
-    # group in the registration request (server-side groups are auto-created
-    # on enroll).
-    backup_dir = os.path.dirname(_KEY_BACKUP)
-
-    if progress_callback:
-        progress_callback("Enrolling agent with manager...")
-    enroll_cmd = (
+    # Enroll with the manager (writes client.keys).
+    parts.append(_guard(
+        f"if (Test-Path '{_AGENT_AUTH}') {{ "
         f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
         f"-P '{WAZUH_REGISTRATION_PORT}' "
-        f"-A '{agent_name}' -G '{agent_group}'"
-    )
-    enroll_success, enroll_output = _run_privileged(enroll_cmd)
+        f"-A '{agent_name}' -G '{agent_group}' }}"
+    ))
 
-    if enroll_success:
-        logger.info("[WAZUH] Enrollment succeeded")
-    else:
-        logger.warning(f"[WAZUH] agent-auth enrollment failed: {enroll_output}")
-
-    # Backup the new key for future repair/recovery (not used to skip enroll)
-    backup_cmd = (
+    # Back up client.keys for future repair/recovery.
+    parts.append(_guard(
         f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
         f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}"
-    )
-    _run_privileged(backup_cmd)
+    ))
 
-    # Phase 8: Start the service
-    if progress_callback:
-        progress_callback("Starting Wazuh agent...")
+    # Start the service (stopped after a fresh MSI install, so it now loads
+    # the freshly enrolled client.keys).
+    parts.append(_guard(f"Start-Service -Name '{_SERVICE_NAME}'"))
 
-    start_cmd = f"NET START {_SERVICE_NAME}"
-    _run_privileged(start_cmd)
+    return "\n\n".join(parts)
 
-    # Verify
+
+def full_install(progress_callback=None):
+    """Install the Wazuh agent (and Sysmon) in a SINGLE elevation prompt.
+
+    All downloads run unprivileged first; then every privileged step is batched
+    into one elevated PowerShell invocation (see _build_install_script), so the
+    user approves UAC just once instead of ~8 times.
+    """
+    def _p(msg):
+        if progress_callback:
+            progress_callback(msg)
+
+    # --- Unprivileged downloads (no prompt) ---
+    sysmon = _prepare_sysmon_download(progress_callback)
+
+    _p("Downloading Wazuh agent...")
+    msi_path = download_package(progress_callback)
+    if not msi_path:
+        _p("Download failed")
+        return False
+
+    # Agent name/group (server-side group auto-created on enroll).
+    agent_name = get_agent_name()
+    agent_group = get_agent_group()
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+
+    # --- Single elevated batch: one UAC prompt for the whole install ---
+    _p("Installing — please approve the administrator prompt...")
+    script = _build_install_script(
+        sysmon, msi_path, agent_name, agent_group, backup_dir)
+    success, output = _run_privileged(script, timeout=600)
+    logger.info(f"[WAZUH] combined install ok={success} output={output!r}")
+
+    if not is_agent_installed():
+        logger.error(f"Install failed (agent not present): {output}")
+        _p("Installation failed")
+        return False
+
+    # --- Unprivileged verify (no prompt) ---
+    # Start-Service can return while the service is still START_PENDING, so
+    # poll briefly until it actually reports Running before declaring success.
+    _p("Starting Wazuh agent...")
+    for _ in range(15):
+        if get_agent_status() == "Running":
+            break
+        time.sleep(1)
+
     if get_agent_status() == "Running":
         logger.info("Wazuh agent installed and running")
-        if progress_callback:
-            progress_callback("Wazuh agent installed and running")
+        _p("Wazuh agent installed and running")
     else:
         logger.warning("Agent installed but not yet running")
-        if progress_callback:
-            progress_callback("Wazuh agent installed (may need manual start)")
+        _p("Wazuh agent installed (may need manual start)")
 
     # Record enrollment email
     settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))

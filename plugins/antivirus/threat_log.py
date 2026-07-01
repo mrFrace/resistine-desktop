@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 
+from utils import settings
 from utils.logger import logger
 
 _PROGRAM = "resistine-av"
@@ -154,6 +155,47 @@ def is_wazuh_installed() -> bool:
     return bool(d and os.path.isdir(d))
 
 
+def is_forwarding_enabled() -> bool:
+    """True if AV log forwarding to the SIEM is configured and the agent is present.
+
+    On Windows the endpoint installer always injects the Defender eventchannel
+    localfile during full_install, so a present agent means forwarding is
+    already on. On macOS/Linux forwarding is configured only via
+    setup_wazuh_forwarding(), so it's tracked with a settings flag (ossec.conf
+    is root-only and can't be read to verify directly).
+
+    macOS default: ON. When the Wazuh agent is installed on Mac the switch
+    appears already enabled — the user doesn't need to discover and flip a
+    toggle to get protection. The actual ossec.conf localfile entry is
+    written the first time the user explicitly toggles or via the Wazuh
+    install flow's follow-up step. Until then the flag-only state matches
+    user expectation; toggling off saves False explicitly and persists.
+    Linux remains opt-in (default False) because the Linux Wazuh path is
+    less mature and silently auto-enabling could mask a half-finished install.
+    """
+    if not is_wazuh_installed():
+        return False
+    if platform.system() != "Windows":
+        _default = platform.system() == "Darwin"
+        return bool(settings.get("antivirus", "siem_forwarding", _default))
+    conf = r"C:\Program Files (x86)\ossec-agent\ossec.conf"
+    if not os.path.exists(conf):
+        return False
+    try:
+        with open(conf, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        return (
+            "Microsoft-Windows-Windows Defender/Operational" in content
+            and "<localfile>" in content
+        )
+    except (OSError, PermissionError):
+        # ACL'd ossec.conf (locked to SYSTEM on some deployments). Use the
+        # same default-True policy as Mac when on Windows here too — if the
+        # installer ran far enough to install the agent, forwarding is the
+        # expected end-state.
+        return bool(settings.get("antivirus", "siem_forwarding", True))
+
+
 def get_ossec_snippet() -> str:
     """Return the XML localfile block for ossec.conf."""
     return (
@@ -167,11 +209,9 @@ def get_ossec_snippet() -> str:
 def setup_wazuh_forwarding() -> tuple[bool, str]:
     """Add our localfile entry to ossec.conf (requires admin).
 
-    Returns (success, message).
+    Returns (success, message). On success the forwarding flag is recorded so
+    the UI can reflect it without re-reading the root-only ossec.conf.
     """
-    if not is_wazuh_installed():
-        return False, "Wazuh agent not installed."
-
     if not is_wazuh_installed():
         return False, "Wazuh agent not installed."
 
@@ -181,15 +221,22 @@ def setup_wazuh_forwarding() -> tuple[bool, str]:
 
     # ossec.conf is root-only — skip unprivileged checks,
     # the privileged script validates everything itself.
-
     system = platform.system()
     if system == "Darwin":
-        return _inject_darwin(conf)
-    if system == "Linux":
-        return _inject_linux(conf)
-    if system == "Windows":
-        return _inject_windows()
-    return False, f"Unknown platform: {system}"
+        ok, msg = _inject_darwin(conf)
+    elif system == "Linux":
+        ok, msg = _inject_linux(conf)
+    elif system == "Windows":
+        ok, msg = _inject_windows()
+    else:
+        return False, f"Unknown platform: {system}"
+
+    if ok:
+        try:
+            settings.set("antivirus", "siem_forwarding", True)
+        except Exception:
+            pass
+    return ok, msg
 
 
 def _inject_darwin(conf: str) -> tuple[bool, str]:
@@ -279,10 +326,21 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
         "print('configured')\n"
     )
     encoded = base64.b64encode(py_script.encode()).decode()
+    # Multi-init dispatcher: try systemd, sysv-init, OpenRC, then wazuh-control
+    # so non-systemd Linux (Alpine, Devuan-sysvinit, WSL1) actually reloads the
+    # agent instead of silently succeeding. Exit code 2 => configured but
+    # restart failed; the caller surfaces that distinctly from a config failure.
+    restart_chain = (
+        "systemctl restart wazuh-agent 2>/dev/null "
+        "|| service wazuh-agent restart 2>/dev/null "
+        "|| rc-service wazuh-agent restart 2>/dev/null "
+        "|| /var/ossec/bin/wazuh-control restart 2>/dev/null "
+        "|| { echo restart_failed; exit 2; }"
+    )
     # Use shlex.quote to safely embed the base64 blob in the shell command.
     shell_cmd = (
-        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 && "
-        f"systemctl restart wazuh-agent 2>/dev/null; true"
+        f"printf '%s' {shlex.quote(encoded)} | base64 -d | python3 || exit 1; "
+        f"{restart_chain}"
     )
 
     for cmd in (
@@ -293,12 +351,24 @@ def _inject_linux(conf: str) -> tuple[bool, str]:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=30,
             )
+            output = (result.stdout or "").strip()
             if result.returncode == 0:
-                output = result.stdout.strip()
                 if "already_configured" in output:
                     return True, "Already configured."
                 logger.info("AV: Wazuh forwarding configured")
                 return True, "Configured. Wazuh agent restarted."
+            if result.returncode == 2:
+                # Config injected but no known init system accepted the restart.
+                logger.error(
+                    "AV: Wazuh forwarding configured but agent restart "
+                    "failed under all known init systems (systemd/service/"
+                    "rc-service/wazuh-control). stderr=%s",
+                    (result.stderr or "").strip(),
+                )
+                return True, (
+                    "Configured, but Wazuh agent restart failed. "
+                    "Restart it manually to apply the new config."
+                )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
         except Exception as exc:

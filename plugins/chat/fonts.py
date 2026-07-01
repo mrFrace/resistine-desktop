@@ -20,17 +20,34 @@ import customtkinter
 RESISTINE_BLUE = "#0D5394"
 
 # -- Base metrics (px) --------------------------------------------------------
-# Body text size for AI responses (and, matched in bubble.py, user messages).
-_BASE_SIZE = 18
-_MONO_FAMILY = "Menlo" if sys.platform == "darwin" else "Consolas"
-
-# Heading sizes, kept above/around the body so the hierarchy holds.
-# Windows gets a small extra bump because its default UI font renders a touch
-# smaller/denser than macOS's system font at the same point size.
+# Body text size for AI responses (matched in bubble.py for user messages).
+# Windows's default UI font renders denser at the same point size, so it gets
+# a +3pt bump to roughly equalize perceived size against macOS's system font.
+# Mac / Linux keep the historical 15pt baseline — bumping them across the
+# board broke chat bubble widths, table reflow, and welcome-screen layout
+# that had been tuned at that size.
+# Code blocks / tables render ~1pt below body so monospace / tabular content
+# doesn't visually dominate the prose.
+# Heading sizes scale around the body so the hierarchy holds at either base.
 if sys.platform.startswith("win"):
+    _BASE_SIZE = 18
+    _CODE_BLOCK_SIZE = 14
     _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
+elif sys.platform.startswith("linux"):
+    _BASE_SIZE = 18
+    _CODE_BLOCK_SIZE = 14
+    _HEADING_SIZES = {"h1": 25, "h2": 23, "h3": 20, "h4": 19, "h5": 18, "h6": 17}
+else:  # Darwin
+    _BASE_SIZE = 15
+    _CODE_BLOCK_SIZE = 13
+    _HEADING_SIZES = {"h1": 20, "h2": 18, "h3": 16, "h4": 15, "h5": 14, "h6": 13}
+
+if sys.platform.startswith("win"):
+    _MONO_FAMILY = "Consolas"
+elif sys.platform.startswith("linux"):
+    _MONO_FAMILY = "DejaVu Sans Mono"
 else:
-    _HEADING_SIZES = {"h1": 23, "h2": 21, "h3": 19, "h4": 18, "h5": 17, "h6": 16}
+    _MONO_FAMILY = "Menlo"
 
 # Resolved once, after a Tk root exists. The chat hard-coded "Inter" everywhere,
 # but Inter is never installed or registered, so on Windows Tk silently falls
@@ -138,6 +155,13 @@ def get_fonts(is_dark: bool = False) -> dict[str, tkFont.Font]:
             "chat_bold_italic", family=fam, size=_BASE_SIZE,
             weight="bold", slant="italic"),
         "code": _named("chat_code", family=_MONO_FAMILY, size=_BASE_SIZE),
+        # Code-block body + table cells: ~20% smaller than prose so they don't
+        # dwarf the conversation text (see _CODE_BLOCK_SIZE).
+        "code_block": _named(
+            "chat_code_block", family=_MONO_FAMILY, size=_CODE_BLOCK_SIZE),
+        "table": _named("chat_table", family=fam, size=_CODE_BLOCK_SIZE),
+        "table_bold": _named(
+            "chat_table_bold", family=fam, size=_CODE_BLOCK_SIZE, weight="bold"),
         "link": _named(
             "chat_link", family=fam, size=_BASE_SIZE, underline=True),
         "strikethrough": _named(

@@ -35,11 +35,18 @@ _SYSTEM_LOG_DIR = os.path.join(_SYSTEM_CLAMAV_DIR, "log")
 _SYSTEM_RUN_DIR = os.path.join(_SYSTEM_CLAMAV_DIR, "run")
 
 # SMAppService daemon plists (in Contents/Library/LaunchDaemons/).
-# Order matters: clamd must be registered before clamonacc.
+# Order matters: clamd must be registered before clamonacc. freshclam (the
+# signature auto-updater) is independent and registered last.
 _DAEMON_PLISTS = [
     "com.resistine.desktop.clamd.plist",
     "com.resistine.desktop.clamonacc.plist",
+    "com.resistine.desktop.freshclam.plist",
 ]
+
+# Label of the freshclam auto-update daemon, used by
+# set_freshclam_daemon_enabled() to bootout just this one daemon without
+# touching clamd/clamonacc real-time protection.
+_FRESHCLAM_DAEMON_LABEL = "com.resistine.desktop.freshclam"
 
 # Legacy plist paths from pre-SMAppService installs
 _LEGACY_PLIST_PATHS = [
@@ -487,6 +494,53 @@ def ensure_daemons_registered():
 # ── System daemon activation ─────────────────────────────
 
 
+def activate_system_daemons() -> tuple[bool, str]:
+    """Start the system-level ClamAV daemons (clamd + clamonacc).
+
+    Symmetric counterpart to deactivate_system_daemons(). The daemons are
+    SMAppService-managed and provisioned by the installer flow
+    (trigger_system_setup / the postinstall script), so "starting" an
+    already-registered-but-offline daemon just means (re)loading it in launchd.
+    ensure_daemons_registered() re-bootstraps any daemon that's
+    enabled-but-not-loaded (e.g. after a bootout/stop, or a crash that KeepAlive
+    didn't recover) without a second admin prompt. We then poll launchd to
+    confirm the protection daemons actually came up.
+
+    Returns (ok, message). Backs the "Start Protection" banner action when the
+    app bundle is installed but the daemons aren't running.
+    """
+    if not is_app_bundle():
+        return False, "Real-time protection requires the installed app."
+
+    try:
+        ensure_daemons_registered()
+    except Exception as exc:
+        logger.error(f"ClamAV: activating system daemons failed: {exc}")
+        return False, str(exc)
+
+    # freshclam is auto-update, not real-time protection — only clamd and
+    # clamonacc gate the "protection running" state.
+    protection_labels = [
+        "com.resistine.desktop.clamd",
+        "com.resistine.desktop.clamonacc",
+    ]
+    # Give launchd a moment to bring the daemons up after (re)registration.
+    for _ in range(10):
+        if all(_daemon_loaded(label) for label in protection_labels):
+            return True, "Protection started."
+        time.sleep(0.5)
+
+    if any(_daemon_loaded(label) for label in protection_labels):
+        return True, "Protection is starting…"
+
+    # Nothing loaded — the daemons most likely still need approval in Login
+    # Items (SMAppService can't bootstrap until the user approves).
+    return False, (
+        "Couldn't start protection automatically. Enable the Resistine ClamAV "
+        "daemons in System Settings › General › Login Items."
+    )
+
+
 def _app_bundle_contents() -> str | None:
     """Return the Contents/ dir of the running .app bundle, or None."""
     for base in (sys.executable, os.path.abspath(sys.argv[0])):
@@ -546,6 +600,10 @@ def _generate_system_freshclam_conf() -> str:
         "LogTime yes\n"
         "DatabaseMirror database.clamav.net\n"
         f"NotifyClamd {_SYSTEM_CLAMD_CONF}\n"
+        # Run by the root LaunchDaemon. Without this, freshclam drops to the
+        # default "clamav" user (absent on macOS) and fails to open the
+        # root-owned UpdateLogFile, so signatures silently never update.
+        "DatabaseOwner root\n"
     )
     certs_dir = find_certs_dir()
     if certs_dir:
@@ -722,6 +780,49 @@ def deactivate_system_daemons() -> tuple[bool, str]:
         )
         if result.returncode == 0:
             return True, "Protection deactivated."
+        return False, (result.stderr or "").strip() or "Failed."
+    except Exception as exc:
+        return False, str(exc)
+
+
+def set_freshclam_daemon_enabled(enabled: bool) -> tuple[bool, str]:
+    """Enable or disable the freshclam signature auto-update daemon.
+
+    On macOS the "auto-update" setting controls the OS-level LaunchDaemon
+    (com.resistine.desktop.freshclam) rather than an in-process thread, so
+    updates run even while the app is closed.
+
+    Enable → ``ensure_daemons_registered()`` (idempotent; re-registering an
+    already-loaded daemon is a cheap no-op). Disable → bootout ONLY the
+    freshclam label via the osascript-admin pattern. We deliberately do NOT
+    call ``deactivate_system_daemons()`` on disable — that would also bootout
+    clamd/clamonacc and kill real-time protection.
+    """
+    if enabled:
+        try:
+            ensure_daemons_registered()
+            return True, "Auto-update enabled."
+        except Exception as exc:
+            logger.error(f"ClamAV: enabling freshclam daemon failed: {exc}")
+            return False, str(exc)
+
+    # Disable: bootout just the freshclam daemon.
+    script = (
+        f"launchctl bootout system/{_FRESHCLAM_DAEMON_LABEL} "
+        f"2>/dev/null || true"
+    )
+    logger.info("ClamAV: disabling freshclam auto-update daemon")
+    try:
+        result = subprocess.run(
+            [
+                "osascript", "-e",
+                "do shell script " + _applescript_quote(script)
+                + " with administrator privileges",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return True, "Auto-update disabled."
         return False, (result.stderr or "").strip() or "Failed."
     except Exception as exc:
         return False, str(exc)

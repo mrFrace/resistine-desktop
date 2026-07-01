@@ -216,7 +216,18 @@ def ensure_config():
 
 
 def get_db_info() -> dict[str, str]:
-    """Return signature count and last-updated date from local DB files."""
+    """Return signature count and last-checked date from local DB files.
+
+    "Last updated" answers the user's question "when did MY computer last
+    pull an update", so it reports the newest DB *file mtime* \u2014 i.e. the most
+    recent successful freshclam write. freshclam rewrites daily.(cld|cvd) on
+    every successful check, so the newest mtime always tracks the real
+    download, and taking the *max* across files sidesteps the stale base-.cvd
+    problem (an untouched main.cvd just has an older mtime than daily, so it
+    never wins). This is deliberately NOT the CVD header build date, which is
+    when ClamAV *published* the sigs (UTC, hours-to-days before download) and
+    reads as confusingly off even when everything is working.
+    """
     info: dict[str, str] = {"signatures": "\u2014", "last_updated": "\u2014"}
 
     db_dir = _effective_db_dir()
@@ -227,19 +238,22 @@ def get_db_info() -> dict[str, str]:
         return info
 
     total_sigs = 0
-    latest_mtime = 0.0
+    latest_mtime = 0.0  # newest file mtime = most recent successful update
 
     for cvd in cvd_files:
         try:
             with open(cvd, "rb") as f:
                 header = f.read(512).decode("ascii", errors="replace")
-            # CVD header format: ClamAV-VDB:date:ver:sigs:...
+            # CVD header: ClamAV-VDB:DD Mon YYYY HH-MM +ZZZZ:ver:sigs:...
             parts = header.split(":")
             if len(parts) >= 4:
                 total_sigs += int(parts[3])
         except (OSError, ValueError):
             pass
-        mtime = os.path.getmtime(cvd)
+        try:
+            mtime = os.path.getmtime(cvd)
+        except OSError:
+            continue
         if mtime > latest_mtime:
             latest_mtime = mtime
 

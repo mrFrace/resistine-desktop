@@ -106,6 +106,8 @@ def _stub_gui_modules():
         "opentelemetry.sdk._logs",
         "opentelemetry.sdk._logs.export",
         "opentelemetry.sdk.resources",
+        "opentelemetry.sdk.util",
+        "opentelemetry.sdk.util.instrumentation",
         "opentelemetry.trace",
         # ServiceManagement (macOS only, not available in tests)
         "ServiceManagement",
