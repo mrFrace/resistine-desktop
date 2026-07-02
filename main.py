@@ -134,17 +134,29 @@ class App(AppUI):
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
-        scale = getattr(self, "_hidpi_factor", 1.0)
-        # Default window occupies 33% of the physical screen in each dimension,
-        # centred. winfo_screen*() report physical px; CTk's window scaling then
-        # multiplies the geometry we pass by `scale`, so divide the physical
-        # target back out here to land at exactly 33% on-screen regardless of
-        # HiDPI. Clamped to the minsize below on small displays.
-        _win_fraction = 0.33
-        window_width = int(screen_width * _win_fraction / scale)
-        window_height = int(screen_height * _win_fraction / scale)
+        # CTk multiplies the width/height we pass to geometry() by its window
+        # scaling (the real OS-DPI ratio on Windows, our set_window_scaling
+        # factor on Linux, 1.0 on macOS) but leaves +x+y offsets untouched.
+        # _hidpi_factor alone is 1.0 on Windows even at 200% DPI, which would
+        # render the window at double the intended size — so use the effective
+        # CTk window scaling for both the size and the centering math.
+        try:
+            scale = customtkinter.ScalingTracker.get_window_scaling(self) or 1.0
+        except Exception:
+            scale = getattr(self, "_hidpi_factor", 1.0) or 1.0
+        # Default window covers 33% of the screen AREA (~57.5% per dimension),
+        # centred. winfo_screen*() report physical px on Windows/Linux and
+        # logical points on macOS — the same unit space CTk's scaled geometry
+        # lands in, so dividing by `scale` yields exactly the target fraction
+        # on-screen regardless of HiDPI.
+        _side_fraction = 0.33 ** 0.5
         min_width = 750
         min_height = 350
+        # Clamp to the minsize BEFORE centering so the +x+y offsets match the
+        # size Tk actually enforces (otherwise the window sits off-centre on
+        # screens small enough to trip the clamp).
+        window_width = max(min_width, int(screen_width * _side_fraction / scale))
+        window_height = max(min_height, int(screen_height * _side_fraction / scale))
         # Centre the window on the physical screen.
         position_right = int(screen_width / 2 - window_width * scale / 2)
         position_down = int(screen_height / 2 - window_height * scale / 2)
