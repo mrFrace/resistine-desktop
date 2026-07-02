@@ -135,19 +135,14 @@ class App(AppUI):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         scale = getattr(self, "_hidpi_factor", 1.0)
-        # Window dimensions are LOGICAL, anchored to the 1080p reference.
-        # set_window_scaling() multiplies these by `scale` to produce the actual
-        # physical pixel size, so the logical layout is identical at every
-        # resolution and aspect ratio.
-        #
-        # Mac uses 0.7 (1344x756 at 1080p ref) — the historical default that
-        # leaves the dashboard cards and chat enough room to breathe and
-        # matches what users had before the Windows-optim window-shrink work.
-        # Windows / Linux use 0.54 (1036x583) which suits their denser font
-        # rendering and HiDPI scaling fixes.
-        _win_scale = 0.7 if sys.platform == "darwin" else 0.54
-        window_width = int(_REF_WIDTH * _win_scale)
-        window_height = int(_REF_HEIGHT * _win_scale)
+        # Default window occupies 33% of the physical screen in each dimension,
+        # centred. winfo_screen*() report physical px; CTk's window scaling then
+        # multiplies the geometry we pass by `scale`, so divide the physical
+        # target back out here to land at exactly 33% on-screen regardless of
+        # HiDPI. Clamped to the minsize below on small displays.
+        _win_fraction = 0.33
+        window_width = int(screen_width * _win_fraction / scale)
+        window_height = int(screen_height * _win_fraction / scale)
         min_width = 750
         min_height = 350
         # Centre the window on the physical screen.
