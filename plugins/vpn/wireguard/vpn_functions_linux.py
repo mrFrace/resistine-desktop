@@ -12,6 +12,8 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -19,11 +21,37 @@ import sys
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    is_valid_config_name,
+    optional_peer_lines,
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+from utils.settings import get_config_dir
 
 # Removed standard logging setup
 
 # Keychain Constants
-KEYS_FILE_PATH = os.path.expanduser("~/.config/resistine/keys.json")
+# Legacy plaintext key file (pre-2026.10); migrated to encrypted settings.
+KEYS_FILE_PATH = os.path.join(get_config_dir(), "keys.json")
+
+# IPv4/IPv6 addresses and domain names only (used before interpolating DNS
+# values into PostUp shell commands).
+_SAFE_DNS_TOKEN = re.compile(r"^[A-Za-z0-9.:_-]+$")
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
@@ -31,7 +59,8 @@ def get_writable_wireguard_dir():
     from utils.settings import get_config_dir
 
     wireguard_dir = os.path.join(get_config_dir(), "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
 
 
@@ -51,7 +80,9 @@ def run_privileged_command(command_args):
     :param command_args: List of command arguments (e.g., ["wg", "show"])
     :return: subprocess.CompletedProcess or None if failed
     """
-    # Try pkexec first (standard GUI way)
+    # Try pkexec first (standard GUI way). When pkexec is available it drives
+    # the system polkit prompt, which already handles authentication — so we do
+    # NOT pop a second, in-app sudo password dialog on top of it.
     if shutil.which("pkexec"):
         try:
             # Resolve absolute path for the command
@@ -70,14 +101,23 @@ def run_privileged_command(command_args):
                 text=True,
             )
         except subprocess.CalledProcessError as e:
+            # pkexec executed and the privileged command (or the auth prompt)
+            # returned non-zero. Authentication was already handled by the
+            # system polkit agent, so re-prompting with an in-app sudo dialog
+            # would just run the same command again and double-prompt the user.
+            # Report the failure instead of falling back.
             error_msg = e.stderr.strip() or e.stdout.strip() or "No output"
-            logger.warning(
-                f"pkexec failed (code {e.returncode}): {error_msg}. Falling back to sudo."
+            logger.error(
+                f"Privileged command failed under pkexec (code {e.returncode}): {error_msg}"
             )
+            return None
         except Exception as e:
-            logger.warning(f"pkexec error: {e}. Falling back to sudo.")
+            # pkexec itself could not be executed (e.g. missing polkit agent).
+            # Only in this case do we fall back to the sudo password dialog.
+            logger.warning(f"pkexec could not run: {e}. Falling back to sudo.")
 
-    # Fallback to sudo with GUI password prompt
+    # Fallback to sudo with GUI password prompt (only reached when pkexec is
+    # unavailable or failed to execute at all)
     logger.info("Falling back to sudo with themed password prompt")
 
     dialog = CTkPasswordDialog(
@@ -105,27 +145,6 @@ def run_privileged_command(command_args):
     except Exception as e:
         logger.error(f"sudo error: {e}")
         return None
-
-
-def run_as_admin(file_path):
-    """
-    Attempt to elevate the script to admin privileges on Linux.
-
-    :param file_path: The path to the script file.
-    :return: True if elevation is successful, False otherwise.
-    """
-    if is_admin():
-        logger.info("Already running as root.")
-        return True
-    else:
-        logger.info("Attempting to elevate to root...")
-        result = run_privileged_command([sys.executable, file_path])
-        if result and result.returncode == 0:
-            logger.info("Elevation request accepted.")
-            return True
-        else:
-            logger.info("Elevation request denied or failed.")
-            return False
 
 
 def run_installer_as_admin(file_path):
@@ -186,36 +205,67 @@ def generate_wireguard_keys():
         return None
 
 
-def get_wireguard_private_key():
-    """Retrieve the WireGuard private key from the keys file."""
+def _settings():
+    from utils import settings
+    return settings
+
+
+def _migrate_legacy_keys():
+    """Move keys from the old plaintext keys.json into encrypted settings."""
+    if not os.path.exists(KEYS_FILE_PATH):
+        return
     try:
-        if os.path.exists(KEYS_FILE_PATH):
-            with open(KEYS_FILE_PATH, "r") as f:
-                keys = json.load(f)
-                return keys.get("private_key")
-        return None
+        with open(KEYS_FILE_PATH, "r") as f:
+            keys = json.load(f)
+        if keys.get("private_key") and keys.get("public_key"):
+            if not _save_secrets(keys["private_key"], keys["public_key"]):
+                return  # keep the file rather than lose the key
+        os.remove(KEYS_FILE_PATH)
+        logger.info("Moved WireGuard keys from keys.json to encrypted settings")
+    except Exception as e:
+        logger.error(f"Could not migrate legacy WireGuard keys: {e}")
+
+
+def _save_secrets(private_key, public_key):
+    s = _settings()
+    return bool(s.set_secret("wireguard", "private_key", private_key)
+                and s.set_secret("wireguard", "public_key", public_key))
+
+
+def get_wireguard_private_key():
+    """Retrieve the WireGuard private key (encrypted settings)."""
+    try:
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "private_key")
     except Exception as e:
         logger.error(f"Error retrieving private key: {e}")
         return None
 
 
-def save_wireguard_keys(private_key, public_key):
-    """Save the WireGuard keys to the keys file securely."""
+def get_wireguard_public_key():
     try:
-        os.makedirs(os.path.dirname(KEYS_FILE_PATH), exist_ok=True)
-        keys = {"private_key": private_key, "public_key": public_key}
-        with open(KEYS_FILE_PATH, "w") as f:
-            json.dump(keys, f)
-        os.chmod(KEYS_FILE_PATH, 0o600)
-        return True
+        _migrate_legacy_keys()
+        return _settings().get_secret("wireguard", "public_key")
+    except Exception as e:
+        logger.error(f"Error retrieving public key: {e}")
+        return None
+
+
+def save_wireguard_keys(private_key, public_key):
+    """Save the WireGuard keys encrypted (settings secrets, keyring-backed)."""
+    try:
+        return _save_secrets(private_key, public_key)
     except Exception as e:
         logger.error(f"Error saving keys: {e}")
         return False
 
 
 def delete_wireguard_keys():
-    """Delete the WireGuard keys file."""
+    """Delete the WireGuard keys (and any legacy plaintext keys.json)."""
     try:
+        s = _settings()
+        s.delete("wireguard", "private_key")
+        s.delete("wireguard", "public_key")
         if os.path.exists(KEYS_FILE_PATH):
             os.remove(KEYS_FILE_PATH)
         return True
@@ -236,8 +286,16 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
         str: Path to created config file, or None if failed
     """
     try:
-        # Parse the VPN config JSON string
-        vpn_config = json.loads(vpn_config_json_string)
+        # Accept the config either already parsed (a dict) or as a JSON string,
+        # like macOS does. Blindly calling json.loads() on a dict raises
+        # TypeError, which silently dropped the config and left the setup
+        # wizard reporting "No VPN configuration found".
+        if isinstance(vpn_config_json_string, (bytes, bytearray)):
+            vpn_config_json_string = vpn_config_json_string.decode("utf-8")
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})
@@ -256,6 +314,20 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             logger.error("Private key not found in keychain")
             return None
 
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+            extra_peer_lines = optional_peer_lines(peer_config)
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
+            return None
+
         # Convert AllowedIPs array to comma-separated string
         allowed_ips_str = (
             ", ".join(allowed_ips)
@@ -270,7 +342,9 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             else str(dns_servers)
         )
 
-        # Build WireGuard config content
+        # Build WireGuard config content. The canonical `DNS =` directive is
+        # stored here; host-specific DNS compatibility (resolvconf vs
+        # resolvectl) is applied at bring-up time in start_vpn().
         config_content = f"""[Interface]
 PrivateKey = {private_key}
 Address = {client_address}
@@ -281,6 +355,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Determine config path using the shared utility
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -381,15 +457,124 @@ def stop_vpn(config_path):
     """
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
+        if not is_valid_config_name(iface):
+            logger.error(f"Refusing to stop VPN: invalid interface name {iface!r}")
+            return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
         # Use interface name so AppArmor-confined wg-quick (Ubuntu) can access
         # the config; clean up the /etc/wireguard copy afterwards.
-        script = f"wg-quick down '{iface}'; rm -f '{etc_conf}'"
+        script = (
+            f"wg-quick down {shlex.quote(iface)}; rm -f {shlex.quote(etc_conf)}"
+        )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0
     except Exception as e:
         logger.error(f"Failed to stop VPN service: {e}")
         return False
+
+
+def make_dns_compatible_config(config_path):
+    """
+    Return a path to a WireGuard config whose DNS handling works on this host.
+
+    wg-quick's `DNS =` directive shells out to `resolvconf`, which isn't present
+    on every distro (e.g. Arch without the systemd-resolvconf package). When
+    resolvconf is missing, rewrite the `DNS =` line into systemd-resolved
+    `resolvectl` PostUp/PostDown hooks — each guarded with `|| true` so a DNS
+    failure never tears the tunnel back down — or drop it entirely if neither
+    tool exists. When resolvconf is present the config is used unchanged.
+
+    The (possibly rewritten) config is written alongside the original; the
+    user's stored config is never modified. Returns the original path if no
+    rewrite is needed or on any error.
+    """
+    try:
+        with open(config_path, "r") as config_file:
+            lines = config_file.readlines()
+    except OSError as e:
+        logger.warning(f"Could not read config for DNS compatibility check: {e}")
+        return config_path
+
+    def is_dns_line(line):
+        stripped = line.strip()
+        return stripped.lower().startswith("dns") and "=" in stripped
+
+    dns_values = []
+    for line in lines:
+        if is_dns_line(line):
+            _, _, value = line.strip().partition("=")
+            dns_values = [d.strip() for d in value.replace(",", " ").split() if d.strip()]
+            break
+
+    # DNS values are interpolated into root PostUp shell commands below; drop
+    # anything that is not a plain IP / domain token so a crafted config
+    # can't smuggle shell metacharacters in.
+    safe_dns = [d for d in dns_values if _SAFE_DNS_TOKEN.fullmatch(d)]
+    if len(safe_dns) != len(dns_values):
+        logger.warning("Ignoring DNS entries with unexpected characters")
+    dns_values = safe_dns
+
+    # No DNS directive, or resolvconf is available -> use config as-is.
+    if not dns_values or shutil.which("resolvconf"):
+        return config_path
+
+    def resolved_active():
+        try:
+            return (
+                subprocess.run(
+                    ["systemctl", "is-active", "--quiet", "systemd-resolved"]
+                ).returncode
+                == 0
+            )
+        except Exception:
+            return False
+
+    if shutil.which("resolvectl") and resolved_active():
+        # systemd-resolved is running: set per-link DNS the clean way.
+        dns_list = " ".join(dns_values)
+        replacement = [
+            f"PostUp = resolvectl dns %i {dns_list} || true\n",
+            "PostUp = resolvectl domain %i ~. || true\n",
+            "PostDown = resolvectl revert %i || true\n",
+        ]
+        logger.info("resolvconf not found; using resolvectl for tunnel DNS")
+    else:
+        # No resolvconf and no active systemd-resolved (e.g. a plain
+        # NetworkManager host). Manage /etc/resolv.conf directly for the
+        # lifetime of the tunnel: back it up on up, restore it on down. Guarded
+        # with `|| true` so a write failure never tears the tunnel down.
+        ns_block = "".join(f"nameserver {d}\\n" for d in dns_values)
+        backup = "/etc/resolv.conf.wg-%i.bak"
+        replacement = [
+            f"PostUp = cp -fp /etc/resolv.conf '{backup}' 2>/dev/null || true\n",
+            f"PostUp = printf '{ns_block}' > /etc/resolv.conf 2>/dev/null || true\n",
+            f"PostDown = mv -f '{backup}' /etc/resolv.conf 2>/dev/null || true\n",
+        ]
+        logger.info(
+            "resolvconf and systemd-resolved unavailable; managing "
+            "/etc/resolv.conf directly for tunnel DNS"
+        )
+
+    new_lines = []
+    for line in lines:
+        if is_dns_line(line):
+            new_lines.extend(replacement)
+        else:
+            new_lines.append(line)
+
+    iface = os.path.splitext(os.path.basename(config_path))[0]
+    compat_path = os.path.join(
+        os.path.dirname(config_path), f".{iface}.compat.conf"
+    )
+    try:
+        with open(compat_path, "w") as compat_file:
+            compat_file.writelines(new_lines)
+        os.chmod(compat_path, 0o600)
+    except OSError as e:
+        logger.error(f"Failed to write DNS-compatible config: {e}")
+        return config_path
+
+    return compat_path
 
 
 def start_vpn(config_path):
@@ -401,13 +586,19 @@ def start_vpn(config_path):
     """
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
+        if not is_valid_config_name(iface):
+            logger.error(f"Refusing to start VPN: invalid interface name {iface!r}")
+            return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Adapt DNS handling to whatever this host provides (resolvconf vs
+        # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
+        src_conf = make_dns_compatible_config(config_path)
         # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
         # wg-quick only permits reading configs from that directory.
         script = (
-            f"cp '{config_path}' '{etc_conf}' && "
-            f"chmod 600 '{etc_conf}' && "
-            f"wg-quick up '{iface}'"
+            f"cp {shlex.quote(src_conf)} {shlex.quote(etc_conf)} && "
+            f"chmod 600 {shlex.quote(etc_conf)} && "
+            f"wg-quick up {shlex.quote(iface)}"
         )
         result = run_privileged_command(["sh", "-c", script])
         return result is not None and result.returncode == 0

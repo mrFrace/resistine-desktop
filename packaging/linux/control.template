@@ -1,0 +1,12 @@
+Package: phoenix
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: amd64
+Depends: wireguard-tools, libxcb-cursor0
+Conflicts: resistine
+Replaces: resistine
+Provides: resistine
+Maintainer: Phoenix Team <info@phoenix.exposed>
+Description: Phoenix Desktop Application
+ Phoenix is a security endpoint and VPN manager.

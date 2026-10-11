@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-# Resistine Distribution Build Script
+# Phoenix Distribution Build Script
 # Builds, signs with Developer ID, creates DMG, notarizes, and staples.
 # Use build-installer.sh for local development/testing (Apple Development signing).
 # Use this script for public distribution (Developer ID + notarization).
 
-echo "=== Resistine Distribution Build ==="
+echo "=== Phoenix Distribution Build ==="
 echo "Building for public distribution (Developer ID + Notarization)"
 echo ""
 
@@ -28,7 +28,8 @@ echo ""
 # Build configuration
 BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
-APP_NAME="Resistine"
+APP_NAME="Resistine"   # bundle file name (Resistine.app); see packaging/Resistine.spec
+DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 BUNDLE_ID="com.resistine.desktop"
 
 # ============================================================
@@ -526,10 +527,31 @@ PLISTEOF
     # into the gitignored clamav-artifacts/ dir, which download-clamav-artifacts.sh
     # wipes+repopulates each build).
     LAUNCHD_SRC="$CLAMAV_ARTIFACTS_DIR/launchd"
-    mkdir -p "$PYTHON_APP/Contents/Library/LaunchDaemons"
+    DAEMONS_DIR="$PYTHON_APP/Contents/Library/LaunchDaemons"
+    mkdir -p "$DAEMONS_DIR"
     if [ -d "$LAUNCHD_SRC" ]; then
-        cp "$LAUNCHD_SRC/"*.plist "$PYTHON_APP/Contents/Library/LaunchDaemons/"
+        cp "$LAUNCHD_SRC/"*.plist "$DAEMONS_DIR/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
+
+        # Normalize legacy plist names to the com.resistine.desktop.* convention
+        # that clamav-postinstall-darwin.sh (load_daemons step) and the runtime
+        # SMAppService registration both expect. The ClamAV-Mac CI artifact still
+        # ships the pre-migration names (com.resistine.clamd / com.resistine.clamonacc);
+        # only freshclam was migrated. Without this rename the postinstall fails
+        # with "plist not found: com.resistine.desktop.clamd.plist" and antivirus
+        # setup never completes. Renames the file AND rewrites the internal Label
+        # so SMAppService registers under the matching identifier. Idempotent: a
+        # no-op once the upstream artifact ships the .desktop. names.
+        for base in clamd clamonacc; do
+            old="$DAEMONS_DIR/com.resistine.$base.plist"
+            new="$DAEMONS_DIR/com.resistine.desktop.$base.plist"
+            if [ -f "$old" ]; then
+                /usr/bin/sed -i '' \
+                    "s/com\.resistine\.$base/com.resistine.desktop.$base/g" "$old"
+                mv "$old" "$new"
+                echo "  - Normalized com.resistine.$base.plist -> com.resistine.desktop.$base.plist"
+            fi
+        done
     else
         echo "  - Warning: No launchd plists found in artifacts"
     fi
@@ -818,6 +840,33 @@ find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
 done
 echo "    Framework/library signing complete"
 
+# 5d-2: Sign Qt framework binaries (PyQt6)
+# PyInstaller bundles Qt as Contents/Frameworks/PyQt6/Qt6/lib/<Name>.framework
+# whose main binaries are EXTENSIONLESS Mach-O files (Versions/A/QtCore etc.)
+# — the pattern-find above never matches them, which fails notarization
+# ("binary is not signed with a valid Developer ID certificate"). PyQt6 wheels
+# ship slimmed frameworks without Resources/Info.plist, so codesign on the
+# .framework bundle can error with "bundle format unrecognized"; sign each
+# Mach-O binary file directly instead — exactly the paths the notary log
+# reports.
+echo "  - Signing Qt framework binaries (PyQt6)..."
+_QT_SIGNED=0
+while IFS= read -r binary; do
+    file "$binary" 2>/dev/null | grep -q "Mach-O" || continue
+    codesign --force --sign "$SIGN_IDENTITY" \
+        --options runtime \
+        --timestamp \
+        "$binary" 2>/dev/null || {
+        echo "    Warning: Failed to sign: $binary"
+        continue
+    }
+    _QT_SIGNED=$((_QT_SIGNED + 1))
+done < <(find "$PYTHON_APP/Contents/Frameworks" \
+    -path "*.framework/Versions/*" -type f \
+    ! -name "*.plist" ! -name "*.prl" ! -name "*.h" \
+    ! -path "*Sparkle.framework*" ! -path "*Python.framework*")
+echo "    Qt framework binaries signed ($_QT_SIGNED)"
+
 # 5e: Sign Sparkle.framework (inner-to-outer: deepest bundles first)
 if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     SPARKLE_FW="$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
@@ -1038,7 +1087,7 @@ pkgbuild \
 cat > "$DIST_DIR/distribution.xml" << DISTEOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>$APP_NAME</title>
+    <title>$DISPLAY_NAME</title>
     <organization>com.resistine</organization>
     <domains enable_localSystem="true"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
@@ -1072,7 +1121,7 @@ fi
 
 # Build the final product archive
 echo "  - Building product archive..."
-PKG_PATH="$DIST_DIR/$APP_NAME-Installer.pkg"
+PKG_PATH="$DIST_DIR/$DISPLAY_NAME-Installer.pkg"
 
 if [ -n "$INSTALLER_NAME" ]; then
     productbuild \
@@ -1116,7 +1165,7 @@ if ! command -v create-dmg &> /dev/null; then
     fi
 fi
 
-rm -f "$DIST_DIR/$APP_NAME-Installer.dmg"
+rm -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 
 BACKGROUND_FLAG=""
 if [ -f "$PYTHON_UI_PATH/resources/installer-background.png" ]; then
@@ -1129,7 +1178,7 @@ if [ -f "$PYTHON_UI_PATH/resources/icons/PhoenixMark.png" ]; then
 fi
 
 create-dmg \
-  --volname "$APP_NAME Installer" \
+  --volname "$DISPLAY_NAME Installer" \
   $ICON_FLAG \
   --window-pos 200 120 \
   --window-size 800 400 \
@@ -1138,22 +1187,22 @@ create-dmg \
   --hide-extension "$APP_NAME.app" \
   --app-drop-link 600 185 \
   $BACKGROUND_FLAG \
-  "$DIST_DIR/$APP_NAME-Installer.dmg" \
+  "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" \
   "$PYTHON_APP" 2>&1 || {
     echo "  DMG creation had warnings but may have succeeded"
   }
 
-if [ ! -f "$DIST_DIR/$APP_NAME-Installer.dmg" ]; then
+if [ ! -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" ]; then
     echo "  Error: DMG creation failed"
     exit 1
 fi
 
-DMG_SIZE=$(du -h "$DIST_DIR/$APP_NAME-Installer.dmg" | cut -f1)
-echo "  DMG created: $DIST_DIR/$APP_NAME-Installer.dmg ($DMG_SIZE)"
+DMG_SIZE=$(du -h "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" | cut -f1)
+echo "  DMG created: $DIST_DIR/$DISPLAY_NAME-Installer.dmg ($DMG_SIZE)"
 
 # Sign the DMG
 echo "  - Signing DMG..."
-codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST_DIR/$APP_NAME-Installer.dmg" || {
+codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" || {
     echo "  DMG signing failed"
     exit 1
 }
@@ -1203,18 +1252,18 @@ if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (no credentials configured)"
     echo ""
     echo "  To notarize manually later:"
-    echo "    xcrun notarytool submit $DIST_DIR/$APP_NAME-Installer.pkg \\"
+    echo "    xcrun notarytool submit $DIST_DIR/$DISPLAY_NAME-Installer.pkg \\"
     echo "      --keychain-profile \"resistine-notarize\" --wait"
-    echo "    xcrun stapler staple $DIST_DIR/$APP_NAME-Installer.pkg"
+    echo "    xcrun stapler staple $DIST_DIR/$DISPLAY_NAME-Installer.pkg"
 else
     # Notarize PKG (primary)
-    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.pkg" "PKG" || {
+    notarize_and_staple "$DIST_DIR/$DISPLAY_NAME-Installer.pkg" "PKG" || {
         echo "  Fix the issues above and re-run this script."
         exit 1
     }
 
     # Notarize DMG (secondary)
-    notarize_and_staple "$DIST_DIR/$APP_NAME-Installer.dmg" "DMG" || {
+    notarize_and_staple "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" "DMG" || {
         echo "  Warning: DMG notarization failed (PKG is still valid)"
     }
 fi
@@ -1263,8 +1312,8 @@ echo "==================================="
 echo "  Distribution Build Complete!"
 echo "==================================="
 echo ""
-echo "  PKG Installer: $DIST_DIR/$APP_NAME-Installer.pkg  (recommended)"
-echo "  DMG Installer: $DIST_DIR/$APP_NAME-Installer.dmg  (drag-and-drop alternative)"
+echo "  PKG Installer: $DIST_DIR/$DISPLAY_NAME-Installer.pkg  (recommended)"
+echo "  DMG Installer: $DIST_DIR/$DISPLAY_NAME-Installer.dmg  (drag-and-drop alternative)"
 echo "  App Bundle:    $PYTHON_APP"
 echo ""
 if [ "$SKIP_NOTARIZE" = true ]; then

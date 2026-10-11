@@ -91,7 +91,7 @@ CURRENT_STEP="init"
 # signed macOS security apps require /Applications for the same reason. This
 # runs after write_status() is defined so the UI sees the failure reason.
 if [ "$APP_CONTENTS" != "/Applications/Resistine.app/Contents" ]; then
-    write_status "{\"status\":\"failed\",\"step\":\"validate\",\"error\":\"Resistine must be installed in /Applications (found: $APP_CONTENTS)\",\"error_code\":\"WRONG_INSTALL_LOCATION\",\"exit_code\":1,\"pid\":$$,\"ts\":$(date +%s)}"
+    write_status "{\"status\":\"failed\",\"step\":\"validate\",\"error\":\"Phoenix (Resistine.app) must be installed in /Applications (found: $APP_CONTENTS)\",\"error_code\":\"WRONG_INSTALL_LOCATION\",\"exit_code\":1,\"pid\":$$,\"ts\":$(date +%s)}"
     echo "Resistine must be installed in /Applications. Move Resistine.app to /Applications and reopen it." >&2
     exit 1
 fi

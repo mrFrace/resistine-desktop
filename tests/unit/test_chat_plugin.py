@@ -1,44 +1,81 @@
 """
-Unit tests for plugins/chat/main.py — Chat Plugin logic.
+Unit tests for plugins/chat/main.py — Chat Plugin (PyQt6) logic.
 
-Tests the non-GUI business logic only. All GUI widgets (customtkinter, tkinter)
-are stubbed in conftest.py. The OpenAI client is mocked via patch.
+The OpenAI SDK client and httpx.Client are replaced with mocks; no network.
+Widget tests build the real chat screen under an offscreen QApplication with
+the endpoint-agent access gate forced open, and replace StreamController so
+the request a send would make can be inspected.
 
 Covers:
-- check_status: "OK" when client is set, "Warning" when None
-- reinitialize_client: no API key → client=None
-- reinitialize_client: API key present → client initialized
-- reinitialize_client: custom base_url → model changes, session_id reset
-- send_message_to_chatgpt: no client → yields error message
-- send_message_to_chatgpt: client present → yields chunks from stream
-- send_message_to_chatgpt: appends to conversation_history
-- _clear_conversation: resets history to system prompt (standard) or [] (custom URL)
-- _clear_conversation: resets session_id to None
+- check_status: client + access gate
+- reinitialize_client (OpenAI transport): default/custom base URL, API key
+  handling, TLS http_client for HTTPS, init failure, session/history reset
+- send_message: guards, history append, payload (server-side session mode)
+- stream callbacks: done / empty / error persist correctly
+- StreamController end-to-end against a mocked OpenAI stream
+- _new_chat / _delete_chat: session reset (replaces old _clear_conversation)
 """
-import sys
+import os
+import time
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
+
+from plugins.chat import main as chat_main
 
 
 # ---------------------------------------------------------------------------
-# Fixture: minimal Plugin instance with no API key (client=None)
+# Fixtures
 # ---------------------------------------------------------------------------
 @pytest.fixture()
-def plugin(isolated_settings):
-    """Create a Chat Plugin with a mocked app; no API key configured."""
-    app = MagicMock()
+def openai_cls(monkeypatch):
+    """Replace openai.OpenAI and httpx.Client so client init never networks."""
+    import httpx
+    import openai
+
+    cls = MagicMock(name="OpenAI")
+    monkeypatch.setattr(openai, "OpenAI", cls)
+    monkeypatch.setattr(httpx, "Client", MagicMock(name="httpx.Client"))
+    monkeypatch.setattr(chat_main, "_tls_verify", lambda: "/ca.pem")
+    return cls
+
+
+@pytest.fixture()
+def plugin(isolated_settings, openai_cls):
+    """Chat Plugin on the default (OpenAI-compatible) transport."""
     from plugins.chat.main import Plugin
-    return Plugin(app)
+    return Plugin(MagicMock())
 
 
 @pytest.fixture()
-def plugin_with_client(plugin):
-    """Chat Plugin with a mock OpenAI client pre-injected."""
-    plugin.client = MagicMock()
-    plugin.base_url = None
-    plugin.model = "gpt-4o"
-    plugin.session_id = None
-    return plugin
+def qapp():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture()
+def stream_cls(monkeypatch):
+    """Capture StreamController construction/start instead of streaming."""
+    cls = MagicMock(name="StreamController")
+    cls.return_value.is_active = False
+    monkeypatch.setattr(chat_main, "StreamController", cls)
+    return cls
+
+
+@pytest.fixture()
+def screen(qapp, plugin, stream_cls, monkeypatch):
+    """The live chat screen with the access gate open."""
+    monkeypatch.setattr(chat_main.Plugin, "_chat_access_status",
+                        staticmethod(lambda: True))
+    root = plugin.create_main_screen()
+    yield plugin
+    root.deleteLater()
+
+
+def _send(p, text):
+    p.chat_entry.setText(text)
+    p.send_message()
 
 
 # ===========================================================================
@@ -50,256 +87,307 @@ class TestCheckStatus:
         plugin.client = None
         assert plugin.check_status() == "Warning"
 
-    def test_returns_ok_when_client_is_set(self, plugin):
+    def test_ok_when_client_set_and_agent_running(self, plugin, monkeypatch):
+        monkeypatch.setattr(chat_main.Plugin, "_chat_access_status",
+                            staticmethod(lambda: True))
         plugin.client = MagicMock()
         assert plugin.check_status() == "OK"
 
+    def test_warning_when_agent_not_running(self, plugin, monkeypatch):
+        monkeypatch.setattr(chat_main.Plugin, "_chat_access_status",
+                            staticmethod(lambda: False))
+        plugin.client = MagicMock()
+        assert plugin.check_status() == "Warning"
+
+    def test_access_follows_wazuh_agent_running(self, monkeypatch):
+        from plugins.wazuh import main as wz
+        monkeypatch.setattr(wz, "is_agent_running", lambda: True)
+        assert chat_main.Plugin._chat_access_status() is True
+        monkeypatch.setattr(wz, "is_agent_running", lambda: False)
+        assert chat_main.Plugin._chat_access_status() is False
+
 
 # ===========================================================================
-# reinitialize_client
+# reinitialize_client (OpenAI-compatible transport)
 # ===========================================================================
 @pytest.mark.unit
 class TestReinitializeClient:
-    def test_no_api_key_sets_client_to_none(self, plugin, isolated_settings):
-        """When no api key is stored, client must be None after reinit."""
-        # isolated_settings has no "chat"/"openai_api_key"
+    def test_default_base_url_without_api_key(self, plugin, openai_cls):
+        """No settings at all → default HTTPS endpoint, placeholder key, CA bundle."""
+        openai_cls.reset_mock()
         plugin.reinitialize_client()
-        assert plugin.client is None
+        assert plugin.transport == "openai"
+        assert plugin.base_url == chat_main._DEFAULT_BASE_URL
+        assert plugin.client is openai_cls.return_value
+        kwargs = openai_cls.call_args.kwargs
+        assert kwargs["api_key"] == "unused"
+        assert kwargs["base_url"] == chat_main._DEFAULT_BASE_URL
+        assert "http_client" in kwargs
 
-    def test_api_key_initializes_client(self, plugin, isolated_settings):
-        """When an api key is present, client must be non-None after reinit."""
-        isolated_settings.set_secret("chat", "openai_api_key", "sk-test-key-12345")
+    def test_https_endpoint_uses_tls_verify_bundle(self, plugin, openai_cls):
+        import httpx
+        httpx.Client.reset_mock()
+        plugin.reinitialize_client()
+        httpx.Client.assert_called_once_with(verify="/ca.pem")
+        assert openai_cls.call_args.kwargs["http_client"] is httpx.Client.return_value
 
-        mock_openai_cls = MagicMock()
-        mock_openai_cls.return_value = MagicMock()
-
-        with patch.dict(sys.modules, {"openai": MagicMock(OpenAI=mock_openai_cls)}):
-            plugin.reinitialize_client()
-
-        assert plugin.client is not None
-
-    def test_api_key_failure_sets_client_to_none(self, plugin, isolated_settings):
-        """If OpenAI() raises on construction, client must be set to None gracefully."""
-        isolated_settings.set_secret("chat", "openai_api_key", "sk-bad-key")
-
-        mock_openai_mod = MagicMock()
-        mock_openai_mod.OpenAI.side_effect = Exception("invalid key format")
-
-        with patch.dict(sys.modules, {"openai": mock_openai_mod}):
-            plugin.reinitialize_client()
-
-        assert plugin.client is None
-
-    def test_reinit_resets_session_id(self, plugin_with_client):
-        """reinitialize_client must reset session_id to None."""
-        plugin_with_client.session_id = "old-session-abc"
-        plugin_with_client.reinitialize_client()
-        assert plugin_with_client.session_id is None
-
-    def test_custom_base_url_uses_local_model(self, plugin, isolated_settings):
-        """When base_url is set, model must be the local model, not gpt-4o."""
-        isolated_settings.set("chat", "openai_base_url", "http://localhost:11434/v1")
+    def test_api_key_and_plain_http_url_forwarded(self, plugin, isolated_settings, openai_cls):
+        url = "http://localhost:11434/v1"
+        isolated_settings.set("chat", "openai_base_url", url)
         isolated_settings.set_secret("chat", "openai_api_key", "sk-local")
-
-        mock_openai_mod = MagicMock()
-        with patch.dict(sys.modules, {"openai": mock_openai_mod}):
-            plugin.reinitialize_client()
-
-        assert plugin.model != "gpt-4o"
-        assert plugin.base_url == "http://localhost:11434/v1"
-
-    def test_custom_base_url_passed_to_openai_constructor(self, plugin, isolated_settings):
-        """The base_url from settings must be forwarded to OpenAI(base_url=...)."""
-        custom_url = "http://localhost:11434/v1"
-        isolated_settings.set("chat", "openai_base_url", custom_url)
-        isolated_settings.set_secret("chat", "openai_api_key", "sk-local")
-
-        mock_openai_cls = MagicMock()
-        mock_openai_mod = MagicMock()
-        mock_openai_mod.OpenAI = mock_openai_cls
-
-        with patch.dict(sys.modules, {"openai": mock_openai_mod}):
-            plugin.reinitialize_client()
-
-        if mock_openai_cls.call_args:
-            kwargs = mock_openai_cls.call_args[1]
-            assert kwargs.get("base_url") == custom_url
-
-    def test_standard_mode_adds_system_prompt_to_history(self, plugin, isolated_settings):
-        """Without base_url, conversation_history must start with a system message."""
-        isolated_settings.set("chat", "openai_base_url", None)  # clear base_url
         plugin.reinitialize_client()
+        kwargs = openai_cls.call_args.kwargs
+        assert kwargs == {"api_key": "sk-local", "base_url": url}  # no http_client
+        assert plugin.base_url == url
 
-        roles = [msg.get("role") for msg in plugin.conversation_history]
-        assert "system" in roles, "Standard mode must include system prompt in history"
-
-    def test_custom_url_mode_starts_with_empty_history(self, plugin, isolated_settings):
-        """With base_url set, conversation_history must be empty (no system prompt)."""
-        isolated_settings.set("chat", "openai_base_url", "http://localhost:11434/v1")
+    def test_server_side_mode_resets_model_history_and_session(self, plugin):
+        plugin.session_id = "old-session-abc"
+        plugin.model = "something"
+        plugin.conversation_history = [{"role": "user", "content": "x"}]
         plugin.reinitialize_client()
-        # History is empty for custom URL mode
+        assert plugin.session_id is None
+        assert plugin.model == "ministral-3:14b"
+        # The server keeps the conversation: no local system prompt.
         assert plugin.conversation_history == []
+
+    def test_empty_base_url_setting_falls_back_to_default(self, plugin, isolated_settings):
+        isolated_settings.set("chat", "openai_base_url", "")
+        plugin.reinitialize_client()
+        assert plugin.base_url == chat_main._DEFAULT_BASE_URL
+
+    def test_init_failure_sets_client_none(self, plugin, openai_cls):
+        openai_cls.side_effect = Exception("invalid key format")
+        plugin.reinitialize_client()
+        assert plugin.client is None
+        plugin.app.show_notification.assert_not_called()
+
+    def test_init_failure_notifies_when_requested(self, plugin, openai_cls):
+        openai_cls.side_effect = Exception("boom")
+        plugin.reinitialize_client(notify=True)
+        assert plugin.client is None
+        msg = plugin.app.show_notification.call_args
+        assert "boom" in msg.args[0]
+        assert msg.kwargs["type"] == "error"
+
+    def test_openai_transport_shuts_down_matrix_service(self, plugin, monkeypatch):
+        from plugins.chat import matrix_transport
+        shutdown = MagicMock()
+        monkeypatch.setattr(matrix_transport, "shutdown_service", shutdown)
+        plugin.reinitialize_client()
+        shutdown.assert_called_once()
 
 
 # ===========================================================================
-# send_message_to_chatgpt
+# send_message
 # ===========================================================================
 @pytest.mark.unit
 class TestSendMessage:
-    def _make_chunk(self, content: str):
-        """Create a mock stream chunk with the given content."""
-        chunk = MagicMock()
-        chunk.choices = [MagicMock()]
-        chunk.choices[0].delta.content = content
-        # No session_id by default
-        del chunk.session_id
-        return chunk
+    def test_no_client_is_noop(self, screen, stream_cls):
+        screen.client = None
+        _send(screen, "Hello?")
+        stream_cls.return_value.start.assert_not_called()
+        assert not any(m["role"] == "user" for m in screen.conversation_history)
 
-    def test_no_client_yields_error_message(self, plugin):
-        """With no client and no api key, must yield a single error string."""
-        plugin.client = None
-        # Ensure reinitialize_client won't create a client either
-        chunks = list(plugin.send_message_to_chatgpt("Hello?"))
-        assert len(chunks) >= 1
-        assert any("Error" in c or "key" in c.lower() for c in chunks), (
-            f"Expected error message in chunks, got: {chunks}"
-        )
+    def test_blank_message_is_noop(self, screen, stream_cls):
+        _send(screen, "   ")
+        stream_cls.return_value.start.assert_not_called()
 
-    def test_standard_mode_yields_response_chunks(self, plugin_with_client):
-        """With a working client (standard mode), chunks from the stream are yielded."""
-        chunks_to_yield = [
-            self._make_chunk("Hello"),
-            self._make_chunk(" world"),
-            self._make_chunk("!"),
-        ]
-        plugin_with_client.client.chat.completions.create.return_value = iter(chunks_to_yield)
+    def test_too_long_message_rejected(self, screen, stream_cls):
+        _send(screen, "x" * 15001)
+        stream_cls.return_value.start.assert_not_called()
+        msg = screen.app.show_notification.call_args
+        assert "15,000" in msg.args[0] and msg.kwargs["type"] == "warning"
 
-        result = list(plugin_with_client.send_message_to_chatgpt("Hi"))
+    def test_user_message_appended_and_input_cleared(self, screen):
+        _send(screen, "  My question  ")
+        assert screen.conversation_history[-1] == {"role": "user", "content": "My question"}
+        assert screen.chat_entry.text() == ""
+        assert not screen.chat_entry.isEnabled()  # locked while streaming
 
-        assert result == ["Hello", " world", "!"]
-
-    def test_standard_mode_assembles_full_response(self, plugin_with_client):
-        """The full assembled response must be appended to conversation_history."""
-        chunks_to_yield = [self._make_chunk("Part1"), self._make_chunk("Part2")]
-        plugin_with_client.client.chat.completions.create.return_value = iter(chunks_to_yield)
-
-        list(plugin_with_client.send_message_to_chatgpt("test"))
-
-        assistant_msgs = [
-            m["content"] for m in plugin_with_client.conversation_history
-            if m.get("role") == "assistant"
-        ]
-        assert any("Part1Part2" in m for m in assistant_msgs), (
-            f"Full assembled response not in history: {assistant_msgs}"
-        )
-
-    def test_user_message_appended_to_history(self, plugin_with_client):
-        """The user's message must be added to conversation_history."""
-        plugin_with_client.client.chat.completions.create.return_value = iter([
-            self._make_chunk("Response")
-        ])
-
-        list(plugin_with_client.send_message_to_chatgpt("My question"))
-
-        user_msgs = [
-            m["content"] for m in plugin_with_client.conversation_history
-            if m.get("role") == "user"
-        ]
-        assert "My question" in user_msgs
-
-    def test_empty_chunk_content_skipped(self, plugin_with_client):
-        """Chunks with None/empty content must not be yielded."""
-        chunk_empty = MagicMock()
-        chunk_empty.choices = [MagicMock()]
-        chunk_empty.choices[0].delta.content = None
-
-        chunk_real = self._make_chunk("actual content")
-        plugin_with_client.client.chat.completions.create.return_value = iter([
-            chunk_empty, chunk_real
-        ])
-
-        result = list(plugin_with_client.send_message_to_chatgpt("test"))
-        assert None not in result
-        assert "actual content" in result
-
-    def test_custom_url_mode_sends_single_message_not_history(self, plugin_with_client):
-        """In custom URL mode, only the current message is sent (not full history)."""
-        plugin_with_client.base_url = "http://localhost:11434/v1"
-        plugin_with_client.conversation_history = []
-
-        chunk = self._make_chunk("response")
-        plugin_with_client.client.chat.completions.create.return_value = iter([chunk])
-
-        list(plugin_with_client.send_message_to_chatgpt("test message"))
-
-        call_kwargs = plugin_with_client.client.chat.completions.create.call_args[1]
-        messages = call_kwargs.get("messages", [])
-        # In custom URL mode, only the current message is sent
-        assert len(messages) == 1
-        assert messages[0]["content"] == "test message"
-
-    def test_custom_url_mode_includes_session_id_if_set(self, plugin_with_client):
-        """If session_id is set, it must be included in extra_body."""
-        plugin_with_client.base_url = "http://localhost:11434/v1"
-        plugin_with_client.session_id = "existing-session-123"
-        plugin_with_client.conversation_history = []
-
-        chunk = self._make_chunk("hi")
-        plugin_with_client.client.chat.completions.create.return_value = iter([chunk])
-
-        list(plugin_with_client.send_message_to_chatgpt("hello"))
-
-        call_kwargs = plugin_with_client.client.chat.completions.create.call_args[1]
-        extra_body = call_kwargs.get("extra_body", {})
-        assert extra_body.get("session_id") == "existing-session-123"
-
-
-# ===========================================================================
-# _clear_conversation
-# ===========================================================================
-@pytest.mark.unit
-class TestClearConversation:
-    def test_standard_mode_clear_resets_to_system_prompt(self, plugin):
-        """In standard mode (no base_url), clear must restore the system message."""
-        plugin.base_url = None
-        plugin.conversation_history = [
-            {"role": "system", "content": "system"},
-            {"role": "user", "content": "old msg"},
-            {"role": "assistant", "content": "old reply"},
-        ]
-        # Stub out the GUI rebuild
-        plugin.second_frame = MagicMock()
-        plugin.create_main_screen = MagicMock(return_value=MagicMock())
-
-        plugin._clear_conversation()
-
-        roles = [m.get("role") for m in plugin.conversation_history]
-        # After clear, only the system prompt should remain (no user/assistant)
-        assert "user" not in roles
-        assert "assistant" not in roles
-
-    def test_custom_url_clear_resets_to_empty_list(self, plugin):
-        """In custom URL mode, clear must produce an empty conversation_history."""
-        plugin.base_url = "http://localhost:11434/v1"
-        plugin.conversation_history = [
-            {"role": "user", "content": "old"},
+    def test_server_side_mode_sends_only_new_message_with_session(self, screen, stream_cls):
+        screen.conversation_history = [
+            {"role": "user", "content": "earlier"},
             {"role": "assistant", "content": "reply"},
         ]
-        plugin.second_frame = MagicMock()
-        plugin.create_main_screen = MagicMock(return_value=MagicMock())
+        _send(screen, "test message")
+        kw = stream_cls.return_value.start.call_args.kwargs
+        assert kw["messages"] == [{"role": "user", "content": "test message"}]
+        assert kw["client"] is screen.client
+        assert kw["model"] == "ministral-3:14b"
+        assert kw["base_url"] == chat_main._DEFAULT_BASE_URL
+        # The local chat id doubles as the server-side session id.
+        active = screen._history.get_active_id()
+        assert active
+        assert kw["extra_body"] == {"session_id": active}
 
-        plugin._clear_conversation()
+    def test_explicit_session_id_wins(self, screen, stream_cls):
+        screen.session_id = "existing-session-123"
+        _send(screen, "hello")
+        kw = stream_cls.return_value.start.call_args.kwargs
+        assert kw["extra_body"] == {"session_id": "existing-session-123"}
 
-        assert plugin.conversation_history == []
+    def test_local_mode_sends_full_history_without_extra_body(self, screen, stream_cls):
+        """If no server-side base_url is in effect, the whole history is sent."""
+        screen.base_url = None
+        screen.conversation_history = [dict(chat_main._SYS_MSG)]
+        _send(screen, "hi")
+        kw = stream_cls.return_value.start.call_args.kwargs
+        assert kw["messages"] == [dict(chat_main._SYS_MSG), {"role": "user", "content": "hi"}]
+        assert kw["extra_body"] is None
 
-    def test_clear_resets_session_id_to_none(self, plugin):
-        """_clear_conversation must set session_id to None."""
-        plugin.base_url = "http://localhost:11434/v1"
-        plugin.session_id = "old-session-xyz"
-        plugin.conversation_history = []
-        plugin.second_frame = MagicMock()
-        plugin.create_main_screen = MagicMock(return_value=MagicMock())
+    def test_start_failure_routes_to_error_bubble(self, screen, stream_cls):
+        stream_cls.return_value.start.side_effect = RuntimeError("no route")
+        _send(screen, "hi")
+        assert screen.conversation_history[-1]["role"] == "user"
+        assert screen.chat_entry.isEnabled()
+        assert screen._current_asst_bubble is None
 
-        plugin._clear_conversation()
 
-        assert plugin.session_id is None
+# ===========================================================================
+# Stream callbacks
+# ===========================================================================
+@pytest.mark.unit
+class TestStreamCallbacks:
+    def test_done_appends_and_persists_assistant_reply(self, screen):
+        _send(screen, "q")
+        screen._on_stream_chunk("Part1")
+        screen._on_stream_chunk("Part2")
+        assert screen._accumulated_text == "Part1Part2"
+        screen._on_stream_done("Part1Part2")
+        assert screen.conversation_history[-1] == {"role": "assistant", "content": "Part1Part2"}
+        saved = screen._history.load_messages(screen._history.get_active_id())
+        assert saved[-2:] == [{"role": "user", "content": "q"},
+                              {"role": "assistant", "content": "Part1Part2"}]
+        assert screen.chat_entry.isEnabled()
+
+    def test_done_is_idempotent(self, screen):
+        _send(screen, "q")
+        screen._on_stream_done("A")
+        screen._on_stream_done("A")
+        assert [m["role"] for m in screen.conversation_history].count("assistant") == 1
+
+    def test_empty_response_not_stored(self, screen):
+        _send(screen, "q")
+        screen._on_stream_done("   ")
+        assert screen.conversation_history[-1]["role"] == "user"
+        assert screen.app.show_notification.call_args.kwargs["type"] == "warning"
+
+    def test_error_without_text_keeps_no_assistant_message(self, screen):
+        _send(screen, "q")
+        screen._on_stream_error("Could not reach host")
+        assert screen.conversation_history[-1]["role"] == "user"
+        assert screen._last_payload[0] == [{"role": "user", "content": "q"}]
+
+    def test_error_after_partial_text_keeps_partial(self, screen):
+        _send(screen, "q")
+        screen._on_stream_chunk("partial")
+        screen._on_stream_error("reset")
+        assert screen.conversation_history[-1] == {"role": "assistant", "content": "partial"}
+
+    def test_stop_streaming_keeps_partial_and_cancels(self, screen, stream_cls):
+        _send(screen, "q")
+        stream_cls.return_value.is_active = True
+        screen._on_stream_chunk("half")
+        screen._stop_streaming()
+        stream_cls.return_value.cancel.assert_called_once()
+        assert screen.conversation_history[-1] == {"role": "assistant", "content": "half"}
+
+
+# ===========================================================================
+# StreamController against a mocked OpenAI stream
+# ===========================================================================
+def _openai_client():
+    # spec: an OpenAI SDK client has no stream_deltas (that marks a transport)
+    return MagicMock(spec=["chat"])
+
+
+def _chunk(content):
+    c = MagicMock()
+    c.choices = [MagicMock()]
+    c.choices[0].delta.content = content
+    return c
+
+
+@pytest.mark.unit
+class TestStreamControllerOpenAI:
+    def _run(self, client, **start_kw):
+        from plugins.chat.streaming import StreamController
+        chunks, done, errors = [], [], []
+        ctrl = StreamController(app=MagicMock(), on_chunk=chunks.append,
+                                on_done=done.append, on_error=errors.append)
+        ctrl.start(client=client, model="m", messages=[{"role": "user", "content": "hi"}],
+                   **start_kw)
+        deadline = time.monotonic() + 5
+        while ctrl.is_active and time.monotonic() < deadline:
+            ctrl._poll()
+            time.sleep(0.01)
+        return chunks, done, errors
+
+    def test_chunks_assembled_and_empty_deltas_skipped(self):
+        client = _openai_client()
+        client.chat.completions.create.return_value = iter(
+            [_chunk("Hello"), _chunk(None), _chunk(""), _chunk(" world")])
+        chunks, done, errors = self._run(client, extra_body={"session_id": "s1"})
+        assert "".join(chunks) == "Hello world"
+        assert done == ["Hello world"]
+        assert errors == []
+        kw = client.chat.completions.create.call_args.kwargs
+        assert kw["stream"] is True and kw["model"] == "m"
+        assert kw["extra_body"] == {"session_id": "s1"}
+
+    def test_api_error_reported_with_endpoint_and_key_redacted(self):
+        client = _openai_client()
+        client.chat.completions.create.side_effect = RuntimeError("bad key sk-SECRET123")
+        _, done, errors = self._run(client, base_url="http://h/v1")
+        assert done == []
+        assert len(errors) == 1
+        assert "sk-SECRET123" not in errors[0] and "sk-***" in errors[0]
+        assert "http://h/v1" in errors[0]
+
+
+# ===========================================================================
+# New / delete chat (replaces the removed _clear_conversation)
+# ===========================================================================
+@pytest.mark.unit
+class TestNewChat:
+    def test_new_chat_resets_history_and_session(self, screen):
+        _send(screen, "old msg")
+        screen._on_stream_done("old reply")
+        old_id = screen._history.get_active_id()
+        screen.session_id = "old-session-xyz"
+
+        screen._new_chat()
+
+        assert screen.conversation_history == []  # server-side mode: no system prompt
+        assert screen.session_id is None
+        new_id = screen._history.get_active_id()
+        assert new_id and new_id != old_id
+        # The previous conversation was kept.
+        assert screen._history.load_messages(old_id)[-1]["content"] == "old reply"
+
+    def test_new_chat_on_empty_session_discards_it(self, screen):
+        empty_id = screen._history.get_active_id()
+        screen._new_chat()
+        ids = [s["id"] for s in screen._history.list_sessions()]
+        assert empty_id not in ids
+        assert screen._history.get_active_id() in ids
+
+    def test_new_chat_cancels_in_flight_stream(self, screen, stream_cls):
+        _send(screen, "q")
+        stream_cls.return_value.is_active = True
+        screen._on_stream_chunk("partial")
+        screen._new_chat()
+        stream_cls.return_value.cancel.assert_called()
+        assert screen._current_asst_bubble is None
+
+    def test_delete_active_chat_selects_remaining(self, screen):
+        _send(screen, "first")
+        screen._on_stream_done("r1")
+        first_id = screen._history.get_active_id()
+        screen._new_chat()
+        second_id = screen._history.get_active_id()
+
+        screen._delete_chat(second_id)
+
+        assert screen._history.get_active_id() == first_id
+        assert screen.conversation_history[-1]["content"] == "r1"

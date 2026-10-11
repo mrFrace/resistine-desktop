@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from plugins.wazuh.config import WAZUH_MANAGER
+
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "wazuh-postinstall-darwin.sh"
 
 # Skip on Windows runners — the script is bash-only.
@@ -36,7 +38,8 @@ pytestmark = pytest.mark.skipif(
 
 
 def _fake_bin(path: Path, body: str) -> None:
-    path.write_text("#!/bin/bash\n" + body)
+    # /usr/bin/env, not /bin/bash: NixOS has no /bin/bash (exec fails with 126).
+    path.write_text("#!/usr/bin/env bash\n" + body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
@@ -68,9 +71,19 @@ def harness(tmp_path, allow_subprocess):  # noqa: ARG001 — opts out of the sub
     # Defaults: every fake succeeds; tests override AGENT_AUTH_BODY /
     # LAUNCHCTL_BODY before invoking the script.
     _fake_bin(bins / "installer", 'exit 0\n')
-    _fake_bin(bins / "sed", 'exec /usr/bin/sed "$@"\n')
+    # The script uses BSD in-place syntax (`sed -i '' EXPR FILE`), which GNU
+    # sed rejects. Translate it to `-i.bak`, accepted by both BSD and GNU sed,
+    # and resolve the real sed from PATH (NixOS has no /usr/bin/sed).
+    real_sed = shutil.which("sed")
+    assert real_sed, "sed not found on PATH"
+    _fake_bin(bins / "sed", (
+        'if [ "$1" = "-i" ] && [ "$2" = "" ]; then shift 2; set -- -i.bak "$@"; fi\n'
+        f'exec {shquote(real_sed)} "$@"\n'
+    ))
     _fake_bin(bins / "security", 'exit 0\n')
     _fake_bin(bins / "wazuh-control", 'exit 0\n')
+    # The enrollment retry loop has a hardcoded `sleep 3`; shadow sleep on PATH.
+    _fake_bin(bins / "sleep", 'exit 0\n')
 
     return {
         "tmp_path": tmp_path,
@@ -133,6 +146,7 @@ def _run(harness, extra_env=None):
         # Keep retries cheap — script otherwise sleeps for many seconds.
         "BOOTSTRAP_SETTLE_SECONDS": "0",
         "BOOTSTRAP_RETRY_BACKOFF_SECONDS": "0",
+        "PATH": f"{harness['bins']}{os.pathsep}{os.environ.get('PATH', '')}",
     })
     if extra_env:
         env.update(extra_env)
@@ -142,7 +156,7 @@ def _run(harness, extra_env=None):
         "--pkg-path", str(harness["pkg"]),
         "--agent-name", "MacBook-AABB",
         "--agent-group", "drake-gmail.com",
-        "--manager", "dashboard.resisti.net",
+        "--manager", WAZUH_MANAGER,
         "--status-file", str(harness["status_file"]),
         "--log-file", str(harness["log_file"]),
     ]
@@ -178,6 +192,8 @@ class TestSuccessPath:
         assert len(calls) == 1
         # client.keys was backed up
         assert harness["key_backup"].exists()
+        # ossec.conf was patched with the agent name
+        assert "<agent_name>MacBook-AABB</agent_name>" in harness["ossec_conf"].read_text()
 
     def test_enable_runs_before_bootstrap(self, harness):
         """Regression test: the uninstall path issues `launchctl disable
@@ -261,7 +277,7 @@ exit 1
 @pytest.mark.unit
 class TestManagerUnreachable:
     @pytest.mark.parametrize("agent_auth_stderr", [
-        "Unable to connect to dashboard.resisti.net:1515",
+        f"Unable to connect to {WAZUH_MANAGER}:1515",
         "Connection refused",
         "Network is unreachable",
     ])

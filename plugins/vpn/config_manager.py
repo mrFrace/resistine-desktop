@@ -1,14 +1,18 @@
 
 """
-VPN Configuration Manager for Resistine Desktop.
+VPN Configuration Manager for Phoenix Desktop.
 
-Manages multiple WireGuard configuration files stored in Resistine's
+Manages multiple WireGuard configuration files stored in Phoenix's
 own hidden config directories (not WireGuard's system folders).
 Tracks the active config via the settings system.
 """
 import os
 import re
 
+from plugins.vpn.wireguard.config_validation import (
+    is_valid_config_name,
+    validate_config_name,
+)
 from utils import settings as app_settings
 from utils.logger import logger
 
@@ -22,10 +26,24 @@ class VPNConfigManager:
     def __init__(self, wireguard_folder):
         self.wireguard_folder = wireguard_folder
 
+    def config_path(self, config_name):
+        """Return ``<wireguard_folder>/<config_name>.conf``.
+
+        Raises ValueError if the name could escape wireguard_folder (path
+        separators, "..", absolute paths, or any other unsafe character).
+        """
+        validate_config_name(config_name)
+        # Belt and braces: the normalised path must sit directly in the folder.
+        folder = os.path.abspath(self.wireguard_folder)
+        path = os.path.abspath(os.path.join(folder, f"{config_name}.conf"))
+        if os.path.dirname(path) != folder:
+            raise ValueError(f"Config path escapes WireGuard folder: {config_name!r}")
+        return os.path.join(self.wireguard_folder, f"{config_name}.conf")
+
     def list_configs(self):
         """List all available .conf files.
 
-        Returns a list of dicts sorted with Resistine default first:
+        Returns a list of dicts sorted with Phoenix default first:
         [{"name": "resistine", "display_name": "Phoenix (Default)",
           "source": "api", "path": "/path/to/file.conf"}, ...]
         """
@@ -42,7 +60,7 @@ class VPNConfigManager:
                 "path": os.path.join(self.wireguard_folder, f"{name}.conf"),
             })
 
-        # Sort: Resistine default first, then alphabetical
+        # Sort: Phoenix default first, then alphabetical
         configs.sort(key=lambda c: (0 if c["name"] == RESISTINE_CONFIG_NAME else 1, c["name"]))
         return configs
 
@@ -53,7 +71,10 @@ class VPNConfigManager:
         Returns None if no configs exist.
         """
         active = app_settings.get(SETTINGS_NAMESPACE, "active_config")
-        if active and os.path.exists(os.path.join(self.wireguard_folder, f"{active}.conf")):
+        if active and not is_valid_config_name(active):
+            logger.warning(f"Ignoring invalid active_config setting: {active!r}")
+            active = None
+        if active and os.path.exists(self.config_path(active)):
             return active
 
         # Fallback: try resistine
@@ -70,8 +91,15 @@ class VPNConfigManager:
         return None
 
     def set_active_config(self, config_name):
-        """Set the active config by name (without .conf extension)."""
-        conf_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
+        """Set the active config by name (without .conf extension).
+
+        Returns False for names that could escape wireguard_folder.
+        """
+        try:
+            conf_path = self.config_path(config_name)
+        except ValueError as e:
+            logger.error(f"Cannot set active config: {e}")
+            return False
         if not os.path.exists(conf_path):
             logger.error(f"Cannot set active config: {conf_path} does not exist")
             return False
@@ -82,7 +110,7 @@ class VPNConfigManager:
         """Get the full path to the active config file."""
         name = self.get_active_config_name()
         if name:
-            return os.path.join(self.wireguard_folder, f"{name}.conf")
+            return self.config_path(name)
         return None
 
     def import_config(self, source_path, content):
@@ -103,7 +131,7 @@ class VPNConfigManager:
                     counter += 1
                 dest_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
 
-            os.makedirs(self.wireguard_folder, exist_ok=True)
+            os.makedirs(self.wireguard_folder, mode=0o700, exist_ok=True)
 
             with open(dest_path, "w", encoding="utf-8") as f:
                 f.write(content)
@@ -121,13 +149,16 @@ class VPNConfigManager:
     def delete_config(self, config_name):
         """Delete a user-imported config.
 
-        Refuses to delete the Resistine default config.
+        Refuses to delete the Phoenix default config.
         Returns (True, "") on success or (False, reason) on failure.
         """
         if config_name == RESISTINE_CONFIG_NAME:
             return False, "Cannot delete the Phoenix default configuration"
 
-        conf_path = os.path.join(self.wireguard_folder, f"{config_name}.conf")
+        try:
+            conf_path = self.config_path(config_name)
+        except ValueError as e:
+            return False, str(e)
         try:
             if os.path.exists(conf_path):
                 os.remove(conf_path)
@@ -169,7 +200,7 @@ class VPNConfigManager:
         return entry.get("display_name", config_name)
 
     def is_resistine_config(self, config_name):
-        """Check if a config is the Resistine API config."""
+        """Check if a config is the Phoenix API config."""
         return config_name == RESISTINE_CONFIG_NAME
 
     def migrate_legacy_config(self):
@@ -205,9 +236,12 @@ class VPNConfigManager:
         """List all .conf file basenames (without extension) in wireguard_folder."""
         if not os.path.exists(self.wireguard_folder):
             return []
+        # Skip files whose names aren't safe config names (they could not be
+        # selected/activated safely, and hidden files such as the generated
+        # .<iface>.compat.conf are not user configs).
         return sorted([
             os.path.splitext(f)[0]
             for f in os.listdir(self.wireguard_folder)
-            if f.endswith(".conf")
+            if f.endswith(".conf") and is_valid_config_name(os.path.splitext(f)[0])
         ])
 

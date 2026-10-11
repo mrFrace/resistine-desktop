@@ -279,7 +279,41 @@ def find_binary(name: str) -> str | None:
 
 
 def find_certs_dir() -> str | None:
-    """Distro-packaged freshclam uses the system CA bundle — no override."""
+    """Locate the CVD signing-cert directory (the one holding clamav.crt).
+
+    ClamAV >= 1.4 verifies *detached CVD signatures* against a dedicated root
+    CA cert, which is a different thing from the system TLS CA bundle handled
+    by clamav_env(). Returning None here made clamav_common.run_freshclam()
+    bail out before ever invoking freshclam — on every Linux distro, not just
+    ones with an unusual layout.
+
+    Distro packages ship the cert at <prefix>/share/clamav/certs, so derive
+    the prefix from the resolved binary rather than hardcoding /usr. That also
+    covers non-FHS prefixes (Nix store, /usr/local, custom builds), where the
+    path is not knowable ahead of time.
+    """
+    candidates: list[str] = []
+
+    # freshclam's own env override wins, if the user set one.
+    env_dir = os.environ.get("CVD_CERTS_DIR")
+    if env_dir:
+        candidates.append(env_dir)
+
+    binary = find_binary("freshclam") or find_binary("clamd")
+    if binary:
+        prefix = os.path.dirname(os.path.dirname(os.path.realpath(binary)))
+        candidates.append(os.path.join(prefix, "share", "clamav", "certs"))
+
+    candidates += [
+        "/usr/share/clamav/certs",
+        "/usr/local/share/clamav/certs",
+        "/var/lib/clamav/certs",
+    ]
+
+    for directory in candidates:
+        if os.path.isfile(os.path.join(directory, "clamav.crt")):
+            return directory
+
     return None
 
 
@@ -364,7 +398,7 @@ def system_clamd_running() -> bool:
     We deliberately do NOT rely on ``_ping_socket`` here.  On Fedora
     the stock SELinux targeted policy forbids ordinary user domains
     (``user_t``/``staff_t``/``xdm_t``) from connecting to a
-    ``clamd_var_run_t`` socket, so a direct probe from the Resistine UI
+    ``clamd_var_run_t`` socket, so a direct probe from the Phoenix UI
     process would always fail even when the daemon is healthy and
     clamonacc (running as ``clamscan``) is happily connected.  The
     authoritative signal is systemd's view of the unit plus the
@@ -481,7 +515,7 @@ def _prepare_config_script() -> str:
     # LocalSocketMode 0666 is important: when unset, clamd creates the
     # socket using the service's umask (0022 on Fedora), yielding mode
     # 0644 — which lets only the owning "clamscan" user connect.  The
-    # Resistine UI polls the socket as the regular desktop user, so
+    # Phoenix UI polls the socket as the regular desktop user, so
     # without 0666 we'd get EACCES and the status card would
     # permanently read "Protection Offline" even though clamd is
     # running.
@@ -611,6 +645,31 @@ def activate_system_daemons() -> tuple[bool, str]:
     )
 
 
+def build_deactivate_script() -> str:
+    """Build the privileged shell that stops+disables the ClamAV daemons.
+
+    Returns "" when systemd isn't available.  Split out from
+    deactivate_system_daemons so the app uninstaller can batch these commands
+    into a single privilege-escalation prompt.
+    """
+    if not _has_systemd():
+        return ""
+    clamd_svc, fresh_svc, onacc_svc = _service_names()
+    return (
+        f"systemctl disable --now {onacc_svc} 2>/dev/null || true; "
+        f"systemctl disable --now {clamd_svc} 2>/dev/null || true; "
+        f"systemctl disable --now {fresh_svc} 2>/dev/null || true"
+    )
+
+
+def is_any_service_active() -> bool:
+    """Return True if any of our ClamAV services is currently active."""
+    try:
+        return any(_systemctl_is_active(s) for s in _service_names())
+    except Exception:
+        return False
+
+
 def deactivate_system_daemons() -> tuple[bool, str]:
     """Stop and disable system-level ClamAV daemons.
 
@@ -619,12 +678,7 @@ def deactivate_system_daemons() -> tuple[bool, str]:
     if not _has_systemd():
         return False, "systemd is not available."
 
-    clamd_svc, fresh_svc, onacc_svc = _service_names()
-    script = (
-        f"systemctl disable --now {onacc_svc} 2>/dev/null || true; "
-        f"systemctl disable --now {clamd_svc} 2>/dev/null || true; "
-        f"systemctl disable --now {fresh_svc} 2>/dev/null || true"
-    )
+    script = build_deactivate_script()
     ok, out = _run_privileged(["sh", "-c", script], timeout=60)
     if ok:
         return True, "Protection deactivated."

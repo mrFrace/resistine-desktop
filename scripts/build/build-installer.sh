@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-# Resistine Complete Build & Installer Script
+# Phoenix Complete Build & Installer Script
 # This script builds both the Swift components and Python UI, then packages everything
 # Works on any computer as long as the directory structure is maintained
 
-echo "=== Resistine Build System ==="
+echo "=== Phoenix Build System ==="
 echo "Building unified installer with modular architecture"
 echo ""
 
@@ -40,7 +40,8 @@ echo ""
 # Build configuration
 BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
-APP_NAME="Resistine"
+APP_NAME="Resistine"   # bundle file name (Resistine.app); see packaging/Resistine.spec
+DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 BUNDLE_ID="com.resistine.desktop"
 
 # Step 1: Build Swift Components (VPN)
@@ -344,7 +345,7 @@ if ! command -v create-dmg &> /dev/null; then
 fi
 
 # Remove old DMG if exists
-rm -f "$DIST_DIR/$APP_NAME-Installer.dmg"
+rm -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 
 # Check for optional background images
 BACKGROUND_FLAG=""
@@ -360,7 +361,7 @@ fi
 
 # Create DMG
 create-dmg \
-  --volname "$APP_NAME Installer" \
+  --volname "$DISPLAY_NAME Installer" \
   $ICON_FLAG \
   --window-pos 200 120 \
   --window-size 800 400 \
@@ -369,25 +370,25 @@ create-dmg \
   --hide-extension "$APP_NAME.app" \
   --app-drop-link 600 185 \
   $BACKGROUND_FLAG \
-  "$DIST_DIR/$APP_NAME-Installer.dmg" \
+  "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" \
   "$PYTHON_APP" 2>&1 || {
     echo "  ⚠️  DMG creation had warnings but may have succeeded"
   }
 
-if [ -f "$DIST_DIR/$APP_NAME-Installer.dmg" ]; then
-    echo "✅ DMG created: $DIST_DIR/$APP_NAME-Installer.dmg"
+if [ -f "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" ]; then
+    echo "✅ DMG created: $DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 
     # Calculate DMG size
-    DMG_SIZE=$(du -h "$DIST_DIR/$APP_NAME-Installer.dmg" | cut -f1)
+    DMG_SIZE=$(du -h "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" | cut -f1)
     echo "   DMG size: $DMG_SIZE"
 
     # Sign the DMG if we have a certificate
     if [ -n "$SIGN_IDENTITY" ]; then
         echo ""
         echo "  - Signing DMG..."
-        codesign --force --sign "$SIGN_IDENTITY" "$DIST_DIR/$APP_NAME-Installer.dmg" && {
+        codesign --force --sign "$SIGN_IDENTITY" "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" && {
             echo "  ✅ DMG signed successfully"
-            codesign --verify --verbose "$DIST_DIR/$APP_NAME-Installer.dmg" 2>&1 | grep -q "valid on disk" && \
+            codesign --verify --verbose "$DIST_DIR/$DISPLAY_NAME-Installer.dmg" 2>&1 | grep -q "valid on disk" && \
                 echo "  ✅ DMG signature verified"
         } || echo "  ⚠️  DMG signing failed (non-critical)"
     else
@@ -426,14 +427,14 @@ echo ""
 echo "Step 8: Notarization (optional for public distribution)..."
 echo "To notarize for public distribution (requires Apple Developer account):"
 echo ""
-echo "  xcrun notarytool submit $DIST_DIR/$APP_NAME-Installer.dmg \\"
+echo "  xcrun notarytool submit $DIST_DIR/$DISPLAY_NAME-Installer.dmg \\"
 echo "    --apple-id YOUR_APPLE_ID \\"
 echo "    --team-id YOUR_TEAM_ID \\"
 echo "    --password YOUR_APP_SPECIFIC_PASSWORD \\"
 echo "    --wait"
 echo ""
 echo "  # Then staple the ticket:"
-echo "  xcrun stapler staple $DIST_DIR/$APP_NAME-Installer.dmg"
+echo "  xcrun stapler staple $DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 echo ""
 
 # Summary
@@ -441,7 +442,7 @@ echo "==================================="
 echo "✅ Build Complete!"
 echo "==================================="
 echo ""
-echo "📦 Installer: $DIST_DIR/$APP_NAME-Installer.dmg"
+echo "📦 Installer: $DIST_DIR/$DISPLAY_NAME-Installer.dmg"
 echo "📱 App Bundle: $PYTHON_APP"
 echo ""
 echo "Next steps:"

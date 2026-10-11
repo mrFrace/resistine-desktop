@@ -1,7 +1,9 @@
 """Stream controller for chat API responses.
 
 Encapsulates the background-thread + queue.Queue + Tk polling pattern used
-to stream OpenAI-compatible chat completions without blocking the GUI.
+to stream OpenAI-compatible chat completions without blocking the GUI. A
+non-HTTP transport (plugins/chat/matrix_transport.py) plugs into the same
+pipeline by exposing ``stream_deltas()``.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import queue
 import re
 import threading
+import time
 from typing import TYPE_CHECKING, Callable
 
 from utils.logger import logger
@@ -89,11 +92,14 @@ class StreamController:
         self._queue = queue.Queue(maxsize=4096)
         self._stream = None
 
-        thread = threading.Thread(
-            target=self._worker,
-            args=(client, model, messages, temperature, extra_body, base_url),
-            daemon=True,
-        )
+        # A transport (Matrix) yields text deltas itself; anything else is an
+        # OpenAI SDK client. Both feed the same queue → poll → callbacks path.
+        if hasattr(client, "stream_deltas"):
+            target, args = self._worker_transport, (client, messages, extra_body)
+        else:
+            target = self._worker
+            args = (client, model, messages, temperature, extra_body, base_url)
+        thread = threading.Thread(target=target, args=args, daemon=True)
         thread.start()
         self._schedule_poll()
 
@@ -161,6 +167,19 @@ class StreamController:
         base_url: str | None,
     ) -> None:
         """Run the streaming API call, pushing results into the queue."""
+        endpoint = base_url or "https://api.openai.com/v1"
+        t0 = time.monotonic()
+        # Per-stream diagnostics — the numbers that reveal whether the reply
+        # actually streamed or arrived buffered (e.g. nginx proxy_buffering).
+        ttfb = None          # time to first content chunk (s)
+        n_chunks = 0
+        n_chars = 0
+        prev_t = t0
+        max_gap = 0.0        # largest silence between chunks (s)
+        raw_parts: list[str] = []  # full response text, logged at completion
+        logger.info(
+            f"[CHAT-STREAM] → POST {endpoint} model={model} "
+            f"messages={len(messages)} session={(extra_body or {}).get('session_id')}")
         try:
             kwargs: dict = {
                 "model": model,
@@ -188,8 +207,25 @@ class StreamController:
                         self._safe_put(("cancel", _CANCELLED))
                         return
                     if chunk.choices and chunk.choices[0].delta.content:
-                        self._safe_put(
-                            ("chunk", chunk.choices[0].delta.content))
+                        now = time.monotonic()
+                        content = chunk.choices[0].delta.content
+                        n_chunks += 1
+                        n_chars += len(content)
+                        raw_parts.append(content)
+                        if ttfb is None:
+                            ttfb = now - t0
+                            logger.info(
+                                f"[CHAT-STREAM] first chunk after "
+                                f"{ttfb * 1000:.0f}ms ({len(content)} chars)")
+                        else:
+                            max_gap = max(max_gap, now - prev_t)
+                        prev_t = now
+                        # Per-chunk trail (DEBUG so it's opt-in via OPENAI_LOG
+                        # or a debug log level): elapsed-since-start + size.
+                        logger.debug(
+                            f"[CHAT-STREAM] +{(now - t0) * 1000:.0f}ms "
+                            f"chunk#{n_chunks} {len(content)}ch")
+                        self._safe_put(("chunk", content))
             finally:
                 # Always release the HTTP response, even on early-exit
                 # via cancel — the for-loop break above doesn't itself
@@ -198,29 +234,121 @@ class StreamController:
                 if self._stream is stream:
                     self._stream = None
 
+            total = time.monotonic() - t0
+            rate = (n_chars / total) if total > 0 else 0
+            if n_chunks == 0:
+                # 200 OK but the server sent no content deltas — this is the
+                # "No response received from the server" case the UI shows.
+                # Almost always upstream (nginx buffering/timeout on :8002, a
+                # tool-only turn with no text, or the model returning empty).
+                logger.warning(
+                    f"[CHAT-STREAM] ⚠ EMPTY response: 0 content chunks in "
+                    f"{total:.2f}s from {endpoint} — server returned 200 but "
+                    f"streamed no text (check nginx buffering / upstream).")
+            else:
+                # Heuristic: if the first byte took ~as long as the whole
+                # response and everything landed in one burst, it was buffered
+                # upstream (nginx/CDN) rather than truly streamed.
+                buffered = (
+                    n_chunks > 1 and ttfb is not None and total > 0
+                    and ttfb / total > 0.9)
+                logger.info(
+                    f"[CHAT-STREAM] ✓ done: {n_chunks} chunks, {n_chars} chars "
+                    f"in {total:.2f}s (ttfb={(ttfb or 0) * 1000:.0f}ms, "
+                    f"max_gap={max_gap * 1000:.0f}ms, ~{rate:.0f} ch/s)"
+                    + ("  ⚠ looks BUFFERED upstream (arrived in one burst, "
+                       "not incrementally streamed)" if buffered else ""))
+                # Full raw response text, verbatim (markdown source, incl. any
+                # injected tool-status lines) — fenced so multi-line replies
+                # are obvious in the log.
+                raw = "".join(raw_parts)
+                logger.info(
+                    "[CHAT-STREAM] raw response text:\n"
+                    "----- BEGIN RESPONSE -----\n"
+                    f"{raw}\n"
+                    "----- END RESPONSE -----")
             self._safe_put(("done", _DONE))
 
         except Exception as e:
-            endpoint = base_url or "https://api.openai.com/v1"
+            elapsed = time.monotonic() - t0
+            # Cancellation teardown, not a failure. cancel() closes the HTTP
+            # response from another thread, so the read we were blocked on
+            # blows up mid-flight — on Windows as WinError 10038 ("not a
+            # socket"), elsewhere as a generic ReadError. That's expected when
+            # the user switches sessions / leaves chat / the stream is stopped;
+            # surface it as a clean cancel, not a red error the user sees.
+            if self._cancel_event.is_set():
+                logger.debug(
+                    f"[CHAT-STREAM] stream cancelled during teardown after "
+                    f"{elapsed:.2f}s ({type(e).__name__})")
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            raw = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
+            status = getattr(e, "status_code", None)
             try:
                 from openai import APIConnectionError
 
-                if isinstance(e, APIConnectionError):
-                    msg = (
-                        f"Could not reach {endpoint}. "
-                        "Check that the host is reachable "
-                        "(VPN, DNS, firewall) "
-                        "and the URL in Settings is correct."
-                    )
-                else:
-                    err = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
-                    msg = f"{err} (endpoint: {endpoint})"
+                is_conn = isinstance(e, APIConnectionError)
             except ImportError:
-                err = re.sub(r'sk-[A-Za-z0-9]+', 'sk-***', str(e))
-                msg = f"{err} (endpoint: {endpoint})"
+                is_conn = False
 
-            logger.error(f"StreamController error: {msg}")
+            if is_conn:
+                msg = (
+                    f"Could not reach {endpoint}. "
+                    "Check that the host is reachable (VPN, DNS, firewall) "
+                    "and the URL in Settings is correct."
+                )
+            elif status == 403 or "not authorized" in raw or "no agent" in raw:
+                # The dashboard authorizes chat by the caller's source IP —
+                # it must map to an enrolled agent. "no agent found" means the
+                # IP the server sees has no registered endpoint agent.
+                msg = (
+                    "This device isn't authorized for chat yet: the server "
+                    "found no enrolled agent for your current IP. Make sure "
+                    "the VPN is on and the endpoint agent is enrolled/running, "
+                    f"then retry. (server said: {raw})"
+                )
+            else:
+                msg = f"{raw} (endpoint: {endpoint})"
+
+            logger.error(
+                f"[CHAT-STREAM] ✗ error after {elapsed:.2f}s"
+                f"{f' (HTTP {status})' if status else ''}: {msg}")
             self._safe_put(("error", msg))
+
+    def _worker_transport(self, transport, messages: list[dict],
+                          extra_body: dict | None) -> None:
+        """Run one turn through a non-HTTP transport (Matrix).
+
+        The transport owns the server-side history (like the HTTPS agent
+        endpoint), so only the newest user message is sent, plus the session.
+        """
+        t0 = time.monotonic()
+        session = (extra_body or {}).get("session_id")
+        text = messages[-1]["content"] if messages else ""
+        logger.info(f"[CHAT-STREAM] → {transport.describe()} session={session}")
+        n_chunks = n_chars = 0
+        try:
+            for delta in transport.stream_deltas(text, session, self._cancel_event):
+                if self._cancel_event.is_set():
+                    break
+                n_chunks += 1
+                n_chars += len(delta)
+                self._safe_put(("chunk", delta))
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.info(
+                f"[CHAT-STREAM] ✓ done: {n_chunks} updates, {n_chars} chars "
+                f"in {time.monotonic() - t0:.2f}s")
+            self._safe_put(("done", _DONE))
+        except Exception as e:
+            if self._cancel_event.is_set():
+                self._safe_put(("cancel", _CANCELLED))
+                return
+            logger.error(
+                f"[CHAT-STREAM] ✗ error after {time.monotonic() - t0:.2f}s: {e}")
+            self._safe_put(("error", str(e)))
 
     def _safe_put(self, item: tuple[str, object]) -> None:
         """Bounded put that yields to the cancel signal on a full queue.

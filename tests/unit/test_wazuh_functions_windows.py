@@ -10,7 +10,6 @@ Covers plugins/wazuh/agent/wazuh_functions_windows.py:
 - needs_reenrollment: email mismatch detection
 - is_agent_installed: directory + exe check
 - get_agent_status: service query parsing
-- create_wazuh_group: HTTP success/conflict/failure
 - _is_sysmon_installed: service query 64/32 fallback
 - _download_file: PowerShell download
 - start_agent / stop_agent: service control
@@ -27,6 +26,18 @@ from unittest.mock import MagicMock, patch, call, mock_open
 
 
 # Windows-only module stubs are provided by tests/conftest.py
+
+
+@pytest.fixture(autouse=True)
+def _windows_subprocess_constants():
+    """Provide Windows-only subprocess.CREATE_NO_WINDOW when running off Windows.
+
+    The module passes creationflags=subprocess.CREATE_NO_WINDOW to every
+    subprocess.run call; without this the AttributeError is swallowed by the
+    functions' broad except blocks and the parsing logic is never exercised.
+    """
+    with patch("subprocess.CREATE_NO_WINDOW", 0x08000000, create=True):
+        yield
 
 
 # ===========================================================================
@@ -194,7 +205,9 @@ class TestGetAgentGroup:
         monkeypatch.setattr("plugins.wazuh.agent.wazuh_functions_windows.settings", isolated_settings)
         isolated_settings.set("auth", "email", "user@example.com")
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_group
-        assert get_agent_group() == "user.example.com"
+        # '@' -> '-' to match the canonical group name created server-side
+        # by /verify-otp (groups are auto-created on enroll).
+        assert get_agent_group() == "user-example.com"
 
     def test_default_when_no_email(self, isolated_settings, monkeypatch):
         monkeypatch.setattr("plugins.wazuh.agent.wazuh_functions_windows.settings", isolated_settings)
@@ -284,42 +297,6 @@ class TestGetAgentStatus:
         with patch("plugins.wazuh.agent.wazuh_functions_windows.is_agent_installed", return_value=True):
             with patch("subprocess.run", side_effect=Exception("sc not found")):
                 assert get_agent_status() == "Stopped"
-
-
-# ===========================================================================
-# create_wazuh_group
-# ===========================================================================
-@pytest.mark.unit
-class TestCreateWazuhGroup:
-    def test_success_200(self):
-        from plugins.wazuh.agent.wazuh_functions_windows import create_wazuh_group
-        mock_resp = MagicMock(status_code=200, text="OK")
-        with patch("requests.post", return_value=mock_resp):
-            assert create_wazuh_group("test.group") is True
-
-    def test_already_exists_409(self):
-        from plugins.wazuh.agent.wazuh_functions_windows import create_wazuh_group
-        mock_resp = MagicMock(status_code=409, text="Group already exists")
-        with patch("requests.post", return_value=mock_resp):
-            assert create_wazuh_group("test.group") is True
-
-    def test_already_exists_text_match(self):
-        from plugins.wazuh.agent.wazuh_functions_windows import create_wazuh_group
-        mock_resp = MagicMock(status_code=400, text="Group already exists")
-        with patch("requests.post", return_value=mock_resp):
-            assert create_wazuh_group("test.group") is True
-
-    def test_server_error_returns_false(self):
-        from plugins.wazuh.agent.wazuh_functions_windows import create_wazuh_group
-        mock_resp = MagicMock(status_code=500, text="Internal error")
-        with patch("requests.post", return_value=mock_resp):
-            assert create_wazuh_group("test.group") is False
-
-    def test_network_error_returns_false(self):
-        from plugins.wazuh.agent.wazuh_functions_windows import create_wazuh_group
-        import requests
-        with patch("requests.post", side_effect=requests.ConnectionError("Network unreachable")):
-            assert create_wazuh_group("test.group") is False
 
 
 # ===========================================================================
@@ -490,9 +467,8 @@ class TestPrivilegedCommandSafety:
 
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_group
         group = get_agent_group()
-        # Currently get_agent_group ONLY replaces @ with .
-        # If the email contains shell metacharacters, they pass through.
-        # This test documents the gap — group should be sanitized further.
+        # get_agent_group must strip shell metacharacters (same allowlist
+        # as get_agent_name) before the value reaches PowerShell.
         if "'" in group or ";" in group:
             pytest.fail(
                 f"get_agent_group() returned {group!r} containing shell "

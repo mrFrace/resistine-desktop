@@ -1,343 +1,168 @@
-"""
-Update Dialog — Sparkle-like update prompt for Linux (and potentially Windows).
+"""Sparkle-style software-update dialog (PyQt6).
 
-Presents release notes, download progress, and restart options in a
-CustomTkinter dialog that mirrors the macOS Sparkle update experience.
+Used by the Linux updater (``utils/updates/linux.py``). Public API matches the
+original CustomTkinter version: ``UpdateDialog(master, current_version,
+new_version, release_notes_html, on_install, on_skip, on_remind_later,
+on_restart)`` plus ``cancelled``, ``set_download_progress(fraction, status)``,
+``show_restart_prompt()`` and ``show_error(message, on_retry=None)``.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-import os
+from __future__ import annotations
+
 from typing import Callable, Optional
 
-import customtkinter
-from PIL import Image
+from PyQt6.QtWidgets import (
+    QDialog,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QTextBrowser,
+    QVBoxLayout,
+)
 
-from utils.logger import logger
 
-
-class UpdateDialog(customtkinter.CTkToplevel):
-    """Sparkle-like update dialog with multiple states.
-
-    States:
-        PROMPT      — release info + Install / Remind / Skip buttons
-        DOWNLOADING — progress bar + Cancel button
-        READY       — restart prompt after successful download
-        ERROR       — error message + Retry / Dismiss buttons
-    """
-
-    def __init__(
-        self,
-        master,
-        current_version: str,
-        new_version: str,
-        release_notes_html: str,
-        on_install: Callable[[], None],
-        on_skip: Callable[[str], None],
-        on_remind_later: Callable[[], None],
-        on_restart: Optional[Callable[[], None]] = None,
-    ):
-        super().__init__(master)
-
+class UpdateDialog(QDialog):
+    def __init__(self, master=None, current_version="", new_version="",
+                 release_notes_html="", on_install: Optional[Callable] = None,
+                 on_skip: Optional[Callable] = None,
+                 on_remind_later: Optional[Callable] = None,
+                 on_restart: Optional[Callable] = None):
+        super().__init__()
         self._on_install = on_install
         self._on_skip = on_skip
         self._on_remind_later = on_remind_later
         self._on_restart = on_restart
         self._new_version = new_version
-        self._cancelled = False
+        self.cancelled = False
 
-        self.title("Software Update")
-        self.geometry("520x460")
-        self.resizable(False, False)
-        self.lift()
-        self.attributes("-topmost", True)
-        self.protocol("WM_DELETE_WINDOW", self._handle_remind_later)
+        self.setWindowTitle("Software Update")
+        self.setMinimumWidth(480)
+        self.setModal(True)
 
-        self.grid_columnconfigure(0, weight=1)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(24, 24, 24, 24)
+        self._layout.setSpacing(12)
 
-        # --- Header with icon ---
-        header = customtkinter.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, padx=24, pady=(20, 0), sticky="ew")
-        header.grid_columnconfigure(1, weight=1)
+        title = QLabel("A new version of Phoenix is available")
+        title.setObjectName("H2")
+        self._layout.addWidget(title)
+        self._layout.addWidget(QLabel(
+            f"Phoenix {new_version} is now available — you have "
+            f"{current_version}. Would you like to install it now?"))
 
-        icon_path = self._find_icon()
-        if icon_path:
-            try:
-                img = Image.open(icon_path)
-                self._icon_image = customtkinter.CTkImage(
-                    light_image=img, dark_image=img, size=(56, 56)
-                )
-                icon_label = customtkinter.CTkLabel(
-                    header, image=self._icon_image, text=""
-                )
-                icon_label.grid(row=0, column=0, rowspan=2, padx=(0, 14))
-            except Exception:
-                pass
+        notes = QTextBrowser()
+        notes.setOpenExternalLinks(True)
+        if release_notes_html:
+            notes.setHtml(release_notes_html)
+        notes.setMaximumHeight(220)
+        self._layout.addWidget(notes)
 
-        customtkinter.CTkLabel(
-            header,
-            text="A new version of Phoenix\nis available!",
-            font=customtkinter.CTkFont(size=16, weight="bold"),
-            justify="left",
-            anchor="w",
-        ).grid(row=0, column=1, sticky="sw")
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.hide()
+        self._layout.addWidget(self._progress)
+        self._status = QLabel("")
+        self._status.hide()
+        self._layout.addWidget(self._status)
 
-        customtkinter.CTkLabel(
-            header,
-            text=(
-                f"Phoenix {new_version} is now available "
-                f"(you have {current_version})."
-            ),
-            font=customtkinter.CTkFont(size=13),
-            justify="left",
-            anchor="w",
-        ).grid(row=1, column=1, sticky="nw", pady=(2, 0))
-
-        # --- Release notes ---
-        customtkinter.CTkLabel(
-            self,
-            text="Release Notes:",
-            font=customtkinter.CTkFont(size=13, weight="bold"),
-            anchor="w",
-        ).grid(row=1, column=0, padx=24, pady=(14, 4), sticky="w")
-
-        self._notes_box = customtkinter.CTkTextbox(
-            self, height=180, font=customtkinter.CTkFont(size=13),
-            activate_scrollbars=True,
-        )
-        self._notes_box.grid(row=2, column=0, padx=24, sticky="ew")
-        self._notes_box.insert("1.0", self._html_to_text(release_notes_html))
-        self._notes_box.configure(state="disabled")
-
-        # --- Bottom area (buttons / progress) ---
-        self._bottom = customtkinter.CTkFrame(self, fg_color="transparent")
-        self._bottom.grid(row=3, column=0, padx=24, pady=(16, 20), sticky="ew")
-
+        self._buttons = QHBoxLayout()
+        self._layout.addLayout(self._buttons)
         self._show_prompt_buttons()
-        self.after(10, self._center_window)
 
-    # ------------------------------------------------------------------
-    # States
-    # ------------------------------------------------------------------
+        self.show()
+
+    def _clear_buttons(self):
+        while self._buttons.count():
+            item = self._buttons.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
     def _show_prompt_buttons(self):
-        """PROMPT state: Install / Remind Me Later / Skip This Version."""
-        self._clear_bottom()
-        self._bottom.grid_columnconfigure(0, weight=1)
-        self._bottom.grid_columnconfigure(1, weight=0)
-        self._bottom.grid_columnconfigure(2, weight=0)
-
-        customtkinter.CTkButton(
-            self._bottom,
-            text="Skip This Version",
-            fg_color="transparent",
-            border_width=1,
-            width=130,
-            command=self._handle_skip,
-        ).grid(row=0, column=0, sticky="w")
-
-        customtkinter.CTkButton(
-            self._bottom,
-            text="Remind Me Later",
-            fg_color="transparent",
-            border_width=1,
-            width=130,
-            command=self._handle_remind_later,
-        ).grid(row=0, column=1, padx=(8, 8))
-
-        customtkinter.CTkButton(
-            self._bottom,
-            text="Install Update",
-            width=130,
-            command=self._handle_install,
-        ).grid(row=0, column=2, sticky="e")
+        self._clear_buttons()
+        skip = QPushButton("Skip This Version")
+        skip.setObjectName("Secondary")
+        skip.clicked.connect(self._handle_skip)
+        later = QPushButton("Remind Me Later")
+        later.setObjectName("Secondary")
+        later.clicked.connect(self._handle_later)
+        install = QPushButton("Install Update")
+        install.clicked.connect(self._handle_install)
+        self._buttons.addWidget(skip)
+        self._buttons.addStretch(1)
+        self._buttons.addWidget(later)
+        self._buttons.addWidget(install)
 
     def _show_downloading(self):
-        """DOWNLOADING state: progress bar + cancel."""
-        self._clear_bottom()
-        self._cancelled = False
-        self._bottom.grid_columnconfigure(0, weight=1)
-        self._bottom.grid_columnconfigure(1, weight=0)
-
-        progress_frame = customtkinter.CTkFrame(
-            self._bottom, fg_color="transparent"
-        )
-        progress_frame.grid(row=0, column=0, sticky="ew", padx=(0, 12))
-        progress_frame.grid_columnconfigure(0, weight=1)
-
-        self._progress_bar = customtkinter.CTkProgressBar(progress_frame)
-        self._progress_bar.grid(row=0, column=0, sticky="ew")
-        self._progress_bar.set(0)
-
-        self._progress_label = customtkinter.CTkLabel(
-            progress_frame,
-            text="Downloading... 0%",
-            font=customtkinter.CTkFont(size=12),
-            anchor="w",
-        )
-        self._progress_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
-
-        customtkinter.CTkButton(
-            self._bottom,
-            text="Cancel",
-            fg_color="transparent",
-            border_width=1,
-            width=80,
-            command=self._handle_cancel,
-        ).grid(row=0, column=1, sticky="e")
-
-    def show_restart_prompt(self):
-        """READY state: update downloaded, offer restart."""
-        self._clear_bottom()
-        self._bottom.grid_columnconfigure(0, weight=1)
-        self._bottom.grid_columnconfigure(1, weight=0)
-
-        customtkinter.CTkLabel(
-            self._bottom,
-            text="Update installed. Restart to complete.",
-            font=customtkinter.CTkFont(size=13),
-            anchor="w",
-        ).grid(row=0, column=0, sticky="w")
-
-        btn_frame = customtkinter.CTkFrame(
-            self._bottom, fg_color="transparent"
-        )
-        btn_frame.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
-
-        customtkinter.CTkButton(
-            btn_frame,
-            text="Later",
-            fg_color="transparent",
-            border_width=1,
-            width=80,
-            command=self.destroy,
-        ).grid(row=0, column=0, padx=(0, 8))
-
-        customtkinter.CTkButton(
-            btn_frame,
-            text="Restart Now",
-            width=120,
-            command=self._handle_restart,
-        ).grid(row=0, column=1)
-
-    def show_error(self, message: str, on_retry: Optional[Callable] = None):
-        """ERROR state: display error with optional retry."""
-        self._clear_bottom()
-        self._bottom.grid_columnconfigure(0, weight=1)
-
-        customtkinter.CTkLabel(
-            self._bottom,
-            text=message,
-            font=customtkinter.CTkFont(size=12),
-            text_color="#DC3545",
-            wraplength=440,
-            anchor="w",
-            justify="left",
-        ).grid(row=0, column=0, sticky="w")
-
-        btn_frame = customtkinter.CTkFrame(
-            self._bottom, fg_color="transparent"
-        )
-        btn_frame.grid(row=1, column=0, sticky="e", pady=(10, 0))
-
-        if on_retry:
-            customtkinter.CTkButton(
-                btn_frame,
-                text="Retry",
-                width=80,
-                command=on_retry,
-            ).grid(row=0, column=0, padx=(0, 8))
-
-        customtkinter.CTkButton(
-            btn_frame,
-            text="Dismiss",
-            fg_color="transparent",
-            border_width=1,
-            width=80,
-            command=self.destroy,
-        ).grid(row=0, column=1)
-
-    def set_download_progress(self, fraction: float, status_text: str = ""):
-        """Update the progress bar (0.0 – 1.0) and status label."""
-        if not hasattr(self, "_progress_bar"):
-            return
-        try:
-            self._progress_bar.set(fraction)
-            if status_text:
-                self._progress_label.configure(text=status_text)
-            else:
-                pct = int(fraction * 100)
-                self._progress_label.configure(text=f"Downloading... {pct}%")
-        except Exception:
-            pass
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancelled
-
-    # ------------------------------------------------------------------
-    # Button handlers
-    # ------------------------------------------------------------------
+        self._clear_buttons()
+        self._progress.show()
+        self._progress.setValue(0)
+        self._status.show()
+        cancel = QPushButton("Cancel")
+        cancel.setObjectName("Secondary")
+        cancel.clicked.connect(self._handle_cancel)
+        self._buttons.addStretch(1)
+        self._buttons.addWidget(cancel)
 
     def _handle_install(self):
         self._show_downloading()
-        self._on_install()
+        if self._on_install:
+            self._on_install()
 
     def _handle_skip(self):
-        self._on_skip(self._new_version)
-        self.destroy()
+        if self._on_skip:
+            self._on_skip(self._new_version)
+        self.close()
 
-    def _handle_remind_later(self):
-        self._on_remind_later()
-        self.destroy()
+    def _handle_later(self):
+        if self._on_remind_later:
+            self._on_remind_later()
+        self.close()
 
     def _handle_cancel(self):
-        self._cancelled = True
-        self._show_prompt_buttons()
+        self.cancelled = True
+        self.close()
+
+    def set_download_progress(self, fraction: float, status_text: str = ""):
+        self._progress.show()
+        self._progress.setValue(int(max(0.0, min(1.0, fraction)) * 100))
+        if status_text:
+            self._status.show()
+            self._status.setText(status_text)
+
+    def show_restart_prompt(self):
+        self._progress.hide()
+        self._status.setText("Update downloaded. Restart to apply.")
+        self._status.show()
+        self._clear_buttons()
+        restart = QPushButton("Restart Now")
+        restart.clicked.connect(self._handle_restart)
+        self._buttons.addStretch(1)
+        self._buttons.addWidget(restart)
 
     def _handle_restart(self):
         if self._on_restart:
             self._on_restart()
+        self.close()
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _clear_bottom(self):
-        for child in self._bottom.winfo_children():
-            child.destroy()
-
-    def _center_window(self):
-        self.update_idletasks()
-        w = self.winfo_width()
-        h = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (w // 2)
-        y = (self.winfo_screenheight() // 2) - (h // 2)
-        self.geometry(f"{w}x{h}+{x}+{y}")
-
-    @staticmethod
-    def _find_icon() -> Optional[str]:
-        """Locate the app icon relative to the project root."""
-        here = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(here)
-        path = os.path.join(project_root, "resources", "icons", "app_icon.png")
-        if os.path.isfile(path):
-            return path
-        return None
-
-    @staticmethod
-    def _html_to_text(html: str) -> str:
-        """Convert HTML release notes to plain text."""
-        try:
-            import html2text
-            h = html2text.HTML2Text()
-            h.ignore_links = False
-            h.body_width = 70
-            return h.handle(html).strip()
-        except ImportError:
-            # Fallback: strip tags naively
-            import re
-            text = re.sub(r"<[^>]+>", "", html)
-            return text.strip()
+    def show_error(self, message: str, on_retry: Optional[Callable] = None):
+        self._progress.hide()
+        self._status.setText(message)
+        self._status.setStyleSheet("color: #DC2626;")
+        self._status.show()
+        self._clear_buttons()
+        close = QPushButton("Close")
+        close.setObjectName("Secondary")
+        close.clicked.connect(self.close)
+        self._buttons.addStretch(1)
+        if on_retry:
+            retry = QPushButton("Retry")
+            retry.clicked.connect(
+                lambda: (self._show_prompt_buttons(), on_retry()))
+            self._buttons.addWidget(retry)
+        self._buttons.addWidget(close)

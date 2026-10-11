@@ -80,7 +80,9 @@ def get_or_create_key():
         return new_key
     else:
         logger.info("Key retrieved from system keyring.")
-        return key.encode()  # keyring returns a string; encode to bytes
+        # keyring normally returns str, but some backends return bytes;
+        # never .encode() bytes (AttributeError) or double-encode.
+        return key if isinstance(key, bytes) else key.encode()
 
 
 def retrieve_key():
@@ -97,7 +99,7 @@ def retrieve_key():
     key = keyring.get_password("resistine", "encryption_key")
     if key is None:
         raise ValueError(get_text("encryption.no_key_found"))
-    return key.encode()
+    return key if isinstance(key, bytes) else key.encode()
 
 
 def encrypt_data(data_dict):

@@ -174,8 +174,18 @@ for attempt in $(seq 1 "$MAX_ENROLL_ATTEMPTS"); do
         || grep -q "Connection refused" "$AGENT_AUTH_LOG" \
         || grep -q "Network is unreachable" "$AGENT_AUTH_LOG"; then
         ENROLLMENT_ERROR="manager_unreachable"
-    elif [ -z "$ENROLLMENT_ERROR" ]; then
+    else
         ENROLLMENT_ERROR="enroll_rc_${AUTH_RC}"
+    fi
+
+    # Transient failures (TLS handshake / routing not settled right after the
+    # VPN comes up) reliably succeed on a second attempt — previously only
+    # duplicate_name retried and every other error bailed on attempt 1, which
+    # made users see "enrollment failed (code 1)" and then succeed manually.
+    if [ "$attempt" -lt "$MAX_ENROLL_ATTEMPTS" ]; then
+        echo "agent-auth attempt ${attempt} failed (${ENROLLMENT_ERROR}); retrying in 3s" >&2
+        sleep 3
+        continue
     fi
     break
 done
@@ -245,6 +255,16 @@ if [ "$BOOTSTRAP_RC" -ne 0 ]; then
     write_status "{\"status\":\"failed\",\"step\":\"launchd\",\"error\":\"launchctl bootstrap failed\",\"detail\":\"${SAFE_BOOTSTRAP_ERROR}\"}"
     exit 1
 fi
+
+# --- Make live agent state readable for the UI's connection status ---
+# wazuh-agentd.state + ossec.log are root-owned and /Library/Ossec/var/run isn't
+# traversable by the (non-root) app, so get_agent_connection() reads "unknown".
+# Loosen the dirs + files so the UI can show connected/pending/disconnected.
+# wazuh-agentd truncate-writes the state file, so the mode persists.
+sleep 2
+chmod o+rx /Library/Ossec/var /Library/Ossec/var/run /Library/Ossec/logs 2>/dev/null || true
+chmod o+r /Library/Ossec/var/run/wazuh-agentd.state 2>/dev/null || true
+chmod o+r /Library/Ossec/logs/ossec.log 2>/dev/null || true
 
 # --- Done ---
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\",\"agent_name\":\"${AGENT_NAME}\"}"

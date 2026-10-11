@@ -1,6 +1,6 @@
 # tray.py
 """
-Resistine VPN System Tray Icon — standalone, no project imports.
+Phoenix VPN System Tray Icon — standalone, no project imports.
 Authors: Merhawi and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
@@ -28,7 +28,7 @@ except ImportError:
 BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # project root (up from gui/)
 ASSETS_DIR  = os.path.join(BASE_DIR, "resources", "icons")
 ICON_PATH   = os.path.join(ASSETS_DIR, "icon.ico")
-APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Resistine")
+APPDATA_DIR = os.path.join(os.environ.get("APPDATA", ""), "Phoenix")
 WG_DIR      = os.path.join(APPDATA_DIR, "wireguard")
 CONFIG_FILE = os.path.join(APPDATA_DIR, "vpn_config.json")
 LOG_FILE    = os.path.join(APPDATA_DIR, "tray.log")

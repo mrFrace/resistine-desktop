@@ -96,6 +96,14 @@ class LinuxDistro:
         return cls.id() in ["fedora", "centos", "rhel"] or "fedora" in cls.id_like() or "rhel" in cls.id_like()
 
     @classmethod
+    def is_suse_like(cls) -> bool:
+        return (
+            cls.id() in ["opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles", "sled"]
+            or "suse" in cls.id_like()
+            or "opensuse" in cls.id_like()
+        )
+
+    @classmethod
     def get_package_manager(cls) -> Optional[str]:
         """Detect the available package manager."""
         for pm in ["apt", "pacman", "dnf", "zypper", "yum", "apk", "emerge"]:

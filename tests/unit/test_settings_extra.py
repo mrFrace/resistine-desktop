@@ -141,7 +141,7 @@ class TestGetFernetFallback:
         # Store a valid key in mock keyring
         valid_key = Fernet.generate_key()
         mock_kr, store = mock_keyring
-        store[("resistine-master-key", "master-key")] = valid_key.decode()
+        store[("phoenix-master-key", "master-key")] = valid_key.decode()
 
         f = s._get_fernet()
         # Should be able to encrypt/decrypt
@@ -242,7 +242,7 @@ class TestGetConfigDir:
 
         monkeypatch.setattr("platform.system", lambda: "Darwin")
         path = s.get_config_dir()
-        assert "Library/Application Support/Resistine" in path
+        assert "Library/Application Support/Phoenix" in path
 
     def test_windows(self, monkeypatch):
         import utils.settings as s
@@ -250,11 +250,110 @@ class TestGetConfigDir:
         monkeypatch.setattr("platform.system", lambda: "Windows")
         monkeypatch.setenv("APPDATA", "/fake/appdata")
         path = s.get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
 
     def test_linux(self, monkeypatch):
         import utils.settings as s
 
         monkeypatch.setattr("platform.system", lambda: "Linux")
         path = s.get_config_dir()
-        assert ".config/resistine" in path
+        assert ".config/phoenix" in path
+
+
+# ---------------------------------------------------------------------------
+# Resistine -> Phoenix rebrand migration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestLegacyMasterKey:
+    def test_legacy_key_reused_and_copied(self, tmp_config_dir, mock_keyring):
+        import utils.settings as s
+        from cryptography.fernet import Fernet
+
+        _, store = mock_keyring
+        legacy = Fernet.generate_key().decode()
+        store[("resistine-master-key", "master-key")] = legacy
+
+        assert s._get_master_key() == legacy.encode()
+        assert store[("phoenix-master-key", "master-key")] == legacy
+        # Left in place so a rollback to a pre-rebrand build still decrypts.
+        assert store[("resistine-master-key", "master-key")] == legacy
+
+    def test_secret_written_before_rebrand_still_decrypts(self, tmp_config_dir, mock_keyring):
+        import utils.settings as s
+        from cryptography.fernet import Fernet
+
+        _, store = mock_keyring
+        legacy = Fernet.generate_key()
+        store[("resistine-master-key", "master-key")] = legacy.decode()
+        token = Fernet(legacy).encrypt(b"wg-private-key").decode()
+        (tmp_config_dir / "vpn.json").write_text(
+            '{"private_key": "%s%s"}' % (s.ENCRYPTED_PREFIX, token))
+
+        assert s.get_secret("vpn", "private_key") == "wg-private-key"
+
+
+@pytest.mark.unit
+class TestMigrateLegacyConfigDir:
+    @pytest.fixture()
+    def dirs(self, tmp_path, monkeypatch):
+        import utils.settings as s
+
+        new, old = tmp_path / "Phoenix", tmp_path / "Resistine"
+        monkeypatch.setattr(s, "get_config_dir", lambda: str(new))
+        monkeypatch.setattr(s, "get_legacy_config_dir", lambda: str(old))
+        return s, new, old
+
+    def test_moves_everything_and_removes_old_dir(self, dirs):
+        s, new, old = dirs
+        (old / "wireguard").mkdir(parents=True)
+        (old / "auth.json").write_text("{}")
+        (old / "wireguard" / "resistine.conf").write_text("[Interface]\n")
+
+        s.migrate_legacy_config_dir()
+
+        assert (new / "auth.json").read_text() == "{}"
+        assert (new / "wireguard" / "resistine.conf").exists()
+        assert (new / ".migrated-from-resistine").exists()
+        assert not old.exists()
+
+    def test_never_overwrites_existing_entries(self, dirs):
+        s, new, old = dirs
+        old.mkdir()
+        new.mkdir()
+        (old / "ui.json").write_text("old")
+        (old / "auth.json").write_text("{}")
+        (new / "ui.json").write_text("new")
+
+        s.migrate_legacy_config_dir()
+
+        assert (new / "ui.json").read_text() == "new"
+        assert (new / "auth.json").exists()
+        assert (old / "ui.json").read_text() == "old"  # left behind, not lost
+
+    def test_runs_once(self, dirs):
+        s, new, old = dirs
+        old.mkdir()
+        s.migrate_legacy_config_dir()
+        (old).mkdir(exist_ok=True)
+        (old / "late.json").write_text("{}")
+
+        s.migrate_legacy_config_dir()
+
+        assert not (new / "late.json").exists()
+
+    def test_no_legacy_dir_is_a_noop(self, dirs):
+        s, new, _ = dirs
+        s.migrate_legacy_config_dir()
+        assert not new.exists()
+
+    def test_get_config_dir_has_no_side_effects(self, tmp_path, monkeypatch):
+        import utils.settings as s
+
+        monkeypatch.setattr("platform.system", lambda: "Linux")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        (tmp_path / "resistine").mkdir()
+
+        assert s.get_config_dir() == str(tmp_path / "phoenix")
+        assert (tmp_path / "resistine").exists()
+        assert not (tmp_path / "phoenix").exists()

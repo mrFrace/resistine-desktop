@@ -141,7 +141,7 @@ def init_updater(app):
 
         # All configuration must happen before win_sparkle_init()
         _dll.win_sparkle_set_appcast_url(APPCAST_URL.encode("utf-8"))
-        _dll.win_sparkle_set_app_details("Resistine", "Resistine", version)
+        _dll.win_sparkle_set_app_details("Phoenix", "Phoenix", version)
 
         result = _dll.win_sparkle_set_eddsa_public_key(
             _ED25519_PUBLIC_KEY.encode("utf-8")

@@ -61,15 +61,4 @@ def disconnect(tunnel: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def toggle(tunnel: str, config_path: str = None) -> dict:
-    """Toggle VPN state for the given tunnel."""
-    status = get_status(tunnel)
-    if status.get("state") == "Running":
-        logger.info(f"Toggle: VPN is running, disconnecting '{tunnel}'")
-        return disconnect(tunnel)
-    else:
-        logger.info(f"Toggle: VPN is stopped, connecting '{tunnel}'")
-        return connect(tunnel, config_path=config_path)
-
-
 logger.info("VPN Windows client loaded")

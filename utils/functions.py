@@ -21,7 +21,7 @@ def _get_bundle_path() -> str or None:
     """Return the .app bundle path, or None if not running as a bundle."""
     if not getattr(sys, "frozen", False):
         return None
-    # sys.executable is e.g. /Volumes/Resistine Installer/Resistine.app/Contents/MacOS/Resistine
+    # sys.executable is e.g. /Volumes/Phoenix Installer/Resistine.app/Contents/MacOS/Resistine
     path = os.path.realpath(sys.executable)
     while path != "/":
         if path.endswith(".app"):

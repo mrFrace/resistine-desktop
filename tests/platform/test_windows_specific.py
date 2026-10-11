@@ -20,12 +20,12 @@ from unittest.mock import MagicMock, patch, mock_open, call
 @pytest.mark.platform_windows
 class TestWindowsConfigDir:
     def test_windows_uses_appdata(self):
-        """Config dir must live under %APPDATA%\\Resistine."""
+        """Config dir must live under %APPDATA%\\Phoenix."""
         with patch("utils.settings.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {"APPDATA": r"C:\Users\Test\AppData\Roaming"}):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert path == r"C:\Users\Test\AppData\Roaming\Resistine"
+        assert path == r"C:\Users\Test\AppData\Roaming\Phoenix"
 
     def test_windows_fallback_when_appdata_missing(self):
         """If APPDATA is not set, fall back to home directory."""
@@ -34,7 +34,7 @@ class TestWindowsConfigDir:
             with patch.dict(os.environ, env, clear=True):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
         assert os.path.isabs(path)
 
     def test_windows_path_is_absolute(self):

@@ -43,7 +43,7 @@ class TestEnvVarAvailability:
             with patch.dict(os.environ, env, clear=True):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
         assert os.path.isabs(path)
 
     def test_programdata_fallback(self):
@@ -155,14 +155,17 @@ class TestPowerShellCompat:
         from plugins.wazuh.agent.wazuh_functions_windows import _run_privileged
 
         mock_result = MagicMock(returncode=0, stdout="ok", stderr="")
-        with patch("plugins.wazuh.agent.wazuh_functions_windows._is_admin", return_value=True):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                _run_privileged("Get-Service")
+        with patch("plugins.wazuh.agent.wazuh_functions_windows._is_admin", return_value=True), \
+                patch("subprocess.CREATE_NO_WINDOW", 0x08000000, create=True), \
+                patch("subprocess.run", return_value=mock_result) as mock_run:
+            _run_privileged("Get-Service")
 
         cmd = mock_run.call_args[0][0]
         assert "-NoProfile" in cmd  # Works on both PS 5.1 and 7
         assert "-ExecutionPolicy" in cmd
         assert "Bypass" in cmd
+        # The script runs from a file, never interpolated into -Command
+        assert "-File" in cmd and "-Command" not in cmd
 
     def test_tls_setting_compatible(self):
         """TLS protocol setting must work on both PS 5.1 and PS 7."""
@@ -296,7 +299,7 @@ class TestPathCompat:
             with patch.dict(os.environ, {"APPDATA": r"C:\Users\M\u00fcller\AppData\Roaming"}):
                 from utils.settings import get_config_dir
                 path = get_config_dir()
-        assert "Resistine" in path
+        assert "Phoenix" in path
 
     def test_config_filename_sanitization_on_windows(self, wireguard_dir, isolated_settings, sample_wireguard_conf):
         """Windows-reserved chars in filenames must be stripped."""

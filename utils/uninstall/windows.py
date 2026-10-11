@@ -172,7 +172,7 @@ def run_uninstall(app, progress_callback=None):
         return (
             False,
             "Failed to launch the Windows uninstaller. "
-            "Please run 'Uninstall Resistine' from the Start Menu as Administrator.",
+            "Please run 'Uninstall Phoenix' from the Start Menu as Administrator.",
         )
 
     logger.info(

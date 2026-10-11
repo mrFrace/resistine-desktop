@@ -6,13 +6,12 @@ Tests run on any platform (subprocess.run is never actually called).
 
 Covers:
 - get_agent_name — hostname, UUID suffix, sanitization
-- get_agent_group — email → group name conversion
+- get_agent_group — email → group name conversion ('@' → '-')
 - needs_reenrollment — email mismatch detection
 - is_agent_installed — directory / plist checks
 - get_agent_status — Running / Stopped / Not Installed
 - get_package_url — architecture mapping
 - write_env_file — content, error handling
-- create_wazuh_group — success, 409 already-exists, failure
 - download_package — success, curl failure
 - _run_privileged — success, timeout, exception
 """
@@ -102,11 +101,19 @@ class TestGetAgentName:
 # ===========================================================================
 @pytest.mark.unit
 class TestGetAgentGroup:
-    def test_email_at_replaced_with_dot(self, isolated_settings):
+    def test_email_at_replaced_with_hyphen(self, isolated_settings):
+        # '@' -> '-' matches the group name the /verify-otp backend creates
+        # server-side; dots in the domain are preserved.
         isolated_settings.set("auth", "email", "user@example.com")
         from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_group
         group = get_agent_group()
-        assert group == "user.example.com"
+        assert group == "user-example.com"
+
+    def test_shell_unsafe_chars_stripped(self, isolated_settings):
+        # Group is interpolated into a privileged shell script; quotes etc. must go.
+        isolated_settings.set("auth", "email", "o'brien;rm@example.com")
+        from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_group
+        assert get_agent_group() == "obrienrm-example.com"
 
     def test_no_email_returns_default(self, isolated_settings):
         # No email in settings
@@ -281,56 +288,11 @@ class TestWriteEnvFile:
         assert "user.example.com" in content
 
     def test_returns_false_on_write_error(self):
-        with patch("builtins.open", side_effect=PermissionError("denied")):
+        with patch("plugins.wazuh.agent.wazuh_functions_darwin.os.open",
+                   side_effect=PermissionError("denied")):
             from plugins.wazuh.agent.wazuh_functions_darwin import write_env_file
             result = write_env_file("host", "group")
         assert result is False
-
-
-# ===========================================================================
-# create_wazuh_group
-# ===========================================================================
-@pytest.mark.unit
-class TestCreateWazuhGroup:
-    @patch("requests.post")
-    def test_success_200(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=200, text="created")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        assert create_wazuh_group("my.group") is True
-
-    @patch("requests.post")
-    def test_already_exists_409(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=409, text="already exists")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        assert create_wazuh_group("my.group") is True
-
-    @patch("requests.post")
-    def test_already_exists_in_body(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=422, text="Group already exist")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        assert create_wazuh_group("my.group") is True
-
-    @patch("requests.post")
-    def test_unexpected_error_returns_false(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=500, text="Internal error")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        assert create_wazuh_group("my.group") is False
-
-    @patch("requests.post")
-    def test_network_exception_returns_false(self, mock_post):
-        import requests as req
-        mock_post.side_effect = req.exceptions.RequestException("no route")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        assert create_wazuh_group("my.group") is False
-
-    @patch("requests.post")
-    def test_uses_correct_api_url(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=200, text="ok")
-        from plugins.wazuh.agent.wazuh_functions_darwin import create_wazuh_group
-        create_wazuh_group("my.group")
-        call_args = mock_post.call_args
-        assert "validate.resistine.work" in call_args[0][0]
-        assert call_args[1]["params"]["name"] == "my.group"
 
 
 # ===========================================================================

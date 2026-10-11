@@ -51,7 +51,7 @@ _lock = threading.Lock()
 
 # User-level DB seeding directory
 _CLAMAV_DATA_DIR = os.path.join(
-    os.path.expanduser("~/Library/Application Support/Resistine"), "clamav",
+    os.path.expanduser("~/Library/Application Support/Phoenix"), "clamav",
 )
 _USER_DB_DIR = os.path.join(_CLAMAV_DATA_DIR, "db")
 _LOCK_FILE = os.path.join(_CLAMAV_DATA_DIR, "freshclam.lock")

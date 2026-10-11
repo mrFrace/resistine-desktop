@@ -1,88 +1,148 @@
-"""Tests for plugins.settings.main — Settings Plugin logic.
+"""Tests for plugins.settings.main — Settings Plugin logic (PyQt6).
 
-Covers: save_api_key, save_animation_setting, change_appearance_mode,
-_effective_appearance_mode, _apply_theme_refresh, _get_app_version,
-_handle_logout guard, _handle_uninstall guard, _check_for_updates.
+Covers: save_api_key (OpenAI transport), save_animation_setting,
+change_appearance_mode / _apply_appearance_mode, _get_app_version,
+_handle_logout / _handle_login, _handle_uninstall, _check_for_updates,
+_disconnect_vpn, _remove_wazuh_agent, _revoke_session, _clear_user_data.
+
+The Matrix-transport side of the API card is covered in
+tests/unit/test_chat_matrix_transport.py::TestSettingsTransportCard.
 """
 
-import sys
-from unittest.mock import MagicMock, patch
+import os
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-# Ensure tkinter.messagebox is stubbed (conftest stubs tkinter as MagicMock,
-# but "import tkinter.messagebox" inside methods fails because it tries to
-# load a submodule of a MagicMock).
-if "tkinter.messagebox" not in sys.modules:
-    sys.modules["tkinter.messagebox"] = MagicMock()
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+
+_YES = QMessageBox.StandardButton.Yes
+_NO = QMessageBox.StandardButton.No
+
+
+@pytest.fixture(scope="module")
+def qapp():
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.fixture()
 def settings_plugin(isolated_settings):
-    """Create a Settings Plugin with mocked app."""
-    app = MagicMock()
+    """A Settings Plugin with a mocked app and no screen built."""
     from plugins.settings.main import Plugin
+
+    app = MagicMock()
+    app.plugins = []
+    app.plugin_list = []
     return Plugin(app)
 
 
+@pytest.fixture()
+def built_plugin(settings_plugin, qapp):
+    """A Settings Plugin whose full main screen (real Qt widgets) is built."""
+    settings_plugin._test_page = settings_plugin.create_main_screen()  # keep alive
+    return settings_plugin
+
+
+def _login_plugin():
+    login = MagicMock()
+    login.id = "007"
+    return login
+
+
 # ---------------------------------------------------------------------------
-# save_api_key
+# Screen construction
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestScreenConstruction:
+    def test_logged_out_shows_log_in_button(self, built_plugin):
+        assert built_plugin.logout_button.text() == "Log In"
+
+    def test_logged_in_shows_log_out_button(self, settings_plugin, qapp, isolated_settings):
+        isolated_settings.set("auth", "logged_in", True)
+        settings_plugin._test_page = settings_plugin.create_main_screen()
+        assert settings_plugin.logout_button.text() == "Log Out"
+
+    def test_fields_prefilled_from_settings(self, settings_plugin, qapp, isolated_settings):
+        isolated_settings.set_secret("chat", "openai_api_key", "sk-existing")
+        isolated_settings.set("chat", "openai_base_url", "http://local/v1")
+        isolated_settings.set("chat", "disable_animation", True)
+        isolated_settings.set("ui", "appearance_mode", "Dark")
+        settings_plugin._test_page = settings_plugin.create_main_screen()
+        assert settings_plugin.api_key_entry.text() == "sk-existing"
+        assert settings_plugin.api_base_entry.text() == "http://local/v1"
+        assert settings_plugin.disable_animation_checkbox.isChecked() is True
+        assert settings_plugin.appearance_combo.currentText() == "Dark"
+
+    def test_defaults_to_openai_transport(self, built_plugin):
+        from utils.chat_config import DEFAULT_BASE_URL
+        assert built_plugin.transport_combo.currentData() == "openai"
+        assert built_plugin.api_base_entry.text() == DEFAULT_BASE_URL
+        assert DEFAULT_BASE_URL == "https://dashboard.phoenix.exposed:8002/v1"
+        assert not built_plugin.api_key_entry.isHidden()
+        assert built_plugin.matrix_bot_entry.isHidden()
+
+
+# ---------------------------------------------------------------------------
+# save_api_key (OpenAI transport)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestSaveApiKey:
-    def test_saves_key_and_base_url(self, settings_plugin, isolated_settings):
-        settings_plugin.api_key_entry = MagicMock()
-        settings_plugin.api_key_entry.get.return_value = "sk-test-key"
-        settings_plugin.api_base_entry = MagicMock()
-        settings_plugin.api_base_entry.get.return_value = "http://localhost:11434/v1"
-        settings_plugin.status_label = MagicMock()
-        settings_plugin.app.plugin_list = []
+    def test_saves_key_and_base_url(self, built_plugin, isolated_settings):
+        built_plugin.api_key_entry.setText("sk-test-key")
+        built_plugin.api_base_entry.setText("http://localhost:11434/v1")
 
-        settings_plugin.save_api_key()
+        built_plugin.save_api_key()
 
         assert isolated_settings.get_secret("chat", "openai_api_key") == "sk-test-key"
         assert isolated_settings.get("chat", "openai_base_url") == "http://localhost:11434/v1"
+        assert isolated_settings.get("chat", "transport") == "openai"
+        from plugins.settings.main import _t
+        assert built_plugin.status_label.text() == _t(
+            "settings.apikey.saved_success", "Saved")
+        # status line is cleared later via app.after
+        assert built_plugin.app.after.call_args[0][0] == 2500
 
-    def test_empty_key_does_nothing(self, settings_plugin, isolated_settings):
-        settings_plugin.api_key_entry = MagicMock()
-        settings_plugin.api_key_entry.get.return_value = "   "
-        settings_plugin.api_base_entry = MagicMock()
-        settings_plugin.api_base_entry.get.return_value = ""
-        settings_plugin.status_label = MagicMock()
+    def test_empty_key_and_base_saves_nothing(self, built_plugin, isolated_settings):
+        built_plugin.api_key_entry.setText("   ")
+        built_plugin.api_base_entry.setText("")
 
-        settings_plugin.save_api_key()
+        built_plugin.save_api_key()
 
         assert isolated_settings.get_secret("chat", "openai_api_key") is None
-
-    def test_clears_base_url_when_empty(self, settings_plugin, isolated_settings):
-        isolated_settings.set("chat", "openai_base_url", "http://old.url")
-
-        settings_plugin.api_key_entry = MagicMock()
-        settings_plugin.api_key_entry.get.return_value = "sk-key"
-        settings_plugin.api_base_entry = MagicMock()
-        settings_plugin.api_base_entry.get.return_value = ""
-        settings_plugin.status_label = MagicMock()
-        settings_plugin.app.plugin_list = []
-
-        settings_plugin.save_api_key()
-
         assert isolated_settings.get("chat", "openai_base_url") is None
 
-    def test_reinitializes_chat_plugin(self, settings_plugin, isolated_settings):
+    def test_clears_base_url_when_empty(self, built_plugin, isolated_settings):
+        isolated_settings.set("chat", "openai_base_url", "http://old.url")
+        built_plugin.api_key_entry.setText("sk-key")
+        built_plugin.api_base_entry.setText("")
+
+        built_plugin.save_api_key()
+
+        assert isolated_settings.get("chat", "openai_base_url") is None
+        assert isolated_settings.get_secret("chat", "openai_api_key") == "sk-key"
+
+    def test_reinitializes_chat_plugin(self, built_plugin):
         mock_chat = MagicMock()
         mock_chat.get_name.return_value = "Chat"
-        settings_plugin.app.plugin_list = [mock_chat]
+        built_plugin.app.plugin_list = [mock_chat]
+        built_plugin.api_key_entry.setText("sk-key")
 
-        settings_plugin.api_key_entry = MagicMock()
-        settings_plugin.api_key_entry.get.return_value = "sk-key"
-        settings_plugin.api_base_entry = MagicMock()
-        settings_plugin.api_base_entry.get.return_value = ""
-        settings_plugin.status_label = MagicMock()
-
-        settings_plugin.save_api_key()
+        built_plugin.save_api_key()
 
         mock_chat.reinitialize_client.assert_called_once()
+
+    def test_save_failure_shows_error(self, built_plugin):
+        built_plugin.api_key_entry.setText("sk-key")
+        with patch("plugins.settings.main.settings.set_secret", return_value=False):
+            built_plugin.save_api_key()
+        from plugins.settings.main import _t
+        assert built_plugin.status_label.text() == _t(
+            "settings.apikey.saved_error", "Save failed")
+        built_plugin.app.after.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -91,17 +151,21 @@ class TestSaveApiKey:
 
 @pytest.mark.unit
 class TestSaveAnimationSetting:
-    def test_saves_true(self, settings_plugin, isolated_settings):
-        settings_plugin.disable_animation_var = MagicMock()
-        settings_plugin.disable_animation_var.get.return_value = True
-        settings_plugin.save_animation_setting()
+    def test_toggle_on_saves_true(self, built_plugin, isolated_settings):
+        built_plugin.disable_animation_checkbox.setChecked(True)  # fires toggled
         assert isolated_settings.get("chat", "disable_animation") is True
 
-    def test_saves_false(self, settings_plugin, isolated_settings):
-        settings_plugin.disable_animation_var = MagicMock()
-        settings_plugin.disable_animation_var.get.return_value = False
-        settings_plugin.save_animation_setting()
+    def test_toggle_off_saves_false(self, built_plugin, isolated_settings):
+        built_plugin.disable_animation_checkbox.setChecked(True)
+        built_plugin.disable_animation_checkbox.setChecked(False)
         assert isolated_settings.get("chat", "disable_animation") is False
+
+    def test_applies_to_chat_plugin(self, built_plugin):
+        mock_chat = MagicMock()
+        mock_chat.get_name.return_value = "Chat"
+        built_plugin.app.plugin_list = [mock_chat]
+        built_plugin.disable_animation_checkbox.setChecked(True)
+        mock_chat.apply_animation_setting.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -110,76 +174,20 @@ class TestSaveAnimationSetting:
 
 @pytest.mark.unit
 class TestChangeAppearanceMode:
-    def test_calls_set_appearance_mode(self, settings_plugin):
-        import customtkinter
+    def test_persists_and_defers_restyle(self, settings_plugin, isolated_settings):
         settings_plugin.change_appearance_mode("Dark")
-        customtkinter.set_appearance_mode.assert_called_with("Dark")
 
-    def test_applies_theme_refresh(self, settings_plugin):
-        with patch.object(settings_plugin, "_apply_theme_refresh") as mock_refresh:
-            settings_plugin.change_appearance_mode("Light")
-            mock_refresh.assert_called_once()
+        assert isolated_settings.get("ui", "appearance_mode") == "Dark"
+        settings_plugin.app.set_appearance_mode.assert_not_called()
+        delay, callback = settings_plugin.app.after.call_args[0]
+        assert delay == 0
+        callback()
+        settings_plugin.app.set_appearance_mode.assert_called_once_with("Dark")
 
-
-# ---------------------------------------------------------------------------
-# _effective_appearance_mode
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestEffectiveAppearanceMode:
-    def test_returns_mode_when_not_system(self, settings_plugin):
-        import customtkinter
-        customtkinter.get_appearance_mode.return_value = "Dark"
-        assert settings_plugin._effective_appearance_mode() == "Dark"
-
-    def test_system_mode_darwin_dark(self, settings_plugin, monkeypatch):
-        import customtkinter
-        customtkinter.get_appearance_mode.return_value = "System"
-        monkeypatch.setattr("sys.platform", "darwin")
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="Dark")
-            result = settings_plugin._effective_appearance_mode()
-            assert result == "Dark"
-
-    def test_system_mode_darwin_light(self, settings_plugin, monkeypatch):
-        import customtkinter
-        customtkinter.get_appearance_mode.return_value = "System"
-        monkeypatch.setattr("sys.platform", "darwin")
-
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=1, stdout="")
-            result = settings_plugin._effective_appearance_mode()
-            assert result == "Light"
-
-    def test_system_mode_non_darwin(self, settings_plugin, monkeypatch):
-        import customtkinter
-        customtkinter.get_appearance_mode.return_value = "System"
-        monkeypatch.setattr("sys.platform", "linux")
-        result = settings_plugin._effective_appearance_mode()
-        assert result == "Light"
-
-
-# ---------------------------------------------------------------------------
-# _apply_theme_refresh
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestApplyThemeRefresh:
-    def test_calls_refresh_ui_theme(self, settings_plugin):
-        settings_plugin.app.refresh_ui_theme = MagicMock()
-        settings_plugin._apply_theme_refresh()
-        settings_plugin.app.refresh_ui_theme.assert_called_once()
-
-    def test_falls_back_to_update_idletasks(self, settings_plugin):
-        settings_plugin.app.refresh_ui_theme = MagicMock(side_effect=RuntimeError("fail"))
-        settings_plugin._apply_theme_refresh()
-        settings_plugin.app.update_idletasks.assert_called()
-
-    def test_no_refresh_method(self, settings_plugin):
-        del settings_plugin.app.refresh_ui_theme
-        settings_plugin._apply_theme_refresh()
-        settings_plugin.app.update_idletasks.assert_called()
+    def test_apply_swallows_errors(self, settings_plugin):
+        settings_plugin.app.set_appearance_mode.side_effect = RuntimeError("boom")
+        settings_plugin._apply_appearance_mode("Light")  # must not raise
+        settings_plugin.app.set_appearance_mode.assert_called_once_with("Light")
 
 
 # ---------------------------------------------------------------------------
@@ -213,76 +221,79 @@ class TestGetAppVersion:
 
 
 # ---------------------------------------------------------------------------
-# _handle_logout
+# _handle_logout / _handle_login
 # ---------------------------------------------------------------------------
+
+_LOGOUT_STEPS = ("_disconnect_vpn", "_remove_wazuh_agent",
+                 "_revoke_session", "_clear_user_data")
+
 
 @pytest.mark.unit
 class TestHandleLogout:
-    def _set_messagebox(self, return_value):
-        """Set tkinter.messagebox.askyesno on the mock tkinter parent."""
-        tk = sys.modules["tkinter"]
-        tk.messagebox.askyesno = MagicMock(return_value=return_value)
+    def _patch_steps(self, plugin, manager):
+        patches = []
+        for name in _LOGOUT_STEPS:
+            m = getattr(manager, name)
+            patches.append(patch.object(plugin, name, m))
+        return patches
 
     def test_user_cancels(self, settings_plugin):
-        self._set_messagebox(False)
-        mock_login = MagicMock(); mock_login.id = "007"
-        settings_plugin.app.plugin_list = [mock_login]
-        settings_plugin._handle_logout()
+        settings_plugin.app.plugin_list = [_login_plugin()]
+        manager = MagicMock()
+        with patch("plugins.settings.main.QMessageBox.question",
+                   return_value=_NO) as q:
+            for p in self._patch_steps(settings_plugin, manager):
+                p.start()
+            try:
+                settings_plugin._handle_logout()
+            finally:
+                patch.stopall()
+        q.assert_called_once()
+        assert manager.mock_calls == []
+        settings_plugin.app.show_login.assert_not_called()
 
     def test_refuses_when_login_plugin_uninstalled(self, settings_plugin):
         """Without the Login plugin installed the user can't sign back in,
         so logout must short-circuit with a user-facing notification."""
         settings_plugin.app.plugin_list = []  # login absent
-        settings_plugin.app.show_notification = MagicMock()
-        # askyesno would normally be the user-visible step; assert we never
-        # got that far.
-        self._set_messagebox(True)
-        settings_plugin._handle_logout()
+        with patch("plugins.settings.main.QMessageBox.question") as q:
+            settings_plugin._handle_logout()
+        q.assert_not_called()
         settings_plugin.app.show_notification.assert_called_once()
         msg = settings_plugin.app.show_notification.call_args[0][0]
         assert "Login plugin" in msg and "Store" in msg
 
-    def test_clears_auth_on_confirm(self, settings_plugin, isolated_settings):
+    def test_confirm_runs_cleanup_in_order_then_shows_login(self, settings_plugin):
+        settings_plugin.app.plugin_list = [_login_plugin()]
+        manager = MagicMock()
+        manager.attach_mock(settings_plugin.app.show_login, "show_login")
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES):
+            for p in self._patch_steps(settings_plugin, manager):
+                p.start()
+            try:
+                settings_plugin._handle_logout()
+            finally:
+                patch.stopall()
+        assert manager.mock_calls == [
+            call._disconnect_vpn(), call._remove_wazuh_agent(),
+            call._revoke_session(), call._clear_user_data(), call.show_login(),
+        ]
+
+    def test_clears_auth_and_removes_agent_on_confirm(
+        self, settings_plugin, isolated_settings,
+    ):
+        """End-to-end through the real helpers with OS-level effects mocked."""
         isolated_settings.set("auth", "logged_in", True)
         isolated_settings.set("auth", "email", "alice@example.com")
-        self._set_messagebox(True)
-        # Logout is gated on the Login plugin being installed.
-        mock_login = MagicMock(); mock_login.id = "007"
-        settings_plugin.app.plugin_list = [mock_login]
+        settings_plugin.app.plugin_list = [_login_plugin()]
         mock_mgr = MagicMock()
         mock_mgr.get_active_config_path.return_value = None
-        with patch("platform.system", return_value="Darwin"), \
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES), \
+             patch("platform.system", return_value="Darwin"), \
              patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn", create=True), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
-                 create=True,
-             ), \
-             patch("plugins.vpn.config_manager.VPNConfigManager", return_value=mock_mgr), \
-             patch(
-                 "plugins.wazuh.agent.wazuh_functions_darwin.remove_agent",
-                 return_value=True,
-                 create=True,
-             ), \
-             patch("plugins.login.main.Plugin"):
-            settings_plugin._handle_logout()
-        # auth namespace is fully cleared on logout
-        assert isolated_settings.get("auth", "logged_in") is None
-        assert isolated_settings.get("auth", "email") is None
-
-    def test_handle_logout_invokes_wazuh_removal(self, settings_plugin):
-        """_handle_logout must call _remove_wazuh_agent so the service is
-        stopped and enrollment keys are wiped, not just settings cleared."""
-        self._set_messagebox(True)
-        mock_login = MagicMock(); mock_login.id = "007"
-        settings_plugin.app.plugin_list = [mock_login]
-        mock_mgr = MagicMock()
-        mock_mgr.get_active_config_path.return_value = None
-        with patch("platform.system", return_value="Darwin"), \
-             patch("plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn", create=True), \
-             patch(
-                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ), \
              patch("plugins.vpn.config_manager.VPNConfigManager", return_value=mock_mgr), \
@@ -291,9 +302,65 @@ class TestHandleLogout:
                  return_value=True,
                  create=True,
              ) as mock_remove, \
-             patch("plugins.login.main.Plugin"):
+             patch("plugins.login.oidc.revoke") as mock_revoke:
             settings_plugin._handle_logout()
         mock_remove.assert_called_once_with(wipe_keys=True)
+        mock_revoke.assert_called_once()
+        assert isolated_settings.get("auth", "logged_in") is None
+        assert isolated_settings.get("auth", "email") is None
+        settings_plugin.app.show_login.assert_called_once()
+
+    def test_show_login_failure_notifies(self, settings_plugin):
+        settings_plugin.app.plugin_list = [_login_plugin()]
+        settings_plugin.app.show_login.side_effect = RuntimeError("no screen")
+        manager = MagicMock()
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES):
+            for p in self._patch_steps(settings_plugin, manager):
+                p.start()
+            try:
+                settings_plugin._handle_logout()
+            finally:
+                patch.stopall()
+        args, kwargs = settings_plugin.app.show_notification.call_args
+        assert "Logout failed" in args[0] and kwargs["type"] == "error"
+
+
+@pytest.mark.unit
+class TestHandleLogin:
+    def test_shows_login_without_clearing(self, settings_plugin, isolated_settings):
+        isolated_settings.set("chat", "openai_base_url", "http://keep")
+        settings_plugin.app.plugin_list = [_login_plugin()]
+        settings_plugin._handle_login()
+        settings_plugin.app.show_login.assert_called_once()
+        assert isolated_settings.get("chat", "openai_base_url") == "http://keep"
+
+    def test_refuses_without_login_plugin(self, settings_plugin):
+        settings_plugin._handle_login()
+        settings_plugin.app.show_login.assert_not_called()
+        assert "Login plugin" in settings_plugin.app.show_notification.call_args[0][0]
+
+    def test_login_plugin_detected_via_app_plugins(self, settings_plugin):
+        settings_plugin.app.plugins = [_login_plugin()]
+        assert settings_plugin._login_plugin_installed() is True
+        settings_plugin.app.plugins = []
+        settings_plugin.app.plugin_list = []
+        assert settings_plugin._login_plugin_installed() is False
+
+
+# ---------------------------------------------------------------------------
+# _revoke_session
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestRevokeSession:
+    def test_calls_oidc_revoke(self, settings_plugin):
+        with patch("plugins.login.oidc.revoke") as mock_revoke:
+            settings_plugin._revoke_session()
+        mock_revoke.assert_called_once_with()
+
+    def test_revoke_failure_does_not_raise(self, settings_plugin):
+        with patch("plugins.login.oidc.revoke", side_effect=OSError("offline")):
+            settings_plugin._revoke_session()  # best effort
 
 
 # ---------------------------------------------------------------------------
@@ -302,32 +369,50 @@ class TestHandleLogout:
 
 @pytest.mark.unit
 class TestHandleUninstall:
-    def _set_messagebox(self, return_value):
-        tk = sys.modules["tkinter"]
-        tk.messagebox.askyesno = MagicMock(return_value=return_value)
+    def test_user_cancels(self, built_plugin):
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_NO), \
+             patch("utils.uninstall.run_uninstall") as mock_run:
+            built_plugin._handle_uninstall()
+        mock_run.assert_not_called()
+        assert built_plugin.uninstall_button.isEnabled()
 
-    def test_user_cancels(self, settings_plugin):
-        self._set_messagebox(False)
-        settings_plugin._handle_uninstall()
+    def test_success_closes_app_and_quits_on_linux(self, built_plugin, monkeypatch):
+        monkeypatch.setattr("sys.platform", "linux")
+        fake_qapp = MagicMock()
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES), \
+             patch("utils.uninstall.run_uninstall", return_value=(True, "ok")) as mock_run, \
+             patch.object(QApplication, "instance", return_value=fake_qapp):
+            built_plugin._handle_uninstall()
+        mock_run.assert_called_once()
+        assert mock_run.call_args[0][0] is built_plugin.app
+        built_plugin.app.close.assert_called_once()
+        fake_qapp.quit.assert_called_once()
+        assert "Uninstalled" in built_plugin.uninstall_status_label.text()
 
-    def test_uninstall_success_destroys_app(self, settings_plugin):
-        settings_plugin.uninstall_button = MagicMock()
-        settings_plugin.uninstall_status_label = MagicMock()
-        self._set_messagebox(True)
+    def test_success_on_darwin_schedules_hard_exit(self, built_plugin, monkeypatch):
+        monkeypatch.setattr("sys.platform", "darwin")
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES), \
+             patch("utils.uninstall.run_uninstall", return_value=(True, "ok")), \
+             patch("threading.Timer") as mock_timer:
+            built_plugin._handle_uninstall()
+        built_plugin.app.close.assert_called_once()
+        assert mock_timer.call_args[0][0] == 0.3
+        mock_timer.return_value.start.assert_called_once()
 
-        with patch("utils.uninstall.run_uninstall", return_value=(True, "ok")):
-            settings_plugin._handle_uninstall()
-            settings_plugin.app.destroy.assert_called_once()
+    def test_failure_shows_message_and_reenables(self, built_plugin):
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES), \
+             patch("utils.uninstall.run_uninstall", return_value=(False, "denied")):
+            built_plugin._handle_uninstall()
+        built_plugin.app.close.assert_not_called()
+        assert built_plugin.uninstall_button.isEnabled()
+        assert built_plugin.uninstall_status_label.text() == "denied"
 
-    def test_uninstall_failure_shows_error(self, settings_plugin):
-        settings_plugin.uninstall_button = MagicMock()
-        settings_plugin.uninstall_status_label = MagicMock()
-        self._set_messagebox(True)
-
-        with patch("utils.uninstall.run_uninstall", return_value=(False, "denied")):
-            settings_plugin._handle_uninstall()
-            settings_plugin.app.destroy.assert_not_called()
-            settings_plugin.uninstall_button.configure.assert_called()
+    def test_exception_shows_error_and_reenables(self, built_plugin):
+        with patch("plugins.settings.main.QMessageBox.question", return_value=_YES), \
+             patch("utils.uninstall.run_uninstall", side_effect=RuntimeError("boom")):
+            built_plugin._handle_uninstall()
+        assert built_plugin.uninstall_button.isEnabled()
+        assert built_plugin.uninstall_status_label.text() == "Error: boom"
 
 
 # ---------------------------------------------------------------------------
@@ -336,27 +421,29 @@ class TestHandleUninstall:
 
 @pytest.mark.unit
 class TestCheckForUpdates:
-    def test_updates_not_available(self, settings_plugin):
-        settings_plugin.update_status_label = MagicMock()
-        with patch("utils.updates.is_available", return_value=False):
-            settings_plugin._check_for_updates()
-        last_call = settings_plugin.update_status_label.configure.call_args
-        assert "not available" in last_call.kwargs["text"].lower()
+    def test_updates_not_available(self, built_plugin):
+        with patch("utils.updates.is_available", return_value=False), \
+             patch("utils.updates.check_for_updates") as mock_check:
+            built_plugin._check_for_updates()
+        mock_check.assert_not_called()
+        assert "not available" in built_plugin.update_status_label.text().lower()
 
-    def test_check_success(self, settings_plugin):
-        settings_plugin.update_status_label = MagicMock()
+    def test_check_success(self, built_plugin):
         with patch("utils.updates.is_available", return_value=True), \
              patch("utils.updates.check_for_updates", return_value=True):
-            settings_plugin._check_for_updates()
-        last_call = settings_plugin.update_status_label.configure.call_args
-        assert "checking" in last_call.kwargs["text"].lower()
+            built_plugin._check_for_updates()
+        assert "checking" in built_plugin.update_status_label.text().lower()
 
-    def test_check_exception(self, settings_plugin):
-        settings_plugin.update_status_label = MagicMock()
+    def test_check_error_result(self, built_plugin):
+        with patch("utils.updates.is_available", return_value=True), \
+             patch("utils.updates.check_for_updates", return_value="error"):
+            built_plugin._check_for_updates()
+        assert built_plugin.update_status_label.text() == "Update check failed"
+
+    def test_check_exception(self, built_plugin):
         with patch("utils.updates.is_available", side_effect=RuntimeError("boom")):
-            settings_plugin._check_for_updates()
-        last_call = settings_plugin.update_status_label.configure.call_args
-        assert "error" in last_call.kwargs["text"].lower()
+            built_plugin._check_for_updates()
+        assert built_plugin.update_status_label.text() == "Error: boom"
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +462,7 @@ class TestDisconnectVpn:
              ) as mock_stop, \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ), \
              patch(
@@ -397,7 +484,7 @@ class TestDisconnectVpn:
              ) as mock_stop, \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ), \
              patch(
@@ -426,7 +513,7 @@ class TestDisconnectVpn:
              ) as mock_stop, \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_linux.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ), \
              patch(
@@ -506,7 +593,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -521,7 +608,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -537,7 +624,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -552,7 +639,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -586,7 +673,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -600,7 +687,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -616,7 +703,7 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
@@ -634,39 +721,10 @@ class TestClearUserData:
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
+                 return_value="/nonexistent/wg",
                  create=True,
              ):
             settings_plugin._clear_user_data()
 
         assert isolated_settings.get("chat", "disable_animation") is True
         assert isolated_settings.get("antivirus", "auto_update_enabled") is True
-
-    def test_removes_legacy_email_file(
-        self, settings_plugin, isolated_settings, tmp_path,
-    ):
-        # _clear_user_data builds the path as:
-        #   dirname(dirname(dirname(realpath(__file__)))) / "utils" / "email-settings.txt"
-        # So we need realpath to point 3 levels deep under a root that
-        # contains utils/email-settings.txt.
-        fake_root = tmp_path / "root"
-        utils_dir = fake_root / "utils"
-        utils_dir.mkdir(parents=True)
-        email_file = utils_dir / "email-settings.txt"
-        email_file.write_text("alice@example.com")
-
-        fake_module = fake_root / "plugins" / "settings" / "main.py"
-
-        with patch("platform.system", return_value="Darwin"), \
-             patch(
-                 "plugins.vpn.wireguard.vpn_functions_darwin.get_writable_wireguard_dir",
-                 return_value="/tmp/wg",
-                 create=True,
-             ), \
-             patch(
-                 "plugins.settings.main.os.path.realpath",
-                 return_value=str(fake_module),
-             ):
-            settings_plugin._clear_user_data()
-
-        assert not email_file.exists()

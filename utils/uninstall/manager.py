@@ -1,7 +1,7 @@
 """
 Cross-Platform Uninstall Manager.
 
-Provides a single interface for uninstalling Resistine on all platforms.
+Provides a single interface for uninstalling Phoenix on all platforms.
 Dispatches to the appropriate backend for platform-specific cleanup.
 
 Architecture:

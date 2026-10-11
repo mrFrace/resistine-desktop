@@ -249,3 +249,27 @@ class TestEncryptDecrypt:
             encrypt_data(data)
             result = decrypt_data()
         assert result == data
+
+
+# ---------------------------------------------------------------------------
+# keyring backends that return bytes must not be double-encoded
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestKeyringReturnsBytes:
+    def _kr(self, value):
+        kr = MagicMock()
+        kr.get_keyring.return_value = _make_backend("SecureKeyring", "keyring.backends.SecureVault")
+        kr.get_password.return_value = value
+        return kr
+
+    def test_get_or_create_key_accepts_bytes(self):
+        from utils.encryption import get_or_create_key
+        existing = Fernet.generate_key()
+        with patch("utils.encryption.keyring", self._kr(existing)):
+            assert get_or_create_key() == existing
+
+    def test_retrieve_key_accepts_bytes(self):
+        from utils.encryption import retrieve_key
+        existing = Fernet.generate_key()
+        with patch("utils.encryption.keyring", self._kr(existing)):
+            assert retrieve_key() == existing

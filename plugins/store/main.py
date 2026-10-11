@@ -1,41 +1,143 @@
 # @file plugins/store/main.py
-""" "
-Store plugin for the Resistine application.
-This plugin allows users to download and install new plugins from the store.
+"""Store plugin (PyQt6) — faithful port of the CTk layout.
+
+Top spacer, a centered "Store" title panel (a card whose title is large/bold,
+constrained to ~50% width and centered), then a reflowing grid of plugin cards
+(icon + title + status badge + description) with injected store action buttons:
+Info + Install (downloadable / uninstalled) or Uninstall (installed +
+uninstall_enabled) with an inline Confirm/Cancel step; "Installed"/"Core" states
+have no action button.
+
+The full plugin list depends on a NETWORK fetch (get_available_plugins). That
+fetch runs on a worker thread and is marshalled back via app.after(0, ...) — the
+build never blocks on it. Installed/local cards render immediately and remote-only
+ones fold in when they arrive, exactly like the original.
+
 Author: Peres J., P3 and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+from __future__ import annotations
+
 import os
+import threading
 
-import customtkinter
-from PIL import Image
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
+from PyQt6.QtWidgets import (
+    QSizePolicy,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
+from gui import theme
+from gui.qt_widgets import CardGrid, StatusBadge, heading, muted, scroll_page
 from plugins.base_plugin import BasePlugin
 
-# DNS Configuration - Change this value to update DNS across the application
-DNS_SERVER = "10.49.11.10"
+_DIR = os.path.dirname(os.path.realpath(__file__))
+
+# Plugins hidden from the Store (still available in sidebar if installed).
+HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
+HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
+
+
+# Store action button colours (light, dark) lifted from the CTk original.
+def _btn_style(light_bg, dark_bg, light_hover, dark_hover) -> str:
+    bg = dark_bg if theme.is_dark() else light_bg
+    hover = dark_hover if theme.is_dark() else light_hover
+    return (
+        f"QPushButton {{ background-color: {bg}; color: white; border: none; "
+        f"border-radius: 8px; padding: 7px 12px; font-size: 12px; "
+        f"font-weight: 600; }} "
+        f"QPushButton:hover {{ background-color: {hover}; }}"
+    )
+
+
+# Evaluated per call (not at import) so buttons restyle on theme toggle.
+def _info_style() -> str:
+    return _btn_style("#3B8ED0", "#1F6AA5", "#367EBB", "#144870")
+
+
+def _install_style() -> str:
+    return _btn_style("#2ECC71", "#27AE60", "#27AE60", "#219150")
+
+
+def _uninstall_style() -> str:
+    return _btn_style("#FF4444", "#C73636", "#C73636", "#9E2A2A")
+
+
+def _cancel_style() -> str:
+    return _btn_style("#808080", "#606060", "#707070", "#505050")
+
+
+class _StoreCard(QFrame):
+    """Mirror of the Dashboard card (icon 48 + title + StatusBadge + description),
+    with the store action buttons added at the bottom."""
+
+    def __init__(self, plugin, inject_buttons):
+        super().__init__()
+        self.setObjectName("Card")
+        # Cards stretch to fill their grid cell (same behaviour as the
+        # Dashboard grid) instead of fixed-size tiles with dead gutters.
+        self.setMinimumSize(230, 230)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,
+                           QSizePolicy.Policy.Expanding)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        icon = QLabel()
+        icon.setPixmap(plugin.get_icon_pixmap(48))
+        icon.setFixedSize(48, 48)
+        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title = QLabel(plugin.get_name())
+        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        title_col.addWidget(title)
+        badge_row = QHBoxLayout()
+        badge_row.addWidget(StatusBadge(plugin.get_status()))
+        badge_row.addStretch(1)
+        title_col.addLayout(badge_row)
+        header.addLayout(title_col, 1)
+        outer.addLayout(header)
+
+        desc = QLabel(plugin.get_description())
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {theme.color('text_secondary')};")
+        outer.addWidget(desc)
+        outer.addStretch(1)
+
+        # Injected store action buttons (Info + Install/Uninstall/...).
+        self.button_row = QHBoxLayout()
+        self.button_row.setSpacing(8)
+        outer.addLayout(self.button_row)
+        inject_buttons(self, plugin)
+
+    def clear_buttons(self) -> None:
+        while self.button_row.count():
+            item = self.button_row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
 
 
 class Plugin(BasePlugin):
-    """
-    @brief Plugin class for the Store plugin.
-    Plugin class for the Store plugin, that allows user install new plugins from the store.
-    """
+    """Store plugin — download and install new plugins."""
 
-    # The Store's full content depends on a network fetch. Keep the previous
-    # screen visible until that fetch returns (or a fallback fires), then reveal
-    # the Store fully populated — instead of showing local plugins and folding
-    # downloadable ones in afterward. Gated via is_screen_ready().
+    # Kept for source compatibility with the CTk reveal cascade.
     defer_reveal_until_settled = True
 
     def __init__(self, app):
-        """
-        @brief Initialize the Store plugin.
-        Initialize the Store plugin with the specified parameters.
-        :param app: Main application object.
-        """
         super().__init__(
             id="004",
             version="2025.01.01",
@@ -45,147 +147,70 @@ class Plugin(BasePlugin):
             description="This plugin allows you to download and install new plugins.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Store", "ES": "Tienda", "FR": "Magasin"},
-            icon_light_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "store_light.png"
-            ),
-            icon_dark_path=os.path.join(
-                os.path.dirname(os.path.realpath(__file__)), "store_dark.png"
-            ),
+            icon_light_path=os.path.join(_DIR, "store_light.png"),
+            icon_dark_path=os.path.join(_DIR, "store_dark.png"),
             uninstall_enabled=False,
         )
         self.app = app
+        # Kept installed (it drives plugin installs) but out of the UI until
+        # the plugin catalogue is rebuilt for Phoenix. ui.show_store=true
+        # brings it back.
+        from utils import settings as app_settings
+        self.hidden = not app_settings.get("ui", "show_store", False)
         self.status = self.get_status()
+        self.plugin_cards: dict = {}
+        self.remote_data_map: dict = {}
 
+    # ===================================================================
+    #  Screen
+    # ===================================================================
     def create_main_screen(self):
-        """
-        @brief Create the main screen for the Store plugin.
-        """
-        self.main_frame = customtkinter.CTkScrollableFrame(
-            self.app, corner_radius=0, fg_color="transparent"
-        )
-        self.main_frame.grid_columnconfigure(0, weight=1)
+        inner = QWidget()
+        col = QVBoxLayout(inner)
+        col.setContentsMargins(20, 0, 20, 20)
+        col.setSpacing(0)
 
-        # Get theme colors
-        accent_blue = customtkinter.ThemeManager.theme["CTkButton"]["border_color"]
-        card_bg = customtkinter.ThemeManager.theme["CTkFrame"]["fg_color"]
-        corner_radius = customtkinter.ThemeManager.theme["CTkFrame"]["corner_radius"]
+        # 1. Generous top padding — the header is a prominent centred band.
+        col.addSpacing(40)
 
-        # Add a top spacer to move content down and away from the window title bar/header
-        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=30)
-        top_margin_spacer.grid(row=0, column=0, sticky="ew")
+        # 2. Centred page header: title + muted subtitle + divider. No inline
+        #    colours or fonts — H1/Muted inherit the app-wide font family and
+        #    theme colours from the global QSS, so the title uses the exact
+        #    same heading style as the rest of the app and recolours on every
+        #    light/dark toggle.
+        self.title_label = heading("Store")  # QLabel#H1 (24px/700)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(self.title_label)
+        col.addSpacing(4)
+        subtitle = muted("Browse and install plugins to extend Phoenix.")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(subtitle)
+        col.addSpacing(40)
+        divider = QFrame()
+        divider.setObjectName("Divider")
+        divider.setFixedHeight(1)
+        col.addWidget(divider)
+        col.addSpacing(20)
 
-        # Container for centered title panel
-        title_container = customtkinter.CTkFrame(self.main_frame, fg_color="transparent", height=80)
-        title_container.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
-        title_container.grid_columnconfigure(0, weight=1)
-        title_container.grid_propagate(False)
-        
-        # Title panel with background frame (max width 50%)
-        title_frame = customtkinter.CTkFrame(
-            title_container,
-            fg_color=card_bg,
-            corner_radius=corner_radius
-        )
-        title_frame.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.5, relheight=1.0)
-        
-        self.title_label = customtkinter.CTkLabel(
-            title_frame,
-            text="Store",
-            font=customtkinter.CTkFont(family="Inter", size=30, weight="bold"),
-            text_color=("black", "white"),
-            justify="center",
-            anchor="center",
-        )
-        self.title_label.pack(expand=True, fill="both", padx=20, pady=20)
-
-        # --- Plugins grid ---
-        # Build with whatever remote data we already have (cached from a prior
-        # visit, or empty). The remote list comes over the network, so we NEVER
-        # block the build on it — a synchronous requests.get froze the whole UI
-        # on navigation to the Store. We render the local plugins immediately and
-        # fold in remote-only plugins when they arrive (_fetch_remote_async →
-        # _on_remote_loaded).
+        # 3. Responsive grid of plugin cards. Build with whatever remote data we
+        #    already have (cached from a prior visit, or empty). The remote list
+        #    is a network fetch, so we NEVER block the build on it — render local
+        #    plugins now and fold remote-only ones in when they arrive.
         available_remote = getattr(self, "_remote_cache", None)
         plugins = self._build_plugin_list(available_remote or [])
-
-        # Reveal readiness: if remote data is already cached we're complete and
-        # ready to show now; otherwise we wait for the background fetch (gated by
-        # is_screen_ready) before the screen is revealed.
         self._remote_done = available_remote is not None
-
-        # Store plugins for responsive rebuild
         self._store_plugins = plugins
 
-        from utils.logger import logger
-        logger.info(f"Store: Rendering {len(plugins)} cards. IDs: {[p.id for p in plugins]}")
-        
-        # Responsive layout: determine max columns based on window width
-        screen_width = self.app.winfo_screenwidth()
-        window_width = self.app.winfo_width()
-        if window_width <= screen_width * 0.6:
-            max_cols = 2
-            min_cols = None
-        elif window_width >= screen_width * 0.9:
-            max_cols = None
-            min_cols = 4
-        else:
-            max_cols = None
-            min_cols = None
-        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-        
-        # Store current column count to detect changes
-        self._current_cols = len(cols)
-        self._current_max_cols = max_cols
+        self._grid_host = CardGrid()
+        self._flow = self._grid_host  # FlowLayout-compatible surface
+        self.plugin_cards = {}
+        for p in plugins:
+            self._add_card(p)
+        col.addWidget(self._grid_host, 1)
 
-        # Content Wrapper for Grid (to allow horizontal centering)
-        content_wrapper = customtkinter.CTkFrame(self.main_frame, fg_color="transparent")
-        content_wrapper.grid(row=2, column=0, sticky="new", padx=15, pady=0)
-        content_wrapper.grid_columnconfigure(0, weight=1)
-        
-        content_frame = customtkinter.CTkFrame(
-            content_wrapper, corner_radius=0, fg_color="transparent"
-        )
-        content_frame.grid(row=0, column=0, sticky="new")
-        content_frame.grid_columnconfigure(0, weight=1)
-        
-        # Store reference for rebuilding
-        self._content_frame = content_frame
+        self.main_frame = scroll_page(inner)
 
-        self.grid_frame = self.app.create_grid(
-            frame=content_frame,
-            row=0,
-            column=0,
-            plugins=plugins,
-            color="transparent",
-            sticky="nsew",
-            max_cols=max_cols,
-            min_cols=min_cols,
-        )
-        
-        # Helper for extra buttons - now uses class method
-        inject_store_buttons = self._inject_store_buttons
-
-        # Track cards for surgical updates
-        self.plugin_cards = {}  # ID -> frame map
-
-        for index, plugin in enumerate(plugins):
-            r = index // len(cols)
-            c = index % len(cols)
-            card = self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin, 
-                show_description=True, 
-                extra_buttons_func=inject_store_buttons
-            )
-            self.plugin_cards[plugin.id] = card
-        
-        # Bind resize handler to app window for responsive layout
-        self._bind_responsive_resize(inject_store_buttons)
-
-        # On the first visit, fetch the remote plugin list in the background.
-        # The screen reveal waits on is_screen_ready() until it returns, so the
-        # Store appears fully populated. A fallback marks us ready anyway so a
-        # slow/dead network can't hold the Store hidden — in that case it reveals
-        # with local plugins and folds remote in later (non-reflow append).
+        # 4. On the first visit, fetch the remote plugin list in the background.
         if available_remote is None:
             self._fetch_remote_async()
             self.app.after(2500, self._mark_remote_done)
@@ -193,19 +218,38 @@ class Plugin(BasePlugin):
         return self.main_frame
 
     def is_screen_ready(self):
-        """Reveal gate: the Store is ready once the remote fetch has resolved
-        (or a fallback fired). See defer_reveal_until_settled."""
         return getattr(self, "_remote_done", True)
 
     def _mark_remote_done(self):
         self._remote_done = True
 
+    def _add_card(self, plugin) -> None:
+        card = _StoreCard(plugin, self._inject_store_buttons)
+        self._flow.addWidget(card)
+        self.plugin_cards[plugin.id] = card
+
+    def on_theme_changed(self) -> None:
+        """Re-tint card icons, desc colours and button styles on theme toggle.
+
+        Cards bake theme colours in at build time (icon tint, secondary text,
+        button QSS), so the cached screen must be rebuilt — otherwise dark
+        mode shows the light-mode near-black icons (and vice versa).
+        """
+        if getattr(self, "_flow", None):
+            self._rebuild_grid()
+
+    # ===================================================================
+    #  Plugin list composition (NO network I/O — safe on the build path)
+    # ===================================================================
     def _build_plugin_list(self, available_remote):
-        """Compose the Store's plugin list from local + already-fetched remote
-        data. Performs NO network I/O (safe to call on the build path)."""
-        manager = self.app.get_plugin_manager()
-        installed_plugins = manager.plugins
-        all_local_plugins = manager.load_plugins(include_uninstalled=True)
+        try:
+            manager = self.app.get_plugin_manager()
+            installed_plugins = manager.plugins
+            all_local_plugins = manager.load_plugins(include_uninstalled=True)
+        except Exception:
+            installed_plugins = list(getattr(self.app, "plugins", []))
+            all_local_plugins = list(installed_plugins)
+
         installed_ids = {p.id for p in installed_plugins}
         local_ids = {p.id for p in all_local_plugins}
 
@@ -221,20 +265,15 @@ class Plugin(BasePlugin):
         # Keep remote data for restoration after uninstall.
         self.remote_data_map = {rp["id"]: rp for rp in available_remote}
 
-        # Plugins hidden from the Store (still available in sidebar if installed)
-        HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
-        HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
         plugins = [
             p for p in plugins
             if p.id not in HIDDEN_FROM_STORE
             and getattr(p, "name", "").lower() not in HIDDEN_NAMES
         ]
 
-        # Group installed/local plugins first, then remote-only ones — each
-        # sorted by name. This stable grouping is what lets remote plugins be
-        # folded in later (the first-load async fetch) WITHOUT reordering the
-        # local cards already on screen: they stay put and the remote cards
-        # simply append after them.
+        # Local/installed first (sorted by name), then remote-only (sorted) — so
+        # folding remote in later never reorders the local cards already on
+        # screen; the remote cards simply append after them.
         local = sorted(
             (p for p in plugins if not isinstance(p, RemotePluginWrapper)),
             key=lambda x: x.get_name(),
@@ -245,7 +284,6 @@ class Plugin(BasePlugin):
         )
         plugins = local + remote_only
 
-        # Deduplicate by ID to be safe.
         unique_plugins, seen = [], set()
         for p in plugins:
             if p.id not in seen:
@@ -253,10 +291,11 @@ class Plugin(BasePlugin):
                 seen.add(p.id)
         return unique_plugins
 
+    # ===================================================================
+    #  Async remote fetch
+    # ===================================================================
     def _fetch_remote_async(self):
-        """Fetch the remote plugin list off the UI thread, then merge it in."""
-        import threading
-
+        """Fetch the remote plugin list off the GUI thread, then merge it in."""
         def _work():
             try:
                 data = self.app.get_plugin_manager().get_available_plugins()
@@ -270,470 +309,202 @@ class Plugin(BasePlugin):
         threading.Thread(target=_work, daemon=True).start()
 
     def _on_remote_loaded(self, remote):
-        """Merge freshly-fetched remote plugins into the Store (main thread)."""
-        # The fetch has resolved (success or failure) — clear the reveal gate so
-        # a still-hidden Store can show now.
+        """Merge freshly-fetched remote plugins into the Store (GUI thread)."""
         self._remote_done = True
-        # Empty result means the fetch failed (or there genuinely are none).
-        # Don't cache it — leave _remote_cache unset so the next visit retries.
         if not remote:
-            return
+            return  # don't cache failures; next visit retries
         self._remote_cache = remote
-        # Bail if the Store screen was torn down while we were fetching.
-        if not (getattr(self, "main_frame", None)
-                and self.main_frame.winfo_exists()):
-            return
 
-        new_list = self._build_plugin_list(remote)
+        if not getattr(self, "_flow", None):
+            return  # screen torn down while fetching
+
+        try:
+            new_list = self._build_plugin_list(remote)
+        except Exception:
+            return
         if [p.id for p in new_list] == [
             p.id for p in getattr(self, "_store_plugins", [])
         ]:
             return  # nothing new to show
 
         self._store_plugins = new_list
+        self._rebuild_grid()
 
-        # Rebuild with the SAME column count already on screen, so folding in the
-        # remote plugins doesn't change the grid width or reposition existing
-        # cards — they stay put and the new cards fill in below. Forcing
-        # max==min==current pins the column count. One settled, synchronous pass
-        # (no intermediate repaint), so there's no flash or reflow.
-        cols = max(1, getattr(self, "_current_cols", 1))
-        self._rebuild_grid(cols, cols, self._inject_store_buttons)
-    
-    def _bind_responsive_resize(self, inject_store_buttons):
-        """
-        Bind a resize handler to rebuild grid when the column count needs to change.
-
-        Uses a 250ms debounce so the grid is only rebuilt once the user finishes (or
-        pauses) resizing — not on every pixel during a drag.  Position-only Configure
-        events (window moved but not resized) are filtered out immediately so they
-        never queue a rebuild at all.
-        """
-        def on_resize(event=None):
-            if not hasattr(self, '_store_plugins') or not hasattr(self, '_content_frame'):
-                return
-            try:
-                if not self._content_frame.winfo_exists():
-                    return
-            except Exception:
-                return
-
-            screen_width = self._cached_screen_width
-            window_width = self.app.winfo_width()
-
-            if window_width <= screen_width * 0.6:
-                max_cols = 2
-                min_cols = None
-            elif window_width >= screen_width * 0.9:
-                max_cols = None
-                min_cols = 4
-            else:
-                max_cols = None
-                min_cols = None
-
-            target_cols = len(self.app.calculate_rows_cols(
-                len(self._store_plugins), max_cols=max_cols, min_cols=min_cols)[1])
-
-            if getattr(self, '_current_cols', None) == target_cols:
-                return
-
-            self._rebuild_grid(max_cols, min_cols, inject_store_buttons)
-
-        self._resize_after_id = None
-        # Track the last known window dimensions so we can ignore position-only events.
-        self._last_win_size = [0, 0]
-        self._cached_screen_width = self.app.winfo_screenwidth()
-
-        def debounced_resize(event=None):
-            # Filter: ignore Configure events that only changed position, not size.
-            if event:
-                if event.width == self._last_win_size[0] and event.height == self._last_win_size[1]:
-                    return
-                self._last_win_size[0] = event.width
-                self._last_win_size[1] = event.height
-
-            # Skip if store is no longer visible or has been destroyed.
-            if not hasattr(self, 'main_frame'):
-                return
-            try:
-                if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
-                    return
-            except Exception:
-                return
-
-            # Always debounce — never fire mid-drag, even on threshold crossings.
-            # Rebuilding the grid while the user is still dragging causes the visible
-            # flash/glitch on Windows; waiting until they pause/stop eliminates it.
-            if self._resize_after_id:
-                self.app.after_cancel(self._resize_after_id)
-            self._resize_after_id = self.app.after(250, on_resize)
-
-        # LEAK PREVENTION: unbind any handler left over from a previous tab visit.
-        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
-            try:
-                self.app.unbind("<Configure>", self._resize_handler_id)
-            except Exception:
-                pass
-
-        self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
-    
-    def destroy(self):
-        """Cleanup handler for uninstallation."""
-        if hasattr(self, '_resize_after_id') and self._resize_after_id:
-            try:
-                self.app.after_cancel(self._resize_after_id)
-            except:
-                pass
-        
-        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
-            try:
-                self.app.unbind("<Configure>", self._resize_handler_id)
-            except:
-                pass
-        
-        super().destroy()
-    
-    def _rebuild_grid(self, max_cols, min_cols, inject_store_buttons):
-        """Rebuild the plugin grid with new column count."""
-        if not hasattr(self, '_store_plugins') or not hasattr(self, '_content_frame'):
+    def _rebuild_grid(self):
+        """Tear down and re-add every card from self._store_plugins."""
+        if not getattr(self, "_flow", None):
             return
-        
-        plugins = self._store_plugins
-        
-        # Destroy old grid
-        if hasattr(self, 'grid_frame') and self.grid_frame:
-            try:
-                self.grid_frame.destroy()
-            except:
-                pass
-        
-        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-        self._current_cols = len(cols)
-        self._current_max_cols = max_cols
-        
-        self.grid_frame = self.app.create_grid(
-            frame=self._content_frame,
-            row=0,
-            column=0,
-            plugins=plugins,
-            color="transparent",
-            sticky="nsew",
-            max_cols=max_cols,
-            min_cols=min_cols,
-        )
-        
+        for cid, card in list(self.plugin_cards.items()):
+            card.setParent(None)
+            card.deleteLater()
         self.plugin_cards = {}
-        for index, plugin in enumerate(plugins):
-            r = index // len(cols)
-            c = index % len(cols)
-            card = self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin,
-                show_description=True,
-                extra_buttons_func=inject_store_buttons
-            )
-            self.plugin_cards[plugin.id] = card
+        # Drop any stale items left in the flow layout.
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            w = item.widget() if item else None
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        for p in self._store_plugins:
+            self._add_card(p)
+        self._grid_host.updateGeometry()
 
-        # Settle the rebuilt cards synchronously so a column-count change during
-        # resize lands in its final layout in one pass (no post-rebuild reflow).
-        try:
-            self.app._settle_screen(self.main_frame)
-        except Exception:
-            pass
+    # ===================================================================
+    #  Store action buttons (Info + Install/Uninstall + inline confirm)
+    # ===================================================================
+    def _inject_store_buttons(self, card: _StoreCard, p):
+        is_remote = isinstance(p, RemotePluginWrapper)
+        is_uninstalled = getattr(p, "status", None) == "Uninstalled"
 
-    def _inject_store_buttons(self, container, p):
-        """Helper to inject buttons with inline confirmation for uninstall."""
-        # Track button state for confirmation UI
-        container._button_state = "normal"  # "normal" or "confirming"
-        
         def show_normal_buttons():
-            """Show the default Info + (Install/Uninstall) buttons."""
-            # Clear container
-            for widget in container.winfo_children():
-                widget.destroy()
-            
-            # Configure grid columns to expand equally
-            container.grid_columnconfigure(0, weight=1)
-            container.grid_columnconfigure(1, weight=1)
-            
-            # Determine if there will be a second button
-            has_second_button = (
-                isinstance(p, RemotePluginWrapper) or 
-                getattr(p, "status", None) == "Uninstalled" or
-                (not isinstance(p, RemotePluginWrapper) and getattr(p, "uninstall_enabled", True))
-            )
-            
-            # Info Button - span full width if no second button
-            customtkinter.CTkButton(
-                container,
-                text="Info",
-                height=26,
-                command=lambda p=p: self.app.show_readme(p) if not isinstance(p, RemotePluginWrapper) else self.show_remote_info(p),
-                border_width=0,
-                fg_color=("#3B8ED0", "#1F6AA5"),
-                hover_color=("#367EBB", "#144870"),
-                text_color=("white", "white"),
-                font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=0, padx=5, pady=5, sticky="ew", columnspan=2 if not has_second_button else 1)
+            card.clear_buttons()
 
-            if isinstance(p, RemotePluginWrapper) or getattr(p, "status", None) == "Uninstalled":
-                # Install Button
-                customtkinter.CTkButton(
-                    container,
-                    text="Install",
-                    height=26,
-                    # p=p to ensure that each instance captures its own plugin reference correctly, preventing late binding issues in loops
-                    command=lambda p=p: self.handle_install(p),
-                    border_width=0,
-                    fg_color=("#2ECC71", "#27AE60"),
-                    hover_color=("#27AE60", "#219150"),
-                    text_color=("white", "white"),
-                    font=customtkinter.CTkFont(size=12)
-                ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-            else:
-                # Uninstall Button (if enabled)
-                if getattr(p, "uninstall_enabled", True):
-                    customtkinter.CTkButton(
-                        container,
-                        text="Uninstall",
-                        height=26,
-                        command=show_confirm_buttons,
-                        border_width=0,
-                        fg_color=("#FF4444", "#C73636"),
-                        hover_color=("#C73636", "#9E2A2A"),
-                        text_color=("white", "white"),
-                        font=customtkinter.CTkFont(size=12)
-                    ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-            
-            container._button_state = "normal"
-        
+            info = QPushButton("Info")
+            info.setCursor(Qt.CursorShape.PointingHandCursor)
+            info.setStyleSheet(_info_style())
+            info.clicked.connect(
+                lambda: self.show_remote_info(p) if is_remote
+                else self._show_local_info(p))
+            card.button_row.addWidget(info, 1)
+
+            if is_remote or is_uninstalled:
+                install = QPushButton("Install")
+                install.setCursor(Qt.CursorShape.PointingHandCursor)
+                install.setStyleSheet(_install_style())
+                install.clicked.connect(lambda: self.handle_install(p))
+                card.button_row.addWidget(install, 1)
+            elif getattr(p, "uninstall_enabled", True):
+                uninstall = QPushButton("Uninstall")
+                uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
+                uninstall.setStyleSheet(_uninstall_style())
+                uninstall.clicked.connect(show_confirm_buttons)
+                card.button_row.addWidget(uninstall, 1)
+
         def show_confirm_buttons():
-            """Show Confirm + Cancel buttons for uninstall confirmation."""
-            # Clear container
-            for widget in container.winfo_children():
-                widget.destroy()
-            
-            # Configure grid columns to expand equally
-            container.grid_columnconfigure(0, weight=1)
-            container.grid_columnconfigure(1, weight=1)
-            
-            # Cancel Button
-            customtkinter.CTkButton(
-                container,
-                text="Cancel",
-                height=26,
-                command=show_normal_buttons,
-                border_width=0,
-                fg_color=("#808080", "#606060"),
-                hover_color=("#707070", "#505050"),
-                text_color=("white", "white"),
-                font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-            
-            # Confirm Button
-            customtkinter.CTkButton(
-                container,
-                text="Confirm",
-                height=26,
-                command=confirm_uninstall,
-                border_width=0,
-                fg_color=("#FF4444", "#C73636"),
-                hover_color=("#C73636", "#9E2A2A"),
-                text_color=("white", "white"),
-                font=customtkinter.CTkFont(size=12)
-            ).grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-            
-            container._button_state = "confirming"
-        
+            card.clear_buttons()
+            cancel = QPushButton("Cancel")
+            cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+            cancel.setStyleSheet(_cancel_style())
+            cancel.clicked.connect(show_normal_buttons)
+            card.button_row.addWidget(cancel, 1)
+
+            confirm = QPushButton("Confirm")
+            confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+            confirm.setStyleSheet(_uninstall_style())
+            confirm.clicked.connect(confirm_uninstall)
+            card.button_row.addWidget(confirm, 1)
+
         def confirm_uninstall():
-            """Execute the uninstall action."""
-            success, res = self.app.get_plugin_manager().uninstall_plugin(p)
-            if success:
-                self.app.show_notification(res, type="info")
-                
-                # Surgical update: Swap with RemotePluginWrapper if available
-                new_obj = p
-                if hasattr(self, 'remote_data_map') and p.id in self.remote_data_map:
-                    new_obj = RemotePluginWrapper(self.app, self.remote_data_map[p.id])
-                else:
-                    # Fallback for local-only plugins
-                    p.status = "Uninstalled"
-                
-                self._replace_card(p.id, new_obj)
-                
-                if hasattr(self.app, "refresh_navigation"):
-                    self.app.refresh_navigation()
-                elif hasattr(self.app, "refresh_navigation_menu"):
-                    self.app.refresh_navigation_menu()
-            else:
-                self.app.show_notification(res, type="error")
-                # Revert to normal buttons on error
+            try:
+                result = p.uninstall()
+            except Exception as e:
+                self.app.show_notification(str(e), type="error")
                 show_normal_buttons()
-        
-        # Initialize with normal buttons
+                return
+
+            # plugin.uninstall() -> uninstall_plugin() returns (bool, msg).
+            if isinstance(result, tuple):
+                success, msg = result
+            else:
+                success, msg = False, str(result)
+
+            if success:
+                self.app.show_notification(msg, type="info")
+                new_obj = p
+                if p.id in getattr(self, "remote_data_map", {}):
+                    try:
+                        new_obj = RemotePluginWrapper(
+                            self.app, self.remote_data_map[p.id])
+                    except Exception:
+                        p.status = "Uninstalled"
+                        new_obj = p
+                else:
+                    p.status = "Uninstalled"
+                self._replace_card(p.id, new_obj)
+                try:
+                    self.app.refresh_navigation()
+                except Exception:
+                    pass
+            else:
+                self.app.show_notification(msg, type="error")
+                show_normal_buttons()
+
         show_normal_buttons()
 
     def _replace_card(self, old_plugin_id, new_plugin):
-        """Surgically replace a card in the grid."""
-        if old_plugin_id not in self.plugin_cards:
-            return
-            
-        old_card = self.plugin_cards[old_plugin_id]
-        if not old_card.winfo_exists():
-            return
-            
-        # Get grid position
-        grid_info = old_card.grid_info()
-        row = grid_info.get("row")
-        col = grid_info.get("column")
-        
-        # Destroy and recreate
-        old_card.destroy()
-        
-        new_card = self.app.create_plugin_card(
-            row, col, self.grid_frame, new_plugin,
-            show_description=True,
-            extra_buttons_func=self._inject_store_buttons
-        )
-        self.plugin_cards[new_plugin.id] = new_card
-        
-        # Update internal list for responsiveness
-        plugin_found = False
-        for i, p in enumerate(self._store_plugins):
+        """Swap one card in-place for a fresh one (e.g. after install/uninstall)."""
+        for i, p in enumerate(getattr(self, "_store_plugins", [])):
             if p.id == old_plugin_id:
                 self._store_plugins[i] = new_plugin
-                plugin_found = True
                 break
-                
-        # If not found (should be impossible if card exists), try to find by ID if it changed?
-        # But for now, ensure we don't have duplicates or missing updates.
-        if not plugin_found:
-            # Fallback: trigger full reload to correct state
-            from utils.logger import logger
-            logger.warning(f"Store: Could not find plugin {old_plugin_id} in list during swap. Triggering full reload.")
-            self.app.after(10, lambda: self.app.select_frame_by_name("frame_Store"))
+        self._rebuild_grid()
 
+    # ===================================================================
+    #  Install / info
+    # ===================================================================
     def handle_install(self, remote_plugin):
-        """Handle plugin installation."""
         from utils.logger import logger
-        
-        # Common success handler
+
         def on_success(new_plugin_obj, msg):
-            if hasattr(self.app, "refresh_navigation"):
+            try:
                 self.app.refresh_navigation()
-            elif hasattr(self.app, "refresh_navigation_menu"):
-                self.app.refresh_navigation_menu()
-            
+            except Exception:
+                pass
             self.app.show_notification(msg, type="info")
-            
-            # Surgical UI update
-            self._replace_card(remote_plugin.id, new_plugin_obj)
 
-        if not isinstance(remote_plugin, RemotePluginWrapper):
-            # It's an uninstalled local plugin.
-            # Check if files actually exist before trying to re-enable
-            manager = self.app.get_plugin_manager()
-            
-            # We need to guess the folder name or check if the plugin object has a path?
-            # BasePlugin doesn't store path directly usually, but PluginManager knows.
-            # Simpler: check if load_plugins finds it? No, that's heavy.
-            # Let's check typical user path.
-            # Or better: Try to re-enable, if load_plugins fails to find it, it means files are gone.
-            
-            state = manager._load_state()
-            if remote_plugin.id in state.get("uninstalled", []):
-                # 1. Optimistically un-mark uninstalled
-                state["uninstalled"].remove(remote_plugin.id)
-                manager._save_state(state)
-                
-                # 2. Reload plugins
-                manager.plugins = sorted(manager.load_plugins(reload=True), key=lambda x: x.order)
-                
-                # 3. Check if it appeared
-                new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), None)
-                
-                if new_instance:
-                    # Success: Files were there, just re-enabled
-                    # Update status manually if needed (likely "Stopped" or "OK")
-                    new_instance.status = "Stopped" 
-                    on_success(new_instance, f"Plugin {remote_plugin.get_name()} re-enabled.")
-                    
-                    # Auto-navigate if refreshed
-                    frame_name = f"frame_{new_instance.get_name()}"
-                    # Ensure frames are refreshed before navigating
-                    if hasattr(self.app, "frames"):
-                        self.app.after(200, lambda: self.app.select_frame_by_name(frame_name))
-                    return
-                else:
-                    # Failure: Files are missing! We must download it.
-                    # Revert state change only if download fails? Or just proceed.
-                    logger.warning(f"Store: Plugin {remote_plugin.get_name()} marked as re-enabled but files missing. Attempting redownload.")
-                    
-                    # Try to find URL in remote_data_map
-                    url = None
-                    if hasattr(self, 'remote_data_map') and remote_plugin.id in self.remote_data_map:
-                         url = self.remote_data_map[remote_plugin.id].get("url")
-                    
-                    if not url:
-                        # Try to fetch fresh if map is empty/stale?
-                        # For now, just error if we can't find it.
-                        self.app.show_notification(f"Cannot reinstall {remote_plugin.get_name()}: Files missing and remote source unknown.", type="error")
-                        
-                        # Re-add to uninstalled list to be consistent with missing files
-                        state["uninstalled"].append(remote_plugin.id)
-                        manager._save_state(state)
-                        return
-
-                    # Fall through to download logic below...
+        try:
+            url = getattr(remote_plugin, "url", None)
+            if url:
+                success, message = (
+                    self.app.get_plugin_manager().download_plugin(
+                        url, remote_plugin.id, remote_plugin.get_name()))
+            elif not isinstance(remote_plugin, RemotePluginWrapper):
+                # Local plugin marked uninstalled (files still on disk) —
+                # re-enable it instead of downloading.
+                success, message = (
+                    self.app.get_plugin_manager().reinstall_plugin(
+                        remote_plugin.id))
             else:
-                # Not in uninstalled list? Already installed?
-                logger.info(f"Store: Plugin {remote_plugin.get_name()} is local and not in uninstalled list. Refreshing...")
-                manager.plugins = sorted(manager.load_plugins(reload=True), key=lambda x: x.order)
-                new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), remote_plugin)
-                on_success(new_instance, "Plugin refreshed.")
-                
-                # Auto-navigate if refreshed
-                frame_name = f"frame_{new_instance.get_name()}"
-                if hasattr(self.app, "frames") and frame_name in self.app.frames:
-                    self.app.after(100, lambda: self.app.select_frame_by_name(frame_name))
+                self.app.show_notification(
+                    f"Cannot install {remote_plugin.get_name()}: "
+                    "remote source unknown.", type="error")
                 return
+        except Exception as e:
+            logger.error(f"Store: install failed for "
+                         f"{getattr(remote_plugin, 'id', '?')}: {e}")
+            self.app.show_notification(f"Install failed: {e}", type="error")
+            return
 
-        success, message = self.app.get_plugin_manager().download_plugin(remote_plugin.url, remote_plugin.id, remote_plugin.get_name())
-        logger.info(f"Store: Installation result for {remote_plugin.get_name()}: success={success}, msg={message}")
-        
+        logger.info(f"Store: Installation result for "
+                    f"{remote_plugin.get_name()}: success={success}, "
+                    f"msg={message}")
         if success:
-            # Find the newly installed plugin instance
-            manager = self.app.get_plugin_manager()
-            # Explicitly reload to ensure we have the new class loaded
-            manager.plugins = sorted(manager.load_plugins(reload=True), key=lambda x: x.order)
-            
-            new_instance = next((p for p in manager.plugins if p.id == remote_plugin.id), None)
-            if new_instance:
-                on_success(new_instance, message)
-                
-                # Auto-navigate to the new plugin page
-                frame_name = f"frame_{new_instance.get_name()}"
-                # We need to wait slightly for the UI refresh (triggered by download_plugin) to register the frame
-                # Although download_plugin calls refresh_navigation, the frame creation happens in AppUI.select_frame_by_name or init?
-                # Actually, refresh_navigation updates buttons. Frames are lazy loaded?
-                # AppUI.select_frame_by_name handles creation if missing.
-                # So we can just call it safely.
-                self.app.after(200, lambda: self.app.select_frame_by_name(frame_name))
-            else:
-                # Fallback if strange error
-                self.app.show_notification("Plugin installed but not found in memory.", type="warning")
-                self.app.select_frame_by_name("frame_Store")
+            on_success(remote_plugin, message)
         else:
             self.app.show_notification(message, type="error")
 
-    def show_remote_info(self, remote_plugin):
-        """Show info for a remote plugin."""
-        from gui.dialogs import show_info
-        show_info(self.app, remote_plugin.get_name(), remote_plugin.get_description())
+    def _show_local_info(self, p):
+        try:
+            from gui.dialogs import show_info
+            show_info(self.app, p.get_name(), p.get_description())
+        except Exception:
+            self.app.show_notification(p.get_description(), type="info")
 
+    def show_remote_info(self, remote_plugin):
+        try:
+            from gui.dialogs import show_info
+            show_info(self.app, remote_plugin.get_name(),
+                      remote_plugin.get_description())
+        except Exception:
+            self.app.show_notification(
+                remote_plugin.get_description(), type="info")
 
 
 class RemotePluginWrapper:
-    """Wrapper to make remote plugin dicts compatible with AppUI.create_plugin_card."""
+    """Make a remote plugin dict look like a BasePlugin for the Store card."""
+
+    status_map = BasePlugin.status_map
+
     def __init__(self, app, data):
         self.app = app
         self.id = data["id"]
@@ -742,61 +513,31 @@ class RemotePluginWrapper:
         self.url = data["url"]
         self.order = data.get("order", 99)
         self.status = "Available"
-        
-    def get_name(self): return self.name
-    def get_description(self): return self.description
-    def get_status(self): return self.status
+        self.uninstall_enabled = False
 
-    def _load_icon_safe(self, path, size):
-        """Safely load a PNG icon with fallback to blank image."""
-        from utils.logger import logger
-        try:
-            if os.path.exists(path):
-                return Image.open(path)
-        except Exception as e:
-            logger.error(f"Failed to open icon {path}: {e}")
-        return Image.new('RGBA', size, (255, 255, 255, 0))
+    def get_name(self):
+        return self.name
 
-    def get_icon(self):
-        # Return default store icon for remote plugins (20x20 for sidebar)
-        # Note: icon_light contains dark icon (for light backgrounds)
-        #       icon_dark contains light/white icon (for dark backgrounds)
-        # So we need to swap them for CTkImage (same as base_plugin.py does)
-        icons_path = os.path.dirname(os.path.realpath(__file__))
-        light_path = os.path.join(icons_path, "store_light.png")
-        dark_path = os.path.join(icons_path, "store_dark.png")
-        
-        try:
-            light_image = self._load_icon_safe(light_path, (20, 20))
-            dark_image = self._load_icon_safe(dark_path, (20, 20))
-            return customtkinter.CTkImage(
-                light_image=dark_image,  # Use dark icon (white) for light mode
-                dark_image=light_image,  # Use light icon (dark) for dark mode
-                size=(20, 20)  # Sidebar icon size
-            )
-        except Exception as e:
-            from utils.logger import logger
-            logger.error(f"Error loading store icon: {e}")
-            # Return a blank image as fallback
-            blank = Image.new('RGBA', (20, 20), (255, 255, 255, 0))
-            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(20, 20))
-    
-    def get_icon_large(self):
-        # Return larger icon for dashboard/store cards (40x40)
-        icons_path = os.path.dirname(os.path.realpath(__file__))
-        light_path = os.path.join(icons_path, "store_light.png")
-        dark_path = os.path.join(icons_path, "store_dark.png")
+    def get_description(self):
+        return self.description
 
-        try:
-            light_image = self._load_icon_safe(light_path, (40, 40))
-            dark_image = self._load_icon_safe(dark_path, (40, 40))
-            return customtkinter.CTkImage(
-                light_image=dark_image,
-                dark_image=light_image,
-                size=(40, 40),
-            )
-        except Exception as e:
-            from utils.logger import logger
-            logger.error(f"Error loading store icon (large): {e}")
-            blank = Image.new('RGBA', (40, 40), (255, 255, 255, 0))
-            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=(40, 40))
+    def get_status(self):
+        return self.status
+
+    def uninstall(self):
+        return False, "Plugin is not installed."
+
+    def get_icon_pixmap(self, size: int = 48) -> QPixmap:
+        # Remote plugins use the generic Store icon. icon_light holds the dark
+        # glyph and icon_dark the light one, mirroring base_plugin's pairing.
+        path = (os.path.join(_DIR, "store_dark.png") if theme.is_dark()
+                else os.path.join(_DIR, "store_light.png"))
+        if path and os.path.isfile(path):
+            # Tint like BasePlugin.get_icon_pixmap() does — without it the
+            # raw glyph renders black on dark cards (invisible).
+            return BasePlugin._tint(QPixmap(path).scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        return QPixmap()

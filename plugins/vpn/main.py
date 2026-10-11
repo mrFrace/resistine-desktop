@@ -2,24 +2,55 @@
 ## @package vpn_plugin
 ## @namespace vpn_plugin
 ## @class vpn_plugin::Plugin
-"""
-This module contains the main plugin class for the VPN plugin.
-The VPN plugin displays VPN information and allows the user to manage VPN tunnels.
-Author: Javier Perez and Jacqueline Edoro 
+"""VPN plugin (PyQt6) — faithful port of the CustomTkinter VPN screen.
+
+Reproduces the original CTk dashboard 1:1: a status card with a sliding
+toggle, a configuration selector (shown only when more than one config
+exists) with a Delete button, CLIENT / SERVER detail panels, PUBLIC KEYS
+and ALLOWED IPs panels, and the Import / View Config action buttons — all
+inside a centered ~750 px content column. The platform connect/disconnect
+backends are called, not rewritten; status is refreshed by a re-arming
+``app.after(5000, ...)`` poll that runs the blocking status check on a
+worker thread.
+
+Author: Javier Perez and Jacqueline Edoro (original); Resistine Team (Qt port)
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-from plugins.base_plugin import BasePlugin
-from utils.logger import logger
-import customtkinter
+from __future__ import annotations
+
+import base64
 import os
-from tkinter import filedialog
 import platform
 import subprocess
-import base64
-from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+import threading
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QGuiApplication
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QDialogButtonBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPlainTextEdit,
+    QPushButton,
+    QSizePolicy,
+    QSpacerItem,
+    QVBoxLayout,
+    QWidget,
+)
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+from gui import theme
+from gui.qt_widgets import ResponsiveStack, scroll_page
+from plugins.base_plugin import BasePlugin
+from utils.logger import logger
+
 # --- Platform Detection (single source of truth) ---
 _PLATFORM = platform.system()
 IS_MACOS = _PLATFORM == "Darwin"
@@ -29,96 +60,191 @@ IS_LINUX = _PLATFORM == "Linux"
 # Consolas is more compact and better hinted on Windows than Courier New
 _MONO_FONT = "Consolas" if IS_WINDOWS else "Courier New"
 
-# --- Platform Specific Imports ---
-if IS_WINDOWS:
-    from plugins.vpn.wireguard.vpn_functions_windows import (
-        get_writable_wireguard_dir,
-        check_wireguard_installed,
-        check_service_status,
-        start_vpn,
-        stop_vpn,
-    )
-    from plugins.vpn.wireguard.vpn_windows_client import (
-        get_status, connect, disconnect, toggle
-    )
-    wireguard_folder = get_writable_wireguard_dir()
+# --- Platform Specific Imports (guarded so the module imports on any OS) ---
+# Only the current platform's backend is loaded at top level; the import is
+# wrapped so a missing/erroring platform module never blocks the GUI.
+get_writable_wireguard_dir = None
+check_wireguard_installed = None
+check_service_status = None
+start_vpn = None
+stop_vpn = None
+get_status = None
+connect = None
+disconnect = None
+is_extension_enabled = None
+vpn_helper = None
 
-elif IS_LINUX:
-    from plugins.vpn.wireguard.vpn_functions_linux import *
-    wireguard_folder = get_writable_wireguard_dir()
+try:
+    if IS_WINDOWS:
+        from plugins.vpn.wireguard.vpn_functions_windows import (  # noqa: F401
+            check_service_status,
+            check_wireguard_installed,
+            get_writable_wireguard_dir,
+            start_vpn,
+            stop_vpn,
+        )
+        from plugins.vpn.wireguard.vpn_windows_client import (  # noqa: F401
+            connect,
+            disconnect,
+            get_status,
+        )
+    elif IS_LINUX:
+        from plugins.vpn.wireguard.vpn_functions_linux import (  # noqa: F401
+            check_service_status,
+            check_wireguard_installed,
+            get_writable_wireguard_dir,
+            start_vpn,
+            stop_vpn,
+        )
+    elif IS_MACOS:
+        from plugins.vpn.wireguard.vpn_functions_darwin import (  # noqa: F401
+            check_service_status,
+            check_wireguard_installed,
+            get_writable_wireguard_dir,
+            is_extension_enabled,
+            start_vpn,
+            stop_vpn,
+            vpn_helper,
+        )
+except Exception as _imp_err:  # pragma: no cover - depends on host OS
+    logger.warning(f"VPN backend import failed on {_PLATFORM}: {_imp_err}")
 
-elif IS_MACOS:
-    from plugins.vpn.wireguard.vpn_functions_darwin import *
-    wireguard_folder = get_writable_wireguard_dir()
 
-# DNS Configuration - Change this value to update DNS across the application
-DNS_SERVER = "10.49.11.10"
+def _resolve_wireguard_folder() -> str:
+    """Resolve the writable WireGuard config dir (guarded)."""
+    try:
+        if get_writable_wireguard_dir is not None:
+            return get_writable_wireguard_dir()
+    except Exception as e:
+        logger.warning(f"Could not resolve WireGuard dir: {e}")
+    # Fallback so the plugin can still build on an unsupported host.
+    return os.path.join(os.path.expanduser("~"), ".config", "phoenix", "wireguard")
 
-# Global cache for interface mapping (e.g., config 'wg0' -> system 'utun3')
-_interface_cache = {}
+
+wireguard_folder = _resolve_wireguard_folder()
+
+# DNS Configuration - used as the connectivity-check target and as the DNS
+# shown when a config has none. Override with RESISTINE_DNS_SERVER.
+DNS_SERVER = os.environ.get("RESISTINE_DNS_SERVER", "10.49.11.10")
+
+# Module-level state preserved from the original (wazuh imports is_vpn_connected).
 active_client_name = None
 my_vpn_status = "Stopped"
+
+
+def _phoenix_signed_in() -> bool:
+    """True when signed in with a Phoenix (MAS) account."""
+    try:
+        from plugins.login import oidc
+        return oidc.has_session()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def is_vpn_connected():
     """Return True if VPN is currently connected.
 
-    Dev escape hatch (macOS only): when running ``./run.sh`` alongside an
-    installed ``.pkg`` whose NetworkExtension already holds the tunnel up,
-    this process's internal ``my_vpn_status`` stays ``"Stopped"`` because
-    the dev instance never toggled the VPN itself — even though traffic is
-    already routing through the system tunnel. Setting
-    ``RESISTINE_DEV_VPN_CONNECTED=1`` forces this gate to True so
-    VPN-gated features (e.g. the chat access gate, wazuh_overview API
-    fetches) work in source mode without the dev instance needing to
-    actually drive the tunnel.
-
-    Gated on ``platform.system() == "Darwin"`` so Linux/Windows behavior
-    is unchanged — those platforms have different VPN backends and the
-    escape hatch is irrelevant there. ``run.sh`` only exports the env
-    var on Darwin too, so this is defense in depth.
+    Dev escape hatch (macOS only): when running from source alongside an
+    installed .pkg whose NetworkExtension already holds the tunnel up, this
+    process's internal ``my_vpn_status`` stays "Stopped" even though traffic
+    routes through the system tunnel. RESISTINE_DEV_VPN_CONNECTED=1 forces
+    the gate to True so VPN-gated features work in source mode.
     """
     if (platform.system() == "Darwin"
             and os.environ.get("RESISTINE_DEV_VPN_CONNECTED") == "1"):
         return True
     return my_vpn_status == "Running"
 
+
 # --- Config Manager (module-level for use in init) ---
-from plugins.vpn.config_manager import VPNConfigManager
+from plugins.vpn.config_manager import VPNConfigManager  # noqa: E402
+
 _config_manager = VPNConfigManager(wireguard_folder)
-_config_manager.migrate_legacy_config()
+try:
+    _config_manager.migrate_legacy_config()
+except Exception as e:
+    logger.warning(f"Legacy VPN config migration failed: {e}")
+
+
+def _safe_extension_enabled() -> bool:
+    """is_extension_enabled() guarded; True on non-macOS / on error."""
+    if not IS_MACOS or is_extension_enabled is None:
+        return True
+    try:
+        return bool(is_extension_enabled())
+    except Exception:
+        return True
+
+
+def _list_wg_interfaces() -> list[str]:
+    """Return the WireGuard interfaces reported by ``wg show interfaces``.
+
+    Returns [] if wg is not installed, fails (e.g. lacks privileges) or hangs.
+    """
+    try:
+        result = subprocess.run(
+            ["wg", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.info("WireGuard 'wg' tool not found; assuming no active interfaces")
+        return []
+    except (subprocess.TimeoutExpired, OSError) as e:
+        logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
+        return []
+    if result.returncode != 0:
+        logger.warning(
+            f"⚠️ 'wg show interfaces' failed ({result.returncode}): "
+            f"{(result.stderr or '').strip()}"
+        )
+        return []
+    return result.stdout.split()
+
+
+def _conf_path(config_name: str) -> str:
+    """Path of ``<config_name>.conf`` inside wireguard_folder.
+
+    Raises ValueError for names that could escape the folder.
+    """
+    return _config_manager.config_path(config_name)
+
 
 # --- Initialization Logic ---
 def initialize_vpn_status():
-    global active_client_name, my_vpn_status, existing_interfaces
+    global active_client_name, my_vpn_status
 
     existing_interfaces = []
 
     # First, check if WireGuard is actually installed
-    if not check_wireguard_installed():
+    try:
+        installed = check_wireguard_installed() if check_wireguard_installed else False
+    except Exception:
+        installed = False
+    if not installed:
         logger.warning("⚠️ WireGuard not installed - VPN features disabled")
         my_vpn_status = "Stopped"
         return
 
     if IS_MACOS:
-        # macOS uses Network Extension — wg show interfaces won't see the tunnel.
-        # First verify the extension is actually enabled in Login Items & Extensions.
-        # A stale NETunnelProviderManager can make the CLI report a false status.
-        if not is_extension_enabled():
+        if not _safe_extension_enabled():
             logger.warning("Network extension is not enabled — VPN unavailable")
             my_vpn_status = "Stopped"
         else:
-            # Extension is enabled, query actual connection status via CLI
-            status = check_service_status("vpn", DNS_SERVER)
+            try:
+                status = check_service_status("vpn", DNS_SERVER)
+            except Exception:
+                status = "Stopped"
             if status == "Running":
-                # Use config manager to determine the active config name
                 active_name = _config_manager.get_active_config_name()
                 if active_name:
                     active_client_name = active_name
                 my_vpn_status = "Running"
             else:
                 my_vpn_status = "Stopped"
-    
+
     elif IS_WINDOWS:
         try:
             active_name = _config_manager.get_active_config_name()
@@ -134,52 +260,50 @@ def initialize_vpn_status():
         except Exception as e:
             logger.warning(f"⚠️ Could not determine VPN status on Windows: {e}")
             my_vpn_status = "Stopped"
-    elif IS_LINUX:
-        try:
-            existing_interfaces = os.popen('wg show interfaces').read().split()
-        except Exception as e:
-            logger.warning(f"⚠️ Could not enumerate WireGuard interfaces: {e}")
-            existing_interfaces = []
 
-#? On Linux, we can check the status of each interface to find the active one. On Windows/macOS, we rely on service/extension status and config manager.
+    elif IS_LINUX:
+        existing_interfaces = _list_wg_interfaces()
+
+    # On Linux/Windows, find the active interface by polling each known one.
     if not IS_MACOS:
-        # Check if any known interface is running (Linux/Windows only)
         for interface in existing_interfaces:
             if interface.strip():
-                status = check_service_status(interface, DNS_SERVER)
+                try:
+                    status = check_service_status(interface, DNS_SERVER)
+                except Exception:
+                    status = "Stopped"
                 if status == "Running":
                     active_client_name = interface
                     break
 
-        my_vpn_status = check_service_status(active_client_name, DNS_SERVER) if active_client_name else "Stopped"
+        if active_client_name:
+            try:
+                my_vpn_status = check_service_status(active_client_name, DNS_SERVER)
+            except Exception:
+                my_vpn_status = "Stopped"
+        else:
+            my_vpn_status = "Stopped"
 
     logger.info(f"VPN Status in Init: {my_vpn_status}")
 
-# --- Helper Functions ---
+
+try:
+    initialize_vpn_status()
+except Exception as e:
+    logger.warning(f"VPN status initialization failed: {e}")
 
 
-def update_listbox_colors(listbox):
-    if customtkinter.get_appearance_mode() == "Dark":
-        listbox.config(fg="white", bg="#2e2e2e")
-    else:
-        listbox.config(fg="black", bg="lightgray")
-
-# --- Run Init ---
-initialize_vpn_status()
+# --- Theme colour helpers (mirror the original (light, dark) pairs) ---
+def _pick(light: str, dark: str) -> str:
+    return dark if theme.is_dark() else light
 
 
 # --- Main Plugin Class ---
 
-class Plugin(BasePlugin):
-    """
-    @brief Plugin class for the VPN plugin.
-    """
 
-    # The scrollbar auto-hide + content-column centering settle just after the
-    # screen is built (the canvas reflows when the scrollbar toggles), which
-    # would otherwise be a visible "shift right" after the page appears. Defer
-    # the reveal until the layout goes quiescent so the page is shown already
-    # settled.
+class Plugin(BasePlugin):
+    """@brief Plugin class for the VPN plugin (PyQt6)."""
+
     defer_reveal_until_settled = True
 
     def __init__(self, app):
@@ -188,61 +312,85 @@ class Plugin(BasePlugin):
             version="2025.01.01",
             order=3,
             name="VPN",
-            status=None, # Default status
-            description="VPN Management",
+            status=None,  # Default status
+            description="Encrypt your traffic through the Phoenix network.",
             supported_systems=["Windows", "Darwin", "Linux"],
             translations={"US": "VPN", "ES": "VPN", "FR": "VPN"},
-            icon_light_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"),
-            icon_dark_path=os.path.join(os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"),
+            icon_light_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "vpn_light.png"
+            ),
+            icon_dark_path=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "vpn_dark.png"
+            ),
         )
         self.app = app
         self.config_dir = wireguard_folder
         self.config_manager = _config_manager
         self.active_interface = None
-        self._extension_poll_id = None
-        self._windows_poll_id = None
-        self._last_extension_state = None
+        self.vpn_toggle_switch = None
+        self._poll_id = None
+        self._toggle_busy = False
+        self._last_polled_state = my_vpn_status
         # Set status dynamically after super().__init__
         self.status = self.get_status()
-        # Start background polling so my_vpn_status stays fresh at all times
-        # (needed for both the VPN toggle page and the dashboard banner)
-        if IS_WINDOWS:
-            self.app.after(2000, self._start_windows_service_polling)
-        elif IS_MACOS:
-            # Request system extension activation after the main loop starts.
-            # If the bundled extension is newer than the installed one, macOS
-            # prompts for replacement — preventing stale-extension XPC failures.
+
+        if IS_MACOS:
+            # Request extension activation once the Qt loop is running.
             self.app.after(1000, self._activate_extension_if_needed)
+            # Debug-mode convenience: auto-connect the VPN so VPN-gated
+            # features (chat) work without a manual toggle.
+            # Scheduled after extension activation has had time to settle.
+            if os.environ.get("RESISTINE_DEBUG") == "1":
+                self.app.after(3000, self._debug_auto_connect)
 
-    def _activate_extension_if_needed(self):
-        """Request system extension activation (macOS only).
+    def _debug_auto_connect(self):
+        """Auto-start the VPN on launch in debug mode (macOS dev flow).
 
-        Called once via app.after() so the NSRunLoop is running when the
-        OSSystemExtensionRequest is submitted.  If the bundled extension
-        matches the installed one, sysextd returns immediately (no dialog).
+        Skips silently when the tunnel is already up; skips with a log
+        line when no config has been imported yet. activate_tunnel()
+        itself handles the extension-disabled case with a notification.
         """
+        if my_vpn_status == "Running":
+            return
+        tunnel = self.get_selected_conf_file_name()
+        if not tunnel:
+            logger.warning(
+                "Debug auto-connect skipped: no VPN config found")
+            return
+        logger.info(f"Debug mode: auto-connecting VPN tunnel {tunnel}")
+        self.activate_tunnel(tunnel)
+
+    # ===================================================================
+    #  Status
+    # ===================================================================
+    def _activate_extension_if_needed(self):
+        """Request system extension activation (macOS only)."""
         try:
-            vpn_helper.activate_extension()
+            if vpn_helper is not None:
+                vpn_helper.activate_extension()
         except Exception as e:
             logger.warning(f"Extension activation request failed: {e}")
 
     def check_status(self):
-        """Dynamic check of the VPN status."""
-        if IS_MACOS and not is_extension_enabled():
+        """Dynamic check of the VPN status from cheap cached state."""
+        if IS_MACOS and not _safe_extension_enabled():
             return "Error"
         if my_vpn_status == "Running":
             return "OK"
-        elif my_vpn_status == "Connecting":
+        if my_vpn_status in ("Connecting", "Starting"):
             return "Info"
         return "Warning"
+
+    def on_theme_changed(self):
+        """Rebuild the VPN screen on theme toggle to re-evaluate the _pick() colours."""
+        if getattr(self, "app", None):
+            self.app.update_plugin(self.id)
 
     @staticmethod
     def validate_wireguard_config(content):
         """Validate that content is a well-formed WireGuard config.
 
-        Checks for required [Interface] and [Peer] sections and their
-        mandatory keys.  Returns (True, "") on success or (False, reason)
-        on failure.
+        Returns (True, "") on success or (False, reason) on failure.
         """
         MAX_CONFIG_SIZE = 10_240  # 10 KB — more than enough for any config
         if len(content) > MAX_CONFIG_SIZE:
@@ -281,20 +429,24 @@ class Plugin(BasePlugin):
 
         return True, ""
 
+    # ===================================================================
+    #  Config helpers
+    # ===================================================================
     def import_config(self):
-        """Allows the user to import a WireGuard config file alongside existing configs."""
+        """Import a WireGuard config file alongside existing configs."""
         global my_vpn_status, active_client_name
 
-        file_path = filedialog.askopenfilename(
-            title="Select WireGuard Config",
-            filetypes=[("WireGuard Config", "*.conf"), ("All Files", "*.*")]
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,  # no parent: a movable panel, not a fixed macOS sheet
+            "Select WireGuard Config",
+            "",
+            "WireGuard Config (*.conf);;All Files (*.*)",
         )
-
         if not file_path:
             return
 
         try:
-            with open(file_path, 'r') as src:
+            with open(file_path, "r") as src:
                 content = src.read()
 
             valid, reason = self.validate_wireguard_config(content)
@@ -305,26 +457,23 @@ class Plugin(BasePlugin):
 
             # Stop VPN if running before switching to imported config
             if my_vpn_status == "Running" and active_client_name:
-                #old_config_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
-                #stop_vpn(old_config_path)
-                stop_vpn(
-                        active_client_name if IS_WINDOWS
-                        else os.path.join(wireguard_folder, f"{active_client_name}.conf")
-                    )
+                self._safe_stop(active_client_name)
                 my_vpn_status = "Stopped"
                 active_client_name = None
 
-            # Import via config manager (keeps existing configs)
             success, config_name = self.config_manager.import_config(file_path, content)
             if not success:
-                self.app.show_notification(f"Failed to import: {config_name}", type="error")
+                self.app.show_notification(
+                    f"Failed to import: {config_name}", type="error"
+                )
                 return
 
-            # Set imported config as active
             self.config_manager.set_active_config(config_name)
 
             logger.info(f"Imported config: {config_name}")
-            self.app.show_notification("Configuration imported successfully!", type="success")
+            self.app.show_notification(
+                "Configuration imported successfully!", type="success"
+            )
             self.update_plugin(self.id)
 
         except Exception as e:
@@ -333,76 +482,748 @@ class Plugin(BasePlugin):
 
     def get_selected_conf_file_name(self):
         """Get the active VPN config name from the config manager."""
-        global active_client_name
-
-        # If VPN is running, return the running interface name
         if active_client_name and my_vpn_status == "Running":
             return active_client_name
-
-        # Use config manager to get the active config
-        return self.config_manager.get_active_config_name()
+        try:
+            return self.config_manager.get_active_config_name()
+        except Exception as e:
+            logger.warning(f"Could not resolve active config: {e}")
+            return None
 
     def _get_client_public_key(self, private_key_b64):
-        """Derive the WireGuard public key from a private key using pure Python."""
+        """Derive the WireGuard public key from a private key in pure Python."""
         try:
-            # Decode the base64 private key
             private_bytes = base64.b64decode(private_key_b64)
             if len(private_bytes) != 32:
-                # WireGuard keys are exactly 32 bytes (256 bits)
-                return 'N/A'
-                
-            # Create private key object and get public bytes
+                return "N/A"
             priv = X25519PrivateKey.from_private_bytes(private_bytes)
             pub_bytes = priv.public_key().public_bytes(
                 encoding=serialization.Encoding.Raw,
-                format=serialization.PublicFormat.Raw
+                format=serialization.PublicFormat.Raw,
             )
-            
-            # Re-encode to base64 for display
-            return base64.b64encode(pub_bytes).decode('utf-8')
+            return base64.b64encode(pub_bytes).decode("utf-8")
         except Exception as e:
             logger.warning(f"Could not compute client public key: {e}")
-            return 'N/A'
+            return "N/A"
 
     def get_system_info(self, tunnel_name):
-        """Generates the system information dictionary for display."""
-        global my_vpn_status
+        """Generate the system information dictionary for display."""
         data = self.get_configuration_values(tunnel_name) if tunnel_name else {}
 
         is_running = my_vpn_status == "Running"
 
-        # Parse Endpoint for display
-        endpoint = data.get('endpoint', 'N/A')
-        if endpoint != 'N/A' and ':' in endpoint:
-            endpoint = endpoint.split(':')[0]  # Just show IP/Host
+        endpoint = data.get("endpoint", "N/A")
+        if endpoint != "N/A" and ":" in endpoint:
+            endpoint = endpoint.split(":")[0]  # Just show IP/Host
 
-        # Compute client public key from private key (never expose private key)
-        private_key = data.get('private_key', '')
-        client_public_key = self._get_client_public_key(private_key) if private_key else 'N/A'
+        private_key = data.get("private_key", "")
+        client_public_key = (
+            self._get_client_public_key(private_key) if private_key else "N/A"
+        )
 
-        # DNS from config or module default
-        dns = data.get('dns', DNS_SERVER)
+        dns = data.get("dns", DNS_SERVER)
 
         return {
             "Status": "Secured" if is_running else "Unsecured",
             "Config Name": tunnel_name if tunnel_name else "None",
             "System": f"{_PLATFORM} {platform.release()}",
-            "Client IP": data.get('client_ip_address', 'N/A'),
+            "Client IP": data.get("client_ip_address", "N/A"),
             "Client Public Key": client_public_key,
             "Server IP": endpoint,
-            "Server Public Key": data.get('public_key', 'N/A'),
+            "Server Public Key": data.get("public_key", "N/A"),
             "DNS": dns,
         }
 
+    def get_configuration_values(self, tunnel_name):
+        try:
+            conf_file_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"Refusing to read config: {e}")
+            return {}
+        logger.info(f"Reading configuration from: {conf_file_path}")
+        data = {}
+
+        if os.path.exists(conf_file_path):
+            with open(conf_file_path, "r", encoding="utf-8") as conf_file:
+                for line in conf_file:
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        key = key.strip().lower()
+                        value = value.strip()
+                        if key == "privatekey":
+                            data["private_key"] = value
+                        elif key == "address":
+                            data["client_ip_address"] = value
+                        elif key == "publickey":
+                            data["public_key"] = value
+                        elif key == "dns":
+                            data["dns"] = value
+                        elif key == "allowedips":
+                            data["allowed_ips"] = value
+                        elif key == "endpoint":
+                            data["endpoint"] = value
+                            if ":" in value:
+                                data["port"] = value.split(":")[-1]
+        elif not os.path.exists(wireguard_folder):
+            logger.error(
+                f"WireGuard configuration directory does not exist: {wireguard_folder}"
+            )
+        else:
+            logger.error(f"Configuration file not found: {conf_file_path}")
+        return data
+
+    # ===================================================================
+    #  Main screen
+    # ===================================================================
     def create_main_screen(self):
         """Create the main screen for the VPN plugin."""
-        self._stop_extension_polling()
         return self.display_toggle_screen()
+
+    def display_toggle_screen(self):
+        """Display the VPN dashboard (faithful Qt port of the CTk screen)."""
+        global my_vpn_status, active_client_name
+
+        selected_conf_file = self.get_selected_conf_file_name()
+
+        # On Windows, refresh state from the service before painting.
+        if IS_WINDOWS:
+            self.refresh_vpn_state()
+            selected_conf_file = self.get_selected_conf_file_name()
+
+        # On macOS, detect if the extension was disabled after onboarding.
+        extension_disabled = IS_MACOS and not _safe_extension_enabled()
+        if extension_disabled and my_vpn_status == "Running":
+            my_vpn_status = "Stopped"
+            active_client_name = None
+
+        is_connected = my_vpn_status == "Running"
+        self._last_polled_state = my_vpn_status
+
+        # ── Status copy + colours (mirror the original (light, dark) pairs) ──
+        if extension_disabled:
+            status_text = "Extension Disabled"
+            status_color = _pick("#C5221F", "#FF4040")
+            try:
+                mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+            except Exception:
+                mac_major = 0
+            if mac_major >= 15:
+                sub_text = (
+                    "Enable in System Settings › General › Login Items & "
+                    "Extensions › Network Extensions"
+                )
+            else:
+                sub_text = (
+                    "Enable in System Settings › Privacy & Security › scroll to "
+                    "Security › click Allow"
+                )
+            card_bg = _pick("#FDEDEC", "#3A1A1A")
+            is_enabled = False
+        elif not selected_conf_file:
+            status_text = "No Configuration"
+            status_color = _pick("#666666", "#999999")
+            sub_text = "Please log in or import a VPN configuration to get started"
+            card_bg = _pick("#F5F5F5", "#1A1A1A")
+            is_enabled = False
+        else:
+            status_text = "Connected" if is_connected else "Disconnected"
+            status_color = (
+                _pick("#1B7A3E", "#2CC985")
+                if is_connected
+                else _pick("#C5221F", "#FF4040")
+            )
+            sub_text = (
+                "All traffic is encrypted and routed securely"
+                if is_connected
+                else "Your internet traffic is not protected"
+            )
+            card_bg = (
+                _pick("#E8F5E9", "#1A2E1F")
+                if is_connected
+                else _pick("#FDEDEC", "#2E1A1A")
+            )
+            is_enabled = True
+
+        # ── Content column (two equal columns, centered ~750 px) ──────────
+        content = QWidget()
+        grid = QGridLayout(content)
+        grid.setContentsMargins(0, 10, 0, 20)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(12)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        # Collected by _section_header for the equal-padding pass below.
+        self._panel_spacers = []
+        self._panel_grids = []
+
+        row = 0
+
+        # ── 1. STATUS CARD (spans both columns) ───────────────────────────
+        status_card = QFrame()
+        status_card.setObjectName("Surface")
+        status_card.setStyleSheet(
+            f"#Surface {{ background-color: {card_bg}; border: none; "
+            f"border-radius: 12px; }}"
+        )
+        # Cap the banner height so leftover page height doesn't inflate it
+        # into a sparse slab with the subtitle marooned at the bottom.
+        status_card.setMaximumHeight(110)
+        sc_lay = QHBoxLayout(status_card)
+        sc_lay.setContentsMargins(22, 16, 22, 16)
+        sc_lay.setSpacing(12)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(4)
+        title_lbl = QLabel(status_text)
+        title_lbl.setStyleSheet(
+            f"color: {status_color}; font-size: 28px; font-weight: 700; "
+            f"background: transparent;"
+        )
+        text_col.addWidget(title_lbl)
+        sub_lbl = QLabel(sub_text)
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setMaximumWidth(360)
+        sub_lbl.setStyleSheet(
+            f"color: {_pick('#555555', '#AAAAAA')}; font-size: 12px; "
+            f"background: transparent;"
+        )
+        text_col.addWidget(sub_lbl)
+        sc_lay.addLayout(text_col, 1)
+
+        from plugins.vpn.qt_toggle import ToggleSwitch
+
+        self.vpn_toggle_switch = ToggleSwitch()
+        self.vpn_toggle_switch.setEnabled(is_enabled)
+        if is_connected and is_enabled:
+            self.vpn_toggle_switch.select()
+        else:
+            self.vpn_toggle_switch.deselect()
+        self.vpn_toggle_switch.clicked.connect(self._on_toggle_clicked)
+        sc_lay.addWidget(
+            self.vpn_toggle_switch, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+
+        grid.addWidget(status_card, row, 0, 1, 2)
+        row += 1
+
+        # ── 2. CONFIG SELECTOR (spans both columns; only when >1 config) ──
+        try:
+            configs = self.config_manager.list_configs()
+        except Exception:
+            configs = []
+        if len(configs) > 1:
+            sel_card = QFrame()
+            sel_card.setObjectName("Surface")
+            sel_lay = QHBoxLayout(sel_card)
+            sel_lay.setContentsMargins(16, 12, 12, 12)
+            sel_lay.setSpacing(8)
+
+            cfg_lbl = QLabel("CONFIGURATION")
+            cfg_lbl.setStyleSheet(
+                f"color: {_pick('#888888', '#777777')}; font-size: 12px; "
+                f"font-weight: 700; background: transparent;"
+            )
+            sel_lay.addWidget(cfg_lbl)
+
+            config_display_names = [c["display_name"] for c in configs]
+            active_display = (
+                self.config_manager.get_display_name(selected_conf_file)
+                if selected_conf_file
+                else (config_display_names[0] if config_display_names else "None")
+            )
+            self.config_selector = QComboBox()
+            self.config_selector.addItems(config_display_names)
+            idx = self.config_selector.findText(active_display)
+            if idx >= 0:
+                self.config_selector.setCurrentIndex(idx)
+            self.config_selector.activated.connect(self._on_config_activated)
+            sel_lay.addWidget(self.config_selector, 1)
+
+            if selected_conf_file and not self.config_manager.is_resistine_config(
+                selected_conf_file
+            ):
+                del_btn = QPushButton("Delete")
+                del_btn.setObjectName("Danger")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                del_btn.clicked.connect(
+                    lambda: self._delete_config(selected_conf_file)
+                )
+                sel_lay.addWidget(del_btn)
+
+            grid.addWidget(sel_card, row, 0, 1, 2)
+            row += 1
+
+        # ── 3. DETAIL PANELS (only when a config is available) ────────────
+        if selected_conf_file:
+            data = self.get_configuration_values(selected_conf_file)
+            sys_info = self.get_system_info(selected_conf_file)
+
+            # Left — CLIENT panel (column 0)
+            client_panel, client_grid = self._panel()
+            cr = self._section_header(client_panel, client_grid, 0, "CLIENT")
+            cr = self._info_row(
+                client_grid, cr, "IP Address",
+                data.get("client_ip_address", "N/A"), mono=True,
+            )
+            cr = self._info_row(
+                client_grid, cr, "DNS", sys_info.get("DNS", "N/A"), mono=True,
+            )
+            cr = self._info_row(
+                client_grid, cr, "System", sys_info.get("System", "N/A"),
+            )
+            cr = self._info_row(
+                client_grid, cr, "Status", sys_info.get("Status", "N/A"),
+            )
+            # Right — SERVER / PEER panel
+            server_panel, server_grid = self._panel()
+            sr = self._section_header(server_panel, server_grid, 0, "SERVER / PEER")
+            sr = self._info_row(
+                server_grid, sr, "IP Address",
+                sys_info.get("Server IP", "N/A"), mono=True,
+            )
+            sr = self._info_row(server_grid, sr, "Protocol", "WireGuard")
+            sr = self._info_row(
+                server_grid, sr, "Config Name", sys_info.get("Config Name", "N/A"),
+            )
+            client_grid.setRowStretch(cr, 1)
+            server_grid.setRowStretch(sr, 1)
+            # Side-by-side on a wide window; stacked vertically when narrow so
+            # neither panel compresses its rows into clipped text
+            # ("10.11.128." / "Config Nam").
+            grid.addWidget(
+                ResponsiveStack(client_panel, server_panel, stretches=(1, 1)),
+                row, 0, 1, 2)
+            row += 1
+
+            # ── PUBLIC KEYS (spans both columns) ──────────────────────────
+            keys_panel, keys_grid = self._panel()
+            kr = self._section_header(keys_panel, keys_grid, 0, "PUBLIC KEYS")
+            kr = self._info_row(
+                keys_grid, kr, "Client",
+                sys_info.get("Client Public Key", "N/A"), mono=True, wrap=True,
+            )
+            kr = self._info_row(
+                keys_grid, kr, "Server",
+                data.get("public_key", "N/A"), mono=True, wrap=True,
+            )
+            keys_grid.setRowStretch(kr, 1)
+            grid.addWidget(keys_panel, row, 0, 1, 2)
+            row += 1
+
+            # ── ALLOWED IPs (spans both columns) ──────────────────────────
+            allowed_panel, allowed_grid = self._panel()
+            ar = self._section_header(allowed_panel, allowed_grid, 0, "ALLOWED IPs")
+            ar = self._info_row(
+                allowed_grid, ar, "Routes",
+                data.get("allowed_ips", "N/A"), mono=True, wrap=True,
+            )
+            allowed_grid.setRowStretch(ar, 1)
+            grid.addWidget(allowed_panel, row, 0, 1, 2)
+            row += 1
+
+        # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(8)
+
+        import_btn = QPushButton("Import Configuration")
+        import_btn.setObjectName("SurfaceBtn")
+        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        import_btn.setMinimumHeight(38)
+        import_btn.clicked.connect(self.import_config)
+        buttons_row.addWidget(import_btn, 1)
+
+        if selected_conf_file:
+            view_btn = QPushButton("View Config")
+            view_btn.setObjectName("SurfaceBtn")
+            view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            view_btn.setMinimumHeight(38)
+            view_btn.clicked.connect(
+                lambda: self._show_config_dialog(selected_conf_file)
+            )
+            buttons_row.addWidget(view_btn, 1)
+
+        grid.addLayout(buttons_row, row, 0, 1, 2)
+        row += 1
+
+        # Keep the layout top-aligned: a trailing stretch row swallows any
+        # leftover viewport height so the panels stay at their natural
+        # (compact) heights instead of being inflated to fill the page —
+        # tall windows were stretching huge gaps into every panel.
+        grid.setRowStretch(row, 1)
+
+        # ── Capped content column ─────────────────────────────────────────
+        # Compresses freely at small windows (same 20px edge margins as the
+        # Endpoint page, no minimum floor), but stops growing at 700px and
+        # centers on wide windows instead of stretching edge-to-edge.
+        centered = QWidget()
+        outer = QHBoxLayout(centered)
+        # CTk-style: centered (pulled off the sidebar) once the window is
+        # wide enough for the 700px cap to engage — leftover space splits
+        # equally between the side stretches. Below the cap the 50:1 weights
+        # collapse the gutters to ~nothing, so a squished window shows the
+        # same ~20px margin on BOTH sides (matching the Endpoint page).
+        outer.setContentsMargins(20, 10, 20, 10)
+        outer.addStretch(1)
+        content.setMaximumWidth(700)
+        outer.addWidget(content, 50)
+        outer.addStretch(1)
+
+        self.main_container = scroll_page(centered)
+
+        # Equalise the panels' title→content padding so the bottom buttons stay
+        # flush — recomputed whenever the viewport is resized.
+        self._vpn_content = content
+        self._vpn_outer_grid = grid
+        self._vpn_scroll = self.main_container
+        _orig_resize = self.main_container.resizeEvent
+        self._rebalance_padding() # unconditional cuz revisiting from theme change doesn't resize
+        def _on_resize(event, _o=_orig_resize):
+            _o(event)
+            self._rebalance_padding() # rebalance on a resize too or it WILL misalign itself
+
+        self.main_container.resizeEvent = _on_resize
+        self.app.after(0, self._rebalance_padding)
+
+        # Start the re-arming status poll.
+        self._start_polling()
+
+        return self.main_container
+
+    def _rebalance_padding(self):
+        """Keep a small, EQUAL title→content padding in every panel.
+
+        Previously this computed large spacer heights so the bottom buttons
+        sat flush with the viewport — which read as huge dead gaps between
+        each panel's title and its rows. Content now sits directly under the
+        titles (matching the original CTk layout); leftover height simply
+        stays below the last row of panels.
+        """
+        spacers = getattr(self, "_panel_spacers", None)
+        grids = getattr(self, "_panel_grids", [])
+        if not spacers:
+            return
+        fixed = QSizePolicy.Policy.Fixed
+        mini = QSizePolicy.Policy.Minimum
+        try:
+            for sp in spacers:
+                sp.changeSize(0, 8, mini, fixed)
+            for g in grids:
+                g.invalidate()
+            self._vpn_outer_grid.invalidate()
+        except (RuntimeError, AttributeError):
+            return
+
+    # ---- Panel / row builders (mirror _section_header / _info_row) -------
+    def _panel(self) -> tuple[QFrame, QGridLayout]:
+        panel = QFrame()
+        panel.setObjectName("Surface")
+        g = QGridLayout(panel)
+        g.setContentsMargins(0, 0, 0, 8)
+        g.setHorizontalSpacing(6)
+        g.setVerticalSpacing(10)
+        g.setColumnStretch(0, 0)
+        g.setColumnStretch(1, 1)
+        return panel, g
+
+    def _section_header(self, panel, g: QGridLayout, row: int, title: str) -> int:
+        hdr = QLabel(title)
+        hdr.setStyleSheet(
+            f"color: {_pick('#3A7EBF', '#3A7EBF')}; font-size: 12px; "
+            f"font-weight: 700; background: transparent;"
+        )
+        g.addWidget(hdr, row, 0, 1, 2)
+        g.setContentsMargins(14, 14, 14, 8)
+        div = QFrame()
+        div.setFixedHeight(1)
+        div.setObjectName("Divider")
+        g.addWidget(div, row + 1, 0, 1, 2)
+        # Spacer between the title/divider and the content rows. Its height is
+        # assigned later by _rebalance_padding() to an EQUAL value across every
+        # panel (so all title→content paddings match) chosen so the bottom
+        # buttons sit flush with the bottom of the screen. Equal *row stretch*
+        # can't do this — it yields equal total panel heights, hence unequal
+        # padding — so we compute and set fixed spacer heights instead.
+        spacer = QSpacerItem(
+            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        g.addItem(spacer, row + 2, 0, 1, 2)
+        self._panel_spacers.append(spacer)
+        self._panel_grids.append(g)
+        return row + 3
+
+    def _info_row(
+        self, g: QGridLayout, row: int, label: str, value: str,
+        mono: bool = False, wrap: bool = False,
+    ) -> int:
+        lbl = QLabel(label)
+        lbl.setStyleSheet(
+            f"color: {_pick('#888888', '#777777')}; font-size: 13px; "
+            f"background: transparent;"
+        )
+        lbl.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        g.addWidget(lbl, row, 0)
+
+        val = QLabel(str(value))
+        # One family + one weight for every value (mono is intentionally
+        # ignored): the Courier-vs-UI-font mix read as inconsistent sizing
+        # and boldness across rows.
+        _ = mono
+        val.setStyleSheet(
+            f"color: {_pick('#111111', '#EEEEEE')}; font-size: 13px; "
+            f"font-weight: 700; background: transparent;"
+        )
+        # Always allow wrapping: a non-wrapping QLabel is CLIPPED (no
+        # ellipsis) when the two side-by-side panels compress its column on
+        # a narrow window — IPs rendered as "10.11.128." and labels as
+        # "Config Nam". Wrapped values shrink gracefully instead. Keep the
+        # value vertically CENTERED against its label even when it wraps to
+        # multiple lines (Public Keys / Routes rows looked misaligned with
+        # the label at the bottom and the value at the top).
+        val.setWordWrap(True)
+        val.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        g.addWidget(val, row, 1)
+        return row + 1
+
+    # ===================================================================
+    #  Toggle / connect / disconnect (blocking work on a worker thread)
+    # ===================================================================
+    def _on_toggle_clicked(self):
+        """Switch clicked: dispatch connect/disconnect off the GUI thread."""
+        if self._toggle_busy:
+            return
+        switch_value = self.vpn_toggle_switch.get()
+
+        selected_conf_file = self.get_selected_conf_file_name()
+        if not selected_conf_file and switch_value and _phoenix_signed_in():
+            # Signed in with Phoenix but no config yet (e.g. after signing in
+            # again): get this device's config from the API, then connect.
+            self._toggle_busy = True
+            if self.vpn_toggle_switch is not None:
+                self.vpn_toggle_switch.setEnabled(False)
+            threading.Thread(
+                target=self._provision_then_connect, args=(switch_value,),
+                daemon=True,
+            ).start()
+            return
+        if not selected_conf_file:
+            logger.error("❌ Cannot toggle: No VPN config found.")
+            self.app.show_notification(
+                "No VPN configuration found. Please log in or add a config.",
+                type="error",
+            )
+            if self.vpn_toggle_switch is not None:
+                self.vpn_toggle_switch.deselect()
+            return
+
+        self._toggle_busy = True
+        if self.vpn_toggle_switch is not None:
+            self.vpn_toggle_switch.setEnabled(False)
+
+        threading.Thread(
+            target=self._toggle_worker,
+            args=(switch_value, selected_conf_file),
+            daemon=True,
+        ).start()
+
+    def _provision_then_connect(self, switch_value):
+        """Worker: fetch this device's Phoenix VPN config, then connect."""
+        from plugins.vpn import provisioning
+        try:
+            name, _path = provisioning.ensure_vpn_config()
+        except provisioning.ProvisioningError as e:
+            logger.error(f"VPN provisioning failed: {e}")
+            self._toggle_busy = False
+            try:
+                self.app.after(0, self.app.show_notification, str(e), "error")
+                self.app.after(0, self.update_plugin, self.id)
+            except Exception:
+                pass
+            return
+        self._toggle_worker(switch_value, name)
+
+    def _toggle_worker(self, switch_value, selected_conf_file):
+        """Run the blocking connect/disconnect, then marshal UI back."""
+        global my_vpn_status, active_client_name
+        try:
+            if IS_WINDOWS:
+                self._toggle_windows(switch_value, selected_conf_file)
+            else:
+                self._toggle_posix(switch_value, selected_conf_file)
+        except Exception as e:
+            logger.error(f"VPN toggle failed: {e}")
+            try:
+                self.app.after(
+                    0, self.app.show_notification, "VPN action failed", "error"
+                )
+            except Exception:
+                pass
+        finally:
+            self._toggle_busy = False
+            try:
+                self.app.after(0, self.update_plugin, self.id)
+            except Exception:
+                pass
+
+    def _toggle_windows(self, switch_value, selected_conf_file):
+        global my_vpn_status, active_client_name
+        current = get_status(selected_conf_file)
+        is_running = current.get("state") == "Running"
+
+        if switch_value == 1 and not is_running:
+            try:
+                config_path = _conf_path(selected_conf_file)
+            except ValueError as e:
+                logger.error(f"Refusing to connect: {e}")
+                self.app.after(
+                    0, self.app.show_notification, "Invalid VPN configuration name", "error"
+                )
+                return
+            result = connect(selected_conf_file, config_path=config_path)
+            if result.get("status") != "ok" and result.get("state") not in (
+                "Starting", "Running",
+            ):
+                logger.error(f"Connect failed: {result.get('message', '')}")
+                self.app.after(
+                    0, self.app.show_notification, "Failed to connect VPN", "error"
+                )
+        elif switch_value == 0 and is_running:
+            result = disconnect(selected_conf_file)
+            if result.get("status") != "ok":
+                logger.error(f"Disconnect failed: {result.get('message', '')}")
+                self.app.after(
+                    0, self.app.show_notification,
+                    "Failed to disconnect VPN", "error",
+                )
+
+        self.refresh_vpn_state()
+
+    def _toggle_posix(self, switch_value, selected_conf_file):
+        """macOS / Linux connect/disconnect via start_vpn / stop_vpn (config path)."""
+        global my_vpn_status, active_client_name
+        is_running = my_vpn_status == "Running"
+
+        if switch_value == 1 and not is_running:
+            logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
+            self.activate_tunnel(selected_conf_file)
+        elif switch_value == 0 and is_running:
+            logger.info(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
+            self.activate_tunnel(selected_conf_file)
+        else:
+            logger.warning(
+                f"⚠️ Switch state ({switch_value}) doesn't match VPN state "
+                f"(Running: {is_running})."
+            )
+
+    def activate_tunnel(self, tunnel_name):
+        """Activate/deactivate the VPN tunnel (macOS/Linux). Blocking — call on a worker."""
+        logger.info(f"Toggling VPN tunnel: {tunnel_name}")
+        global my_vpn_status, active_client_name
+
+        if not tunnel_name:
+            logger.error("❌ No tunnel name provided")
+            self.app.after(
+                0, self.app.show_notification, "No tunnel name provided", "error"
+            )
+            return
+
+        try:
+            config_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"❌ {e}")
+            self.app.after(
+                0, self.app.show_notification, "Invalid VPN configuration name", "error"
+            )
+            return
+
+        if IS_MACOS:
+            if not _safe_extension_enabled():
+                logger.error("Network extension is disabled in System Settings")
+                try:
+                    mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
+                except Exception:
+                    mac_major = 0
+                ext_path = (
+                    "General > Login Items & Extensions > Network Extensions"
+                    if mac_major >= 15
+                    else "Privacy & Security > Security > click Allow"
+                )
+                self.app.after(
+                    0, self.app.show_notification,
+                    f"VPN extension is disabled. Enable it in System Settings > "
+                    f"{ext_path}", "error",
+                )
+                my_vpn_status = "Stopped"
+                active_client_name = None
+                return
+
+        elif IS_LINUX:
+            try:
+                installed = (
+                    check_wireguard_installed() if check_wireguard_installed else False
+                )
+            except Exception:
+                installed = False
+            if not installed:
+                logger.error("WireGuard tools not found.")
+                self.app.after(
+                    0, self.app.show_notification,
+                    "WireGuard tools not found", "error",
+                )
+                return
+
+        if my_vpn_status == "Running":
+            success = self._safe_stop(tunnel_name, config_path)
+            if success:
+                my_vpn_status = "Stopped"
+                active_client_name = None
+                self.app.after(0, self.app.show_notification, "VPN stopped", "info")
+            else:
+                logger.error("Failed to stop VPN")
+                self.app.after(
+                    0, self.app.show_notification, "Failed to stop VPN", "error"
+                )
+        else:
+            success = False
+            try:
+                if start_vpn is not None:
+                    success = bool(start_vpn(config_path))
+            except Exception as e:
+                logger.error(f"start_vpn failed: {e}")
+            if success:
+                my_vpn_status = "Running"
+                active_client_name = tunnel_name
+                logger.info("✅ VPN started successfully")
+                self.app.after(
+                    0, self.app.show_notification,
+                    "VPN started successfully", "info",
+                )
+            else:
+                logger.error("Failed to start VPN")
+                self.app.after(
+                    0, self.app.show_notification, "Failed to start VPN", "error"
+                )
+
+    def _safe_stop(self, name, config_path=None):
+        """Call stop_vpn with the right argument shape per platform (guarded)."""
+        try:
+            if stop_vpn is None:
+                return False
+            if IS_WINDOWS:
+                return bool(stop_vpn(name))
+            path = config_path or _conf_path(name)
+            return bool(stop_vpn(path))
+        except Exception as e:
+            logger.error(f"stop_vpn failed: {e}")
+            return False
 
     def refresh_vpn_state(self):
         """Refresh VPN state from the Windows service."""
         global my_vpn_status, active_client_name
-
         if not IS_WINDOWS:
             return
 
@@ -421,524 +1242,32 @@ class Plugin(BasePlugin):
             my_vpn_status = "Stopped"
             active_client_name = None
 
-    def toggle_vpn_connection(self, switch_value):
-        """Handles the toggle switch.
-        
-        Args:
-            switch_value: 1 for ON, 0 for OFF
-        """
-        selected_conf_file = self.get_selected_conf_file_name()
-
-        if not selected_conf_file:
-            logger.error("❌ Cannot toggle: No VPN config found in wireguard directory.")
-            self.app.show_notification("No VPN configuration found. Please log in or add a config.", type="error")
-            # Reset switch to off if no config available
-            if hasattr(self, 'vpn_toggle_switch'):
-                self.vpn_toggle_switch.deselect()
-            return
-
-        # WINDOWS: use IPC service for connect/disconnect
-        if IS_WINDOWS:
-            # Always get fresh state from service before acting
-            current = get_status(selected_conf_file)
-            print(f"Current VPN status for '{selected_conf_file}': {current.get('state', 'Unknown')}")
-            is_running = current.get("state") == "Running"
-
-            if switch_value == 1 and not is_running:
-                config_path = os.path.join(wireguard_folder, f"{selected_conf_file}.conf")
-                result = connect(selected_conf_file, config_path=config_path)
-                if result.get("status") != "ok" and result.get("state") not in ("Starting", "Running"):
-                    logger.error(f"Connect failed: {result.get('message', '')}")
-                    self.app.show_notification("Failed to connect VPN", type="error")
-            elif switch_value == 0 and is_running:
-                result = disconnect(selected_conf_file)
-                if result.get("status") != "ok":
-                    logger.error(f"Disconnect failed: {result.get('message', '')}")
-                    self.app.show_notification("Failed to disconnect VPN", type="error")
-
-            self.refresh_vpn_state()
-            self.update_plugin(self.id)
-
-        else:
-            # Logic: 1 = ON Request, 0 = OFF Request
-            is_running = my_vpn_status == "Running"
-            if switch_value == 1 and not is_running:
-                # User wants to turn VPN ON and it's currently OFF
-                logger.info(f"🔄 Toggle ON: Starting VPN tunnel: {selected_conf_file}")
-                self.activate_tunnel(selected_conf_file)
-
-            elif switch_value == 0 and is_running:
-                # User wants to turn VPN OFF and it's currently ON
-                logger.info(f"🔄 Toggle OFF: Stopping VPN tunnel: {selected_conf_file}")
-                self.activate_tunnel(selected_conf_file)
-
-            else:
-                # Edge case: Switch state doesn't match VPN state
-                logger.warning(f"⚠️ Switch state ({switch_value}) doesn't match VPN state (Running: {is_running}). Refreshing UI...")
-                self.update_plugin(self.id)
-
-    def display_toggle_screen(self):
-        """Display the redesigned VPN dashboard."""
-
-        selected_conf_file = self.get_selected_conf_file_name()
-
-        self.main_container = customtkinter.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
-        # Three-column layout: left-spacer | content | right-spacer
-        # Equal-weight spacer columns auto-center the content column when the
-        # window is wider than MAX_CONTENT_WIDTH; _do_layout sets col 1's minsize.
-        self.main_container.grid_columnconfigure(0, weight=1)              # left spacer
-        self.main_container.grid_columnconfigure(1, weight=0, minsize=100) # content (updated in _do_layout)
-        self.main_container.grid_columnconfigure(2, weight=1)              # right spacer
-        self.main_container.grid_rowconfigure(0, weight=1)
-
-        scroll_frame = customtkinter.CTkScrollableFrame(
-            self.main_container, 
-            corner_radius=0, 
-            fg_color="transparent"
-        )
-        scroll_frame.grid(row=0, column=1, sticky="nsew", pady=10)
-        # Two equal columns — panels sit directly here; no wrapper frame needed
-        scroll_frame.grid_columnconfigure(0, weight=1)
-        scroll_frame.grid_columnconfigure(1, weight=1)
-
-        global my_vpn_status
-
-        # On Windows, always refresh state from the service
-        if IS_WINDOWS:
-            self.refresh_vpn_state()
-
-        # On macOS, detect if the extension was disabled after onboarding
-        extension_disabled = IS_MACOS and not is_extension_enabled()
-        if extension_disabled and my_vpn_status == "Running":
-            my_vpn_status = "Stopped"
-            active_client_name = None
-
-        is_connected = my_vpn_status == "Running"
-
-        if extension_disabled:
-            status_text  = "Extension Disabled"
-            status_color = ("#C5221F", "#FF4040")
-            mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
-            if mac_major >= 15:
-                sub_text = "Enable in System Settings › General › Login Items & Extensions › Network Extensions"
-            else:
-                sub_text = "Enable in System Settings › Privacy & Security › scroll to Security › click Allow"
-            card_bg      = ("#FDEDEC", "#3A1A1A")
-            is_enabled   = False
-        elif not selected_conf_file:
-            status_text  = "No Configuration"
-            status_color = ("#666666", "#999999")
-            sub_text     = "Please log in or import a VPN configuration to get started"
-            card_bg      = ("#F5F5F5", "#1A1A1A")
-            is_enabled   = False
-        else:
-            status_text  = "Connected" if is_connected else "Disconnected"
-            status_color = ("#1B7A3E", "#2CC985") if is_connected else ("#C5221F", "#FF4040")
-            sub_text     = "All traffic is encrypted and routed securely" if is_connected else "Your internet traffic is not protected"
-            card_bg      = ("#E8F5E9", "#1A2E1F") if is_connected else ("#FDEDEC", "#2E1A1A")
-            is_enabled   = True
-
-
-        from customtkinter import ThemeManager
-        cr = ThemeManager.theme.get("Theme", {}).get("corner_radius", 12)
-
-        PANEL_BG     = ("#FFFFFF", "#141414")
-        PANEL_BORDER = ("#E0E0E0", "#2A2A2A")
-        LABEL_COLOR  = ("#888888", "#777777")
-        VALUE_COLOR  = ("#111111", "#EEEEEE")
-        ACCENT       = "#3A7EBF"
-
-        next_row = 0
-
-        # ── 1. STATUS CARD (spans both columns) ───────────────────────────
-        status_card = customtkinter.CTkFrame(
-            scroll_frame, corner_radius=cr, fg_color=card_bg, border_width=0
-        )
-        status_card.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=(10, 6))
-        status_card.grid_columnconfigure(0, weight=1)
-        next_row += 1
-
-        text_col = customtkinter.CTkFrame(status_card, fg_color="transparent")
-        text_col.grid(row=0, column=0, padx=22, pady=20, sticky="w")
-
-        customtkinter.CTkLabel(
-            text_col, text=status_text,
-            font=customtkinter.CTkFont(family="Inter", size=28, weight="bold"),
-            text_color=status_color
-        ).grid(row=0, column=0, sticky="w")
-
-        customtkinter.CTkLabel(
-            text_col, text=sub_text,
-            font=customtkinter.CTkFont(family="Inter", size=12),
-            text_color=("#555555", "#AAAAAA"),
-            wraplength=340, justify="left"
-        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
-
-        self.vpn_toggle_switch = customtkinter.CTkSwitch(
-            status_card, text="",
-            command=lambda: self.toggle_vpn_connection(self.vpn_toggle_switch.get()),
-            switch_width=56, switch_height=28,
-            onvalue=1, offvalue=0,
-            state="normal" if is_enabled else "disabled"
-        )
-        if is_connected and is_enabled:
-            self.vpn_toggle_switch.select()
-        else:
-            self.vpn_toggle_switch.deselect()
-        self.vpn_toggle_switch.grid(row=0, column=1, padx=22, pady=20)
-
-        # ── 2. CONFIG SELECTOR (spans both columns) ────────────────────────
-        configs = self.config_manager.list_configs()
-        if len(configs) > 1:
-            sel_frame = customtkinter.CTkFrame(
-                scroll_frame, corner_radius=cr,
-                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
-            )
-            sel_frame.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
-            sel_frame.grid_columnconfigure(1, weight=1)
-            next_row += 1
-
-            customtkinter.CTkLabel(
-                sel_frame, text="CONFIGURATION",
-                font=customtkinter.CTkFont(size=12, weight="bold"),
-                text_color=LABEL_COLOR
-            ).grid(row=0, column=0, padx=(16, 8), pady=12, sticky="w")
-
-            config_display_names = [c["display_name"] for c in configs]
-            active_display = (
-                self.config_manager.get_display_name(selected_conf_file)
-                if selected_conf_file else (config_display_names[0] if config_display_names else "None")
-            )
-            self.config_selector = customtkinter.CTkOptionMenu(
-                sel_frame, values=config_display_names,
-                command=self._on_config_selected, height=34, corner_radius=8
-            )
-            self.config_selector.set(active_display)
-            self.config_selector.grid(row=0, column=1, padx=8, pady=12, sticky="ew")
-
-            if selected_conf_file and not self.config_manager.is_resistine_config(selected_conf_file):
-                customtkinter.CTkButton(
-                    sel_frame, text="Delete", width=70, height=34,
-                    corner_radius=8, fg_color="#C5221F", hover_color="#A01B18",
-                    command=lambda: self._delete_config(selected_conf_file)
-                ).grid(row=0, column=2, padx=(0, 12), pady=12)
-
-        # ── 3. DETAIL PANELS (only when config is available) ──────────────
-        # Track references for the responsive resize handler
-        client_panel      = None
-        server_panel      = None
-        post_panel_widgets = []   # full-width panels after the two-column section
-        panel_row         = next_row
-
-        if selected_conf_file:
-            data     = self.get_configuration_values(selected_conf_file)
-            sys_info = self.get_system_info(selected_conf_file)
-
-            def _section_header(parent, row, title):
-                customtkinter.CTkLabel(
-                    parent, text=title,
-                    font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
-                    text_color=ACCENT
-                ).grid(row=row, column=0, columnspan=2, padx=14, pady=(14, 3), sticky="w")
-                customtkinter.CTkFrame(
-                    parent, height=1, fg_color=PANEL_BORDER
-                ).grid(row=row + 1, column=0, columnspan=2, sticky="ew", padx=14, pady=(0, 8))
-                return row + 2
-
-            def _info_row(parent, row, label, value, mono=False, pady=5):
-                customtkinter.CTkLabel(
-                    parent, text=label,
-                    font=customtkinter.CTkFont(size=13),
-                    text_color=LABEL_COLOR, anchor="w"
-                ).grid(row=row, column=0, padx=(14, 6), pady=pady, sticky="w")
-                customtkinter.CTkLabel(
-                    parent, text=value,
-                    font=customtkinter.CTkFont(
-                        family=_MONO_FONT if mono else "Inter",
-                        size=13, weight="bold"
-                    ),
-                    text_color=VALUE_COLOR, anchor="e"
-                ).grid(row=row, column=1, padx=(4, 14), pady=pady, sticky="ew")
-
-            # Left — Client panel placed directly in scroll_frame column 0
-            client_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
-                scroll_frame, corner_radius=cr,
-                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
-            )
-            client_panel.grid(row=next_row, column=0, sticky="nsew", padx=(0, 4), pady=6)
-            client_panel.grid_columnconfigure(0, weight=0)
-            client_panel.grid_columnconfigure(1, weight=1, minsize=130)
-
-            r = _section_header(client_panel, 0, "CLIENT")
-            _info_row(client_panel, r, "IP Address", data.get('client_ip_address', 'N/A'), mono=True); r += 1
-            _info_row(client_panel, r, "DNS",        sys_info.get("DNS", "N/A"),            mono=True); r += 1
-            _info_row(client_panel, r, "System",     sys_info.get("System", "N/A"));                    r += 1
-            _info_row(client_panel, r, "Status",     sys_info.get("Status", "N/A"), pady=(5, 14));       r += 1
-
-            # Right — Server panel placed directly in scroll_frame column 1, same row
-            server_panel = customtkinter.CTkFrame(  # noqa: tracked for responsive layout
-                scroll_frame, corner_radius=cr,
-                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
-            )
-            server_panel.grid(row=next_row, column=1, sticky="nsew", padx=(4, 0), pady=6)
-            server_panel.grid_columnconfigure(0, weight=0)
-            server_panel.grid_columnconfigure(1, weight=1, minsize=130)
-            next_row += 1  # Advance after both panels share this row
-
-            r = _section_header(server_panel, 0, "SERVER / PEER")
-            _info_row(server_panel, r, "IP Address",  sys_info.get("Server IP", "N/A"), mono=True); r += 1
-            _info_row(server_panel, r, "Protocol",    "WireGuard");                                  r += 1
-            _info_row(server_panel, r, "Config Name", sys_info.get("Config Name", "N/A"), pady=(5, 14)); r += 1
-
-            # ── Public Keys (spans both columns) ──────────────────────────
-            keys_panel = customtkinter.CTkFrame(
-                scroll_frame, corner_radius=cr,
-                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
-            )
-            keys_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
-            keys_panel.grid_columnconfigure(0, weight=0)
-            keys_panel.grid_columnconfigure(1, weight=1, minsize=180)
-            post_panel_widgets.append(keys_panel)
-            next_row += 1
-
-            kr = _section_header(keys_panel, 0, "PUBLIC KEYS")
-
-            customtkinter.CTkLabel(
-                keys_panel, text="Client",
-                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
-            ).grid(row=kr, column=0, padx=(14, 10), pady=5, sticky="w")
-            customtkinter.CTkLabel(
-                keys_panel, text=sys_info.get("Client Public Key", "N/A"),
-                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
-                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
-            kr += 1
-
-            customtkinter.CTkLabel(
-                keys_panel, text="Server",
-                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
-            ).grid(row=kr, column=0, padx=(14, 10), pady=(5, 14), sticky="w")
-            customtkinter.CTkLabel(
-                keys_panel, text=data.get('public_key', 'N/A'),
-                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
-                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=kr, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
-            kr += 1
-
-            # ── Allowed IPs (spans both columns) ──────────────────────────
-            allowed_panel = customtkinter.CTkFrame(
-                scroll_frame, corner_radius=cr,
-                fg_color=PANEL_BG, border_width=1, border_color=PANEL_BORDER
-            )
-            allowed_panel.grid(row=next_row, column=0, columnspan=2, sticky="ew", pady=6)
-            allowed_panel.grid_columnconfigure(0, weight=0)
-            allowed_panel.grid_columnconfigure(1, weight=1, minsize=180)
-            post_panel_widgets.append(allowed_panel)
-            next_row += 1
-
-            ar = _section_header(allowed_panel, 0, "ALLOWED IPs")
-            customtkinter.CTkLabel(
-                allowed_panel, text="Routes",
-                font=customtkinter.CTkFont(size=13), text_color=LABEL_COLOR, anchor="w"
-            ).grid(row=ar, column=0, padx=(14, 10), pady=5, sticky="w")
-            customtkinter.CTkLabel(
-                allowed_panel, text=data.get('allowed_ips', 'N/A'),
-                font=customtkinter.CTkFont(family=_MONO_FONT, size=13, weight="bold"),
-                text_color=VALUE_COLOR, anchor="e", wraplength=420, justify="right"
-            ).grid(row=ar, column=1, padx=(4, 14), pady=(5, 14), sticky="ew")
-            ar += 1
-
-        # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
-        buttons_frame = customtkinter.CTkFrame(scroll_frame, fg_color="transparent")
-        buttons_frame.grid(row=next_row, column=0, columnspan=2, pady=(6, 20), sticky="ew")
-        buttons_frame.grid_columnconfigure(0, weight=1)
-        if selected_conf_file:
-            buttons_frame.grid_columnconfigure(1, weight=1)
-
-        customtkinter.CTkButton(
-            buttons_frame, text="Import Configuration",
-            command=self.import_config,
-            fg_color="transparent", border_width=1,
-            border_color=("#3A7EBF", "#1F538D"),
-            text_color=("#3A7EBF", "#3A7EBF"),
-            font=customtkinter.CTkFont(size=13), height=38
-        ).grid(row=0, column=0, padx=(0, 4) if selected_conf_file else 0, sticky="ew")
-
-        if selected_conf_file:
-            customtkinter.CTkButton(
-                buttons_frame, text="View Config",
-                command=lambda: self._show_config_dialog(selected_conf_file),
-                fg_color="transparent", border_width=1,
-                border_color=("#3A7EBF", "#1F538D"),
-                text_color=("#3A7EBF", "#3A7EBF"),
-                font=customtkinter.CTkFont(size=13), height=38
-            ).grid(row=0, column=1, padx=(4, 0), sticky="ew")
-
-        # ── 5. RESPONSIVE LAYOUT + MAX-WIDTH CENTERING ────────────────────
-        MAX_CONTENT_WIDTH = 750
-        PANEL_BREAKPOINT  = 600   # content px below which panels stack vertically
-        _stacked          = [False]
-        _resize_job       = [None]
-
-        def _do_layout():
-            """Apply centering and responsive layout based on current app/sidebar widths."""
-            _resize_job[0] = None
-
-            # Safety check: if plugin updated/destroyed, main_container might be gone
-            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
-                return
-            
-            # --- Auto-hide Scrollbar Logic ---
-            try:
-                if hasattr(scroll_frame, "_parent_canvas") and hasattr(scroll_frame, "_scrollbar"):
-                    yview = scroll_frame._parent_canvas.yview()
-                    
-                    # Check if currently hidden (hacky check usually works if grid_remove used)
-                    is_mapped = bool(scroll_frame._scrollbar.grid_info())
-                    
-                    # If content fits entirely (0.0 to 1.0)
-                    if yview and (yview[0] <= 0.01 and yview[1] >= 0.99):
-                        if is_mapped:
-                            # Save grid info to restore later if needed, though grid() usually suffices 
-                            # if grid_remove was used. To be safe with CTk internals:
-                            scroll_frame._saved_sb_grid = scroll_frame._scrollbar.grid_info()
-                            scroll_frame._scrollbar.grid_remove()
-                    else:
-                        if not is_mapped:
-                             # Restore
-                             if hasattr(scroll_frame, "_saved_sb_grid") and scroll_frame._saved_sb_grid:
-                                 scroll_frame._scrollbar.grid(**scroll_frame._saved_sb_grid)
-                             else:
-                                 # Default fallback if we somehow didn't save it.
-                                 # CTk's vertical CTkScrollableFrame grids the
-                                 # scrollbar at row=1, column=1 (row 0 is the
-                                 # label row). Using row=0 dropped a default
-                                 # height=200 scrollbar into the empty label row,
-                                 # creating a 200px gap that pushed the canvas
-                                 # down and shrank it.
-                                 scroll_frame._scrollbar.grid(row=1, column=1, sticky="ns", pady=0)
-            except Exception:
-                pass
-            # --- End Auto-hide ---
-            try:
-                if not scroll_frame.winfo_exists():
-                    return
-            except Exception:
-                return
-
-            # Content area = total window width minus the fixed sidebar.
-            # Using app.winfo_width() is reliable; main_container.winfo_width()
-            # can be stale or wrong depending on when Configure fires.
-            # winfo_width() returns PHYSICAL px; MAX_CONTENT_WIDTH is LOGICAL, so
-            # convert via CTk's widget scaling (the real OS-DPI ratio: 2.0 at
-            # 200% on Windows, 1.0 on macOS, == _hidpi_factor on Linux) and
-            # re-scale the minsize at the end. _hidpi_factor alone is 1.0 on
-            # Windows even when CTk scales 2x, which left the content column
-            # sized in physical px and rendered it half-width.
-            try:
-                _scale = customtkinter.ScalingTracker.get_widget_scaling(self.app) or 1.0
-            except Exception:
-                _scale = getattr(self.app, "_hidpi_factor", 1.0) or 1.0
-            app_w = self.app.winfo_width() / _scale
-            if app_w < 10:
-                return
-            try:
-                nav = getattr(self.app, 'navigation_frame', None)
-                nav_w = (nav.winfo_width() / _scale) if (nav and nav.winfo_exists()) else 250
-                nav_w = max(nav_w, 250)  # sidebar minsize is 250 logical
-            except Exception:
-                nav_w = 250
-            width = app_w - nav_w  # logical
-            if width < 10:
-                return
-
-            # — Max-width centering via column widths, not padx —
-            # Column 1 (content) is set to the desired width.
-            # Columns 0 and 2 (spacers, weight=1 each) absorb any surplus equally,
-            # which automatically centers the content column in the available area.
-            # Windows CTkScrollableFrame scrollbar takes more horizontal space than macOS
-            _breathing = 60 if IS_WINDOWS else 40
-            if width > MAX_CONTENT_WIDTH + 40:
-                col_w = MAX_CONTENT_WIDTH
-            else:
-                col_w = max(100, width - _breathing)
-
-            # Ensure main_container still exists and is valid
-            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
-                return
-
-            try:
-                # grid_columnconfigure(minsize=) wants physical pixels — scale up.
-                self.main_container.grid_columnconfigure(1, weight=0, minsize=int(col_w * _scale))
-            except Exception:
-                return
-
-            # — Responsive panels (only when a config is loaded) —
-            if client_panel is None or server_panel is None:
-                return
-
-            now_stacked = col_w < PANEL_BREAKPOINT
-
-            if now_stacked == _stacked[0]:
-                return   # nothing to change
-
-            _stacked[0] = now_stacked
-            n_post       = len(post_panel_widgets)
-
-            if now_stacked:
-                client_panel.grid_configure(row=panel_row,     column=0, columnspan=2, sticky="ew", padx=0)
-                server_panel.grid_configure(row=panel_row + 1, column=0, columnspan=2, sticky="ew", padx=0)
-                for i, panel in enumerate(post_panel_widgets):
-                    panel.grid_configure(row=panel_row + 2 + i)
-                buttons_frame.grid_configure(row=panel_row + 2 + n_post)
-            else:
-                client_panel.grid_configure(row=panel_row, column=0, columnspan=1, sticky="nsew", padx=(0, 4))
-                server_panel.grid_configure(row=panel_row, column=1, columnspan=1, sticky="nsew", padx=(4, 0))
-                for i, panel in enumerate(post_panel_widgets):
-                    panel.grid_configure(row=panel_row + 1 + i)
-                buttons_frame.grid_configure(row=panel_row + 1 + n_post)
-
-        def _on_resize(event):
-            # Debounce: cancel any pending layout job and schedule a fresh one.
-            # after_idle runs after all pending events are processed, so winfo_width()
-            # will reflect the final settled size rather than an intermediate value.
-            if _resize_job[0] is not None:
-                try:
-                    self.app.after_cancel(_resize_job[0])
-                except Exception:
-                    pass
-            _resize_job[0] = self.app.after_idle(_do_layout)
-
-        self.main_container.bind("<Configure>", _on_resize)
-        # Synchronous finalizer: _settle_screen() applies the initial centering
-        # before reveal, so the content is correctly placed on first paint
-        # instead of shifting ~50 ms later. (<Configure> handles genuine resizes.)
-        self.main_container._resistine_finalize = _do_layout
-
-        if IS_MACOS:
-            self._start_extension_polling()
-
-        return self.main_container
+    # ===================================================================
+    #  Config dropdown / delete
+    # ===================================================================
+    def _on_config_activated(self, _index):
+        display_name = self.config_selector.currentText()
+        self._on_config_selected(display_name)
 
     def _on_config_selected(self, display_name):
         """Handle config dropdown selection."""
         global my_vpn_status, active_client_name
 
         configs = self.config_manager.list_configs()
-        selected = next((c for c in configs if c["display_name"] == display_name), None)
+        selected = next(
+            (c for c in configs if c["display_name"] == display_name), None
+        )
         if not selected:
             return
 
         new_config_name = selected["name"]
         current_active = self.config_manager.get_active_config_name()
-
         if new_config_name == current_active:
             return
 
         # Stop VPN if running on the old config
         if my_vpn_status == "Running" and active_client_name:
-            old_path = os.path.join(wireguard_folder, f"{active_client_name}.conf")
-            stop_vpn(old_path if not IS_WINDOWS else active_client_name)
+            self._safe_stop(active_client_name)
             my_vpn_status = "Stopped"
             active_client_name = None
 
@@ -950,10 +1279,8 @@ class Plugin(BasePlugin):
         """Delete a user-imported config."""
         global my_vpn_status, active_client_name
 
-        # Stop VPN if running on this config
         if my_vpn_status == "Running" and active_client_name == config_name:
-            config_path = os.path.join(wireguard_folder, f"{config_name}.conf")
-            stop_vpn(config_path if not IS_WINDOWS else config_name)
+            self._safe_stop(config_name)
             my_vpn_status = "Stopped"
             active_client_name = None
 
@@ -965,285 +1292,177 @@ class Plugin(BasePlugin):
 
         self.update_plugin(self.id)
 
+    # ===================================================================
+    #  View config dialog
+    # ===================================================================
     def _show_config_dialog(self, tunnel_name):
         """Open a modal dialog showing the config file with a copy button."""
-        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
+        from PyQt6.QtWidgets import QDialog
 
+        try:
+            conf_file_path = _conf_path(tunnel_name)
+        except ValueError as e:
+            logger.error(f"Refusing to show config: {e}")
+            self.app.show_notification("Invalid configuration name", type="error")
+            return
         if not os.path.exists(conf_file_path):
             self.app.show_notification("Config file not found", type="error")
             return
 
-        with open(conf_file_path, 'r', encoding='utf-8') as f:
+        with open(conf_file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        dialog = customtkinter.CTkToplevel(self.app)
-        dialog.title(f"{tunnel_name}.conf")
-        dialog.geometry("520x440")
-        dialog.resizable(True, True)
-        dialog.grab_set()
-        dialog.grid_columnconfigure(0, weight=1)
-        dialog.grid_rowconfigure(1, weight=1)
+        dialog = QDialog(self.app)
+        dialog.setWindowTitle(f"{tunnel_name}.conf")
+        dialog.resize(520, 440)
+        dialog.setModal(True)
+        lay = QVBoxLayout(dialog)
+        lay.setContentsMargins(20, 15, 20, 20)
+        lay.setSpacing(8)
 
-        title_label = customtkinter.CTkLabel(
-            dialog,
-            text=f"{tunnel_name}.conf",
-            font=customtkinter.CTkFont(size=14, weight="bold")
-        )
-        title_label.grid(row=0, column=0, padx=20, pady=(15, 5), sticky="w")
+        title_label = QLabel(f"{tunnel_name}.conf")
+        title_label.setStyleSheet("font-size: 14px; font-weight: 700;")
+        lay.addWidget(title_label)
 
-        textbox = customtkinter.CTkTextbox(
-            dialog,
-            font=customtkinter.CTkFont(family="Courier", size=12),
-            wrap="word",
-            state="normal"
+        textbox = QPlainTextEdit()
+        textbox.setReadOnly(True)
+        textbox.setPlainText(content)
+        textbox.setStyleSheet(
+            f'font-family: "{_MONO_FONT}", monospace; font-size: 12px;'
         )
-        textbox.grid(row=1, column=0, padx=20, pady=5, sticky="nsew")
-        textbox.insert("1.0", content)
-        textbox.configure(state="disabled")
+        lay.addWidget(textbox, 1)
+
+        copy_btn = QPushButton("Copy to Clipboard")
+        copy_btn.setMinimumHeight(36)
+
+        def _reset_copy_label():
+            # Fires 2s later; the dialog (and this button) may be closed by
+            # then, leaving a deleted C++ object — setText would raise.
+            try:
+                copy_btn.setText("Copy to Clipboard")
+            except RuntimeError:
+                pass
 
         def copy_to_clipboard():
-            dialog.clipboard_clear()
-            dialog.clipboard_append(content)
-            copy_btn.configure(text="Copied!")
-            dialog.after(2000, lambda: copy_btn.configure(text="Copy to Clipboard"))
+            clip = QGuiApplication.clipboard()
+            if clip is not None:
+                clip.setText(content)
+            copy_btn.setText("Copied!")
+            self.app.after(2000, _reset_copy_label)
 
-        copy_btn = customtkinter.CTkButton(
-            dialog,
-            text="Copy to Clipboard",
-            command=copy_to_clipboard,
-            height=36
-        )
-        copy_btn.grid(row=2, column=0, padx=20, pady=(5, 20), sticky="ew")
+        copy_btn.clicked.connect(copy_to_clipboard)
+        lay.addWidget(copy_btn)
 
-    def _start_extension_polling(self):
-        """Poll extension status every 5 seconds to detect enable/disable changes.
-        macOS only — no-op on other platforms.
-        """
-        if not IS_MACOS:
-            return
-        self._stop_extension_polling()
-        self._last_extension_state = is_extension_enabled()
+        # Esc / close support
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dialog.reject)
+        bb.accepted.connect(dialog.accept)
+        lay.addWidget(bb)
 
-        def poll():
-            # Stop polling if the VPN page is no longer visible
-            if not hasattr(self, 'main_container') or not self.main_container.winfo_exists():
-                self._extension_poll_id = None
-                return
+        dialog.exec()
 
-            # 1. Check Extension State
-            current_ext_state = is_extension_enabled()
-            if current_ext_state != self._last_extension_state:
-                logger.info(f"Extension state changed: {self._last_extension_state} -> {current_ext_state}")
-                self._last_extension_state = current_ext_state
-                self.update_plugin(self.id)
-                return  # update_plugin rebuilds screen -> restarts polling
+    # ===================================================================
+    #  Status polling (re-arming app.after; worker thread does the blocking work)
+    # ===================================================================
+    def _start_polling(self):
+        """Arm the recurring status poll (single source; re-arms itself)."""
+        self._stop_polling()
+        self._poll_id = self.app.after(5000, self._poll)
 
-            # 2. Check Connection Status
-            # We also poll the actual tunnel status to detect if it was turned off in System Settings
-            global my_vpn_status, active_client_name
-            current_status = check_service_status(active_client_name or "vpn", DNS_SERVER)
-            if current_status != my_vpn_status:
-                # We only care about sync if the app thinks it's Running but system says Stopped
-                # Or if it was Stopped but now it's Running (e.g. turned on in Settings)
-                # If status is "Connecting", we let the connection logic handle it.
-                if my_vpn_status in ["Running", "Stopped"]:
-                    logger.info(f"VPN Connection status changed externally: {my_vpn_status} -> {current_status}")
-                    my_vpn_status = current_status
-                    self.update_plugin(self.id)
-                    return
-
-            self._extension_poll_id = self.app.after(5000, poll)
-
-        self._extension_poll_id = self.app.after(5000, poll)
-
-    def _stop_extension_polling(self):
-        """Cancel any active extension polling."""
-        if self._extension_poll_id:
-            self.app.after_cancel(self._extension_poll_id)
-            self._extension_poll_id = None
-
-    def _start_windows_service_polling(self):
-        """Poll the Windows VPN service every 5 seconds to detect external state changes.
-
-        Mirrors _start_extension_polling for macOS. Detects when the tray,
-        another tool, or the service itself changes the VPN state.
-        Runs regardless of which page is active so my_vpn_status stays fresh
-        for both the VPN page toggle and the dashboard protection banner.
-        """
-        if not IS_WINDOWS:
-            return
-        self._stop_windows_service_polling()
-
-        def poll():
-            global my_vpn_status, active_client_name
-            tunnel = self.get_selected_conf_file_name()
-            if not tunnel:
-                self._windows_poll_id = self.app.after(5000, poll)
-                return
-
+    def _stop_polling(self):
+        if self._poll_id is not None:
             try:
-                result = get_status(tunnel)
-                new_state = result.get("state", "Stopped")
+                self.app.after_cancel(self._poll_id)
             except Exception:
-                self._windows_poll_id = self.app.after(5000, poll)
-                return
+                pass
+            self._poll_id = None
 
-            if new_state != my_vpn_status:
-                logger.info(f"VPN state changed externally: {my_vpn_status} -> {new_state}")
-                my_vpn_status = new_state
-                active_client_name = tunnel if new_state == "Running" else None
-                # Rebuild the VPN page if it's currently shown
-                self.update_plugin(self.id)
-                # Also refresh the dashboard if it's currently shown
-                for p in self.app.plugin_list:
-                    if p.get_name() == "Dashboard":
-                        self.update_plugin(p.id)
-                        break
-
-            self._windows_poll_id = self.app.after(5000, poll)
-
-        self._windows_poll_id = self.app.after(5000, poll)
-
-    def _stop_windows_service_polling(self):
-        """Cancel any active Windows service polling."""
-        if self._windows_poll_id:
-            self.app.after_cancel(self._windows_poll_id)
-            self._windows_poll_id = None
-
-    def update_plugin(self, plugin_id):
-        """Reloads the plugin UI to reflect state changes, but only if it's the active tab."""
-        for plugin in self.app.plugin_list:
-            if plugin.id == plugin_id:
-                # ONLY grid if we are actually currently viewing this scale
-                # This prevents "flashing" when status updates happen in the background
-                current = getattr(self.app, "current_frame_name", "")
-                target = f"frame_{plugin.get_name()}"
-                
-                if current == target:
-                    if hasattr(self, 'main_container'):
-                        try: self.main_container.destroy()
-                        except: pass
-                    plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
-                return    
-
-    def get_configuration_values(self, tunnel_name):
-        
-        conf_file_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
-        logger.info(f"Reading configuration from: {conf_file_path}")    
-        data = {}
-
-        if os.path.exists(conf_file_path):
-            with open(conf_file_path, 'r', encoding='utf-8') as conf_file:
-                for line in conf_file:
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip().lower()
-                        value = value.strip()
-                        
-                        if key == 'privatekey': data['private_key'] = value
-                        elif key == 'address': data['client_ip_address'] = value
-                        elif key == 'publickey': data['public_key'] = value
-                        elif key == 'dns': data['dns'] = value
-                        elif key == 'allowedips': data['allowed_ips'] = value
-                        elif key == 'endpoint':
-                            data['endpoint'] = value
-                            if ':' in value: data['port'] = value.split(':')[-1]
-        elif not os.path.exists(wireguard_folder):
-            logger.error(f"WireGuard configuration directory does not exist: {wireguard_folder}")
-        else:
-            logger.error(f"Configuration file not found: {conf_file_path}") 
-        return data
-
-    def activate_tunnel(self, tunnel_name):
-        """
-        Activates/Deactivates VPN tunnel.
-        Handles MacOS specifically via helper functions.
-        """
-        logger.info(f"Toggling VPN tunnel: {tunnel_name}")
-        global my_vpn_status, active_client_name
-        
-        if not tunnel_name:
-            logger.error("❌ No tunnel name provided")
-            self.app.show_notification("No tunnel name provided", type="error")
+    def _poll(self):
+        """GUI thread: dispatch the blocking status check to a worker."""
+        # Stop if our screen is no longer the live one.
+        if getattr(self.app, "_current_main_screen", None) is not getattr(
+            self, "main_container", None
+        ):
+            self._poll_id = None
             return
+        threading.Thread(target=self._poll_worker, daemon=True).start()
 
-        config_path = os.path.join(wireguard_folder, f"{tunnel_name}.conf")
-
-        # --- MacOS Implementation ---
-        if IS_MACOS:
-            logger.info(f"macOS: Toggling {tunnel_name}")
-
-            if not is_extension_enabled():
-                logger.error("Network extension is disabled in System Settings")
-                mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
-                if mac_major >= 15:
-                    ext_path = "General > Login Items & Extensions > Network Extensions"
+    def _poll_worker(self):
+        """Worker: run the blocking status check off the GUI thread."""
+        new_state = my_vpn_status
+        ext_changed = False
+        try:
+            if IS_MACOS:
+                if not _safe_extension_enabled():
+                    new_state = "Stopped"
+                    ext_changed = True
                 else:
-                    ext_path = "Privacy & Security > Security > click Allow"
-                self.app.show_notification(
-                    f"VPN extension is disabled. Enable it in System Settings > {ext_path}",
-                    type="error",
-                )
-                my_vpn_status = "Stopped"
-                active_client_name = None
-                self.update_plugin(self.id)
-                return
+                    new_state = check_service_status(
+                        active_client_name or "vpn", DNS_SERVER
+                    )
+            elif IS_WINDOWS:
+                tunnel = self.get_selected_conf_file_name()
+                if tunnel:
+                    result = get_status(tunnel)
+                    new_state = result.get("state", "Stopped")
+            elif IS_LINUX:
+                tunnel = active_client_name or self.get_selected_conf_file_name()
+                if tunnel:
+                    new_state = check_service_status(tunnel, DNS_SERVER)
+        except Exception:
+            new_state = my_vpn_status
 
-            if my_vpn_status == "Running":
-                # STOP
-                success = stop_vpn(config_path)
-                if success:
-                    my_vpn_status = "Stopped"
-                    active_client_name = None
-                    self.app.show_notification("VPN stopped", type="info")
+        try:
+            self.app.after(0, self._apply_poll_result, new_state, ext_changed)
+        except Exception:
+            pass
+
+    def _apply_poll_result(self, new_state, ext_changed):
+        """GUI thread: update cached state + toggle; re-arm the poll."""
+        global my_vpn_status, active_client_name
+
+        changed = False
+        if new_state in ("Running", "Stopped") and new_state != my_vpn_status:
+            logger.info(
+                f"VPN state changed externally: {my_vpn_status} -> {new_state}"
+            )
+            my_vpn_status = new_state
+            active_client_name = (
+                active_client_name if new_state == "Running" else None
+            )
+            changed = True
+
+        self.status = self.get_status()
+
+        # Keep the live toggle in sync without rebuilding when nothing changed.
+        if self.vpn_toggle_switch is not None:
+            try:
+                if my_vpn_status == "Running":
+                    self.vpn_toggle_switch.select()
                 else:
-                    logger.error("Failed to stop VPN")
-                    self.app.show_notification("Failed to stop VPN", type="error")
-            else:
-                # START
-                success = start_vpn(config_path)
-                if success:
-                    my_vpn_status = "Running"
-                    active_client_name = tunnel_name
-                    logger.info("✅ VPN started successfully")
-                    self.app.show_notification("VPN started successfully", type="info")
-                else:
-                    logger.error("Failed to start VPN")
-                    self.app.show_notification("Failed to start VPN", type="error")
-            
-            # Refresh UI
+                    self.vpn_toggle_switch.deselect()
+            except Exception:
+                pass
+
+        if changed or ext_changed:
+            # Rebuild this screen + the dashboard banner.
             self.update_plugin(self.id)
+            return  # update_plugin rebuilds the screen → poll re-armed there
 
-        # --- Linux Implementation ---
-        elif IS_LINUX:
-            logger.info(f"Linux: Toggling {tunnel_name}")
-            
-            if not check_wireguard_installed():
-                logger.error("WireGuard tools not found.")
-                self.app.show_notification("WireGuard tools not found", type="error")
-                return
+        # Nothing changed — re-arm the poll.
+        self._poll_id = self.app.after(5000, self._poll)
 
-            if my_vpn_status == "Running":
-                # STOP
-                success = stop_vpn(config_path)
-                if success:
-                    my_vpn_status = "Stopped"
-                    active_client_name = None
-                    self.app.show_notification("VPN stopped", type="info")
-                else:
-                    logger.error("Failed to stop VPN")
-                    self.app.show_notification("Failed to stop VPN", type="error")
-            else:
-                # START
-                success = start_vpn(config_path)
-                if success:
-                    my_vpn_status = "Running"
-                    active_client_name = tunnel_name
-                    logger.info("✅ VPN started successfully")
-                    self.app.show_notification("VPN started successfully", type="info")
-                else:
-                    logger.error("Failed to start VPN")
-                    self.app.show_notification("Failed to start VPN", type="error")
-            
-            # Refresh UI
-            self.update_plugin(self.id)
+    # ===================================================================
+    #  Screen lifecycle
+    # ===================================================================
+    def update_plugin(self, plugin_id):
+        """Rebuild the affected plugin's live screen via the host shim."""
+        try:
+            self.app.update_plugin(plugin_id)
+        except Exception as e:
+            logger.error(f"update_plugin failed: {e}")
+
+    def destroy(self):
+        """Release the recurring poll timer."""
+        self._stop_polling()
+        self.vpn_toggle_switch = None

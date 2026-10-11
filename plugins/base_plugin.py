@@ -1,52 +1,47 @@
-"""
-This module contains the BasePlugin class, which is the base class for all plugins.
-The BasePlugin class provides common functionality and attributes that are shared by all plugins.
-Author: Peres J. and the Resistine Team
+"""BasePlugin — the per-plugin contract (PyQt6).
+
+Same constructor signature as the original CustomTkinter ``BasePlugin`` so the
+plugin manager and every plugin's ``super().__init__(...)`` keep working
+unchanged; the difference is that icons are ``QIcon``/``QPixmap`` and
+``create_main_screen()`` returns a ``QWidget`` instead of a CTk frame.
+
+Author: Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
-from PIL import Image
-import customtkinter
+from __future__ import annotations
+
 import os
 
-class BasePlugin:
-    """
-    Base class for plugins, providing common functionality and attributes.
-    """
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QPixmap
 
-    # Status map for standardizing status strings
+from gui import theme
+
+
+class BasePlugin:
+    """Base class for plugins, providing common metadata and helpers."""
+
     status_map = {
         "ok": "OK",
         "info": "Info",
         "warning": "Warning",
         "error": "Error",
-        "critical": "Critical"
+        "critical": "Critical",
     }
 
-    # When True, the app keeps the previous screen visible and only swaps this
-    # one in once its layout has stopped changing (see AppUI.select_frame_by_name
-    # / _reveal_when_settled). Set this on plugins whose screen renders
-    # asynchronously after build (e.g. markdown/streamed content) and would
-    # otherwise visibly tear/pop-in during the swap. Default: immediate swap.
+    # Kept for source compatibility with the CTk plugins; the Qt shell has no
+    # settle/reveal cascade, so this is a no-op flag.
     defer_reveal_until_settled = False
 
-    def __init__(self, id, version, order, name, status, description, supported_systems, translations, icon_light_path, icon_dark_path, uninstall_enabled=True):
-        """
-        Initialize the BasePlugin with the given attributes.
+    # Hidden plugins stay installed and loaded but get no sidebar entry or
+    # Dashboard card (e.g. the Store).
+    hidden = False
 
-        :param id: The unique identifier for the plugin.
-        :param version: The version of the plugin.
-        :param order: The order in which the plugin should be displayed.
-        :param name: The name of the plugin.
-        :param status: The current status of the plugin.
-        :param description: A brief description of the plugin.
-        :param supported_systems: A list of systems supported by the plugin.
-        :param translations: A dictionary of translations for the plugin.
-        :param icon_light_path: Path to the light mode icon.
-        :param icon_dark_path: Path to the dark mode icon.
-        :param uninstall_enabled: Whether the plugin can be uninstalled.
-        """
+    def __init__(self, id, version, order, name, status, description,
+                 supported_systems, translations, icon_light_path,
+                 icon_dark_path, uninstall_enabled=True):
         self.id = id
         self.version = version
         self.order = order
@@ -58,253 +53,152 @@ class BasePlugin:
         self.icon_light = icon_light_path
         self.icon_dark = icon_dark_path
         self.uninstall_enabled = uninstall_enabled
-        self.icon = self.create_icon(size=(20, 20))
-        self._icon_large = None  # Cache for larger icon
-        self.icon_alert = None
         self.button = None
-        self.app = None # Will be set by subclasses or manager
+        self.app = None  # host AppWindow, injected by the manager/shell
 
-    def uninstall(self):
-        """
-        Uninstall the plugin via the application's PluginManager.
-        """
-        if not self.uninstall_enabled:
-            return "Uninstall is not enabled for this plugin."
-        
-        if hasattr(self, "app") and self.app:
-            return self.app.get_plugin_manager().uninstall_plugin(self)
-        return "Application instance not found; cannot uninstall."
-
+    # ---- Screen contract --------------------------------------------------
     def create_main_screen(self):
-        """
-        Create the main screen for the plugin.
-        This method should be implemented by subclasses.
-        """
+        """Build and return this plugin's screen (a QWidget)."""
         raise NotImplementedError("Subclasses should implement this method")
 
     def screen_signature(self):
-        """
-        Return a hashable snapshot of everything ``create_main_screen`` bakes
-        into the built widgets (statuses, appearance mode, column count, …).
-
-        The app caches built screens and reuses them across navigation: when a
-        plugin's signature is unchanged since the last build, the existing
-        widget tree is re-shown instantly instead of being rebuilt from scratch
-        (every CTk widget is its own canvas, so rebuilding is expensive).
-
-        Returning ``None`` (the default) disables caching for this plugin — its
-        screen is rebuilt on every visit, preserving the original behavior.
-        Override to opt in and return a value that compares unequal whenever a
-        rebuild is genuinely required.
-        """
+        """Optional cache key; None disables caching (rebuild every visit)."""
         return None
 
     def on_screen_shown(self):
-        """
-        Called after a *cached* screen is re-shown (signature unchanged, no
-        rebuild). Use it to nudge any cheap, live refresh that shouldn't be
-        baked into the signature. Default: no-op.
-        """
         pass
 
     def is_screen_ready(self):
-        """
-        For plugins using ``defer_reveal_until_settled``: gate the reveal until
-        the screen's content is actually ready (e.g. an async fetch has
-        returned), so it appears fully populated rather than filling in after.
-        The deferred-reveal cap still forces a reveal eventually, so a stuck
-        fetch can't hold the screen hidden forever. Default: always ready.
-        """
         return True
 
     def destroy(self):
-        """
-        Cleanup method to be called when the plugin is uninstalled or reloaded.
-        Subclasses should override this if they have background threads or other resources to release.
-        """
+        """Release background threads/timers. Override as needed."""
         pass
 
-    def set_id(self, id):
-        """
-        Set the ID of the plugin.
-
-        :param id: The new ID for the plugin.
-        """
-        self.id = id
-
-    def get_id(self):
-        """
-        Get the ID of the plugin.
-
-        :return: The ID of the plugin.
-        """
-        return self.id
-
-    def set_name(self, name):
-        """
-        Set the name of the plugin.
-
-        :param name: The new name for the plugin.
-        """
-        self.name = name
-
-    def get_name(self):
-        """
-        Get the name of the plugin.
-
-        :return: The name of the plugin.
-        """
-        return self.name
-
+    # ---- Status -----------------------------------------------------------
     def set_status(self, status):
-        """
-        Set the status of the plugin.
-
-        :param status: The new status for the plugin.
-        """
         self.status = status
 
     def check_status(self):
-        """
-        Operational check for the plugin. 
-        Subclasses should override this to provide real-time status.
-        :return: Standard status string (OK, Info, Warning, Error, Critical)
-        """
         return self.status
 
     def get_status(self):
-        """
-        Get the current status of the plugin, with error handling.
-        :return: Standard status string.
-        """
         try:
             status = self.check_status()
             if status is None:
                 return None
-            # Normalize status to standard capitalization
             return self.status_map.get(status.lower(), status)
         except Exception as e:
             from utils.logger import logger
             logger.error(f"Status check failed for plugin {self.name}: {e}")
             return "Warning"
 
-    def set_translations(self, translations):
-        """
-        Set the translations for the plugin.
+    # ---- Metadata accessors ----------------------------------------------
+    def set_id(self, id):
+        self.id = id
 
-        :param translations: The new translations for the plugin.
-        """
+    def get_id(self):
+        return self.id
+
+    def set_name(self, name):
+        self.name = name
+
+    def get_name(self):
+        return self.name
+
+    def set_translations(self, translations):
         self.translations = translations
 
     def get_translations(self):
-        """
-        Get the translations for the plugin.
-
-        :return: The translations of the plugin.
-        """
         return self.translations
 
-    def create_icon(self, size):
-        """
-        Create an icon for the plugin using the provided size.
-
-        :param size: The size of the icon.
-        :return: The created icon.
-        """
-        try:
-            light_image = Image.open(self.icon_light)
-            dark_image = Image.open(self.icon_dark)
-            return customtkinter.CTkImage(light_image=light_image, dark_image=dark_image, size=size)
-        except Exception as e:
-            from utils.logger import logger
-            logger.error(f"Failed to create icon for {self.name}: {e}")
-            blank = Image.new('RGBA', size, (255, 255, 255, 0))
-            return customtkinter.CTkImage(light_image=blank, dark_image=blank, size=size)
-
-    def get_icon(self):
-        """
-        Get the icon of the plugin (20x20 for sidebar).
-
-        :return: The icon of the plugin.
-        """
-        return self.icon
-
-    def get_icon_large(self):
-        """
-        Get a larger icon of the plugin (50x50 for dashboard/store cards).
-
-        :return: A larger icon of the plugin.
-        """
-        if self._icon_large is None:
-            self._icon_large = self.create_icon(size=(48, 48))
-        return self._icon_large
-
-    def get_icon_alert(self):
-        """
-        Get the alert icon based on the plugin's status.
-
-        :return: The alert icon.
-        """
-        current_status = self.get_status()
-        icon_map = {
-            "OK": "check.png",
-            "Critical": "critical.png",
-            "Error": "error.png",
-            "Info": "info.png",
-            "Warning": "warning.png"
-        }
-        symbols_img_paths = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "resources", "icons")
-        icon_filename = icon_map.get(current_status, "warning.png")
-        self.icon_light = f"{symbols_img_paths}/{icon_filename}"
-        self.icon_dark = f"{symbols_img_paths}/{icon_filename}"
-        self.icon_alert = self.create_icon(size=(50, 50))
-        return self.icon_alert
-
-    def set_button(self, button):
-        """
-        Set the button associated with the plugin.
-
-        :param button: The new button for the plugin.
-        """
-        self.button = button
-
-    def get_button(self):
-        """
-        Get the button associated with the plugin.
-
-        :return: The button of the plugin.
-        """
-        return self.button
-
-    def get_supported_systems(self):
-        """
-        Get the systems supported by the plugin.
-
-        :return: The supported systems.
-        """
-        return self.supported_systems
-
-    def set_supported_systems(self, supported_systems):
-        """
-        Set the systems supported by the plugin.
-
-        :param supported_systems: The new supported systems.
-        """
-        self.supported_systems = supported_systems
-
     def set_description(self, description):
-        """
-        Set the description of the plugin.
-
-        :param description: The new description for the plugin.
-        """
         self.description = description
 
     def get_description(self):
-        """
-        Get the description of the plugin.
-
-        :return: The description of the plugin.
-        """
         return self.description
-    
+
+    def set_supported_systems(self, supported_systems):
+        self.supported_systems = supported_systems
+
+    def get_supported_systems(self):
+        return self.supported_systems
+
+    def set_button(self, button):
+        self.button = button
+
+    def get_button(self):
+        return self.button
+
+    # ---- Icons ------------------------------------------------------------
+    def _icon_path(self) -> str:
+        return self.icon_light if not theme.is_dark() else self.icon_dark
+
+    @staticmethod
+    def _tint(pm: QPixmap, color: str | None = None) -> QPixmap:
+        """Colorize a monochrome line icon to the theme's primary text colour.
+
+        The shipped *_light.png assets are pale grey and wash out on the
+        light card background; tinting keys the strokes to the theme (near-
+        black in light mode, white in dark) at any size.
+        """
+        if pm.isNull():
+            return pm
+        from PyQt6.QtGui import QColor, QPainter
+
+        from gui import theme
+        out = QPixmap(pm.size())
+        out.setDevicePixelRatio(pm.devicePixelRatio())
+        out.fill(Qt.GlobalColor.transparent)
+        p = QPainter(out)
+        p.drawPixmap(0, 0, pm)
+        p.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn)
+        p.fillRect(pm.rect(), QColor(color or theme.color("text_primary")))
+        p.end()
+        return out
+
+    def get_icon(self) -> QIcon:
+        path = self._icon_path()
+        if path and os.path.isfile(path):
+            return QIcon(self._tint(QPixmap(path)))
+        return QIcon()
+
+    def get_icon_pixmap(self, size: int = 44) -> QPixmap:
+        path = self._icon_path()
+        if path and os.path.isfile(path):
+            return self._tint(QPixmap(path).scaled(
+                QSize(size, size),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
+        return QPixmap()
+
+    def get_nav_icon(self) -> QIcon:
+        """Sidebar icon: text colour normally, accent colour when selected."""
+        path = self._icon_path()
+        if not (path and os.path.isfile(path)):
+            return QIcon()
+        from gui import theme
+        src = QPixmap(path)
+        icon = QIcon()
+        icon.addPixmap(self._tint(src, theme.color("text_secondary")),
+                       QIcon.Mode.Normal, QIcon.State.Off)
+        icon.addPixmap(self._tint(src, theme.color("sidebar_active_text")),
+                       QIcon.Mode.Normal, QIcon.State.On)
+        icon.addPixmap(self._tint(src, theme.color("text_primary")),
+                       QIcon.Mode.Active, QIcon.State.Off)
+        icon.addPixmap(self._tint(src, theme.color("sidebar_active_text")),
+                       QIcon.Mode.Active, QIcon.State.On)
+        return icon
+
+    def get_icon_large(self) -> QIcon:
+        return self.get_icon()
+
+    # ---- Uninstall --------------------------------------------------------
+    def uninstall(self):
+        if not self.uninstall_enabled:
+            return "Uninstall is not enabled for this plugin."
+        if getattr(self, "app", None):
+            return self.app.get_plugin_manager().uninstall_plugin(self)
+        return "Application instance not found; cannot uninstall."

@@ -104,17 +104,6 @@ def log_threat_deleted(filepath: str):
     _write(_fmt("THREAT_DELETED", path=filepath))
 
 
-def log_scan_complete(
-    target: str, scanned: int, infected: int, duration: str,
-):
-    """Log a scan completion summary."""
-    _write(_fmt(
-        "SCAN_COMPLETE",
-        target=target, scanned=str(scanned),
-        infected=str(infected), duration=duration,
-    ))
-
-
 # ── Helpers ──────────────────────────────────────────────
 
 

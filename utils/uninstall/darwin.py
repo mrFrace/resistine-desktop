@@ -688,13 +688,14 @@ def _remove_app_config(admin_cmds):
     """Remove application configuration directories (user + system level)."""
     home = os.path.expanduser("~")
 
-    # User-level config (no admin needed)
-    config_dir = os.path.join(home, "Library", "Application Support", "Resistine")
-    if os.path.exists(config_dir):
-        shutil.rmtree(config_dir)
-        logger.info(f"[UNINSTALL] Removed {config_dir}")
-    else:
-        logger.info("[UNINSTALL] User config dir not found, skipping")
+    # User-level config (no admin needed); the Resistine dir is pre-rebrand
+    for app_name in ("Phoenix", "Resistine"):
+        config_dir = os.path.join(home, "Library", "Application Support", app_name)
+        if os.path.exists(config_dir):
+            shutil.rmtree(config_dir)
+            logger.info(f"[UNINSTALL] Removed {config_dir}")
+        else:
+            logger.info(f"[UNINSTALL] User config dir {config_dir} not found, skipping")
 
     # Stale log files — the network extension wrote these as root; old entries
     # persist across builds and cause diagnostic confusion.  Must use admin
@@ -727,7 +728,7 @@ def _remove_app_config(admin_cmds):
 
 
 def _remove_keychain_items():
-    """Remove keychain entries created by Resistine."""
+    """Remove keychain entries created by Phoenix."""
     try:
         import keyring
     except ImportError:
@@ -735,7 +736,8 @@ def _remove_keychain_items():
         return
 
     entries = [
-        ("resistine-master-key", "master-key"),
+        ("phoenix-master-key", "master-key"),
+        ("resistine-master-key", "master-key"),  # pre-rebrand
     ]
 
     failed = []

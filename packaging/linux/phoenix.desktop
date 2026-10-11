@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Phoenix
+Comment=Phoenix Security Desktop
+Exec=phoenix
+Icon=phoenix
+Terminal=false
+Categories=Security;System;Utility;
+StartupWMClass=phoenix

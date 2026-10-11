@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec file for Resistine Desktop Application
-This bundles the Python Tkinter UI with all dependencies
+PyInstaller spec file for Phoenix Desktop Application
+This bundles the Python PyQt6 UI with all dependencies
 Swift components (CLI, XPC, Network Extension) are added by build script
 """
 
@@ -14,9 +14,13 @@ IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
+# Bundle / executable file name. Stays 'Resistine' until the bundle-ID
+# rename: root launchd daemons, Windows Run keys and in-place updaters
+# reference the installed path. Users see DISPLAY_NAME.
 APP_NAME = 'Resistine'
+DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.07.01'
+VERSION = '2026.07.20-rc'
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -47,11 +51,7 @@ datas = [
 
 # Hidden imports (modules not auto-detected)
 hiddenimports = [
-    'tkinter',
-    'tkinter.ttk',
-    'customtkinter',
     'PIL',
-    'PIL._tkinter_finder',
     'cryptography',
     'keyring',
     'keyring.backends',
@@ -64,10 +64,10 @@ hiddenimports = [
     'idna',
     'openai',
     'markdown',
-    'tkinterweb',
-    'html2text',
     'loguru',
     # OpenTelemetry (logger.py imports these; PyInstaller can't trace the submodules)
+    # Only the HTTP OTLP exporter is used — the grpc exporter (grpcio, ~18MB) is
+    # intentionally NOT bundled (see excludes below).
     'opentelemetry',
     'opentelemetry._logs',
     'opentelemetry.exporter.otlp.proto.http._log_exporter',
@@ -115,12 +115,80 @@ a = Analysis(
         'scipy',
         'pytest',
         'setuptools',
+        # OTLP grpc exporter path — only the HTTP exporter is used. grpcio ships
+        # an ~18MB compiled cygrpc extension; keep it out of the bundle.
+        'grpc',
+        'grpcio',
+        # Dead CustomTkinter-era GUI deps, removed in the PyQt6 migration.
+        'customtkinter',
+        'tkinterweb',
+        'html2text',
+        # The app is fully PyQt6 — the tkinter runtime (Tcl/Tk, ~4.6MB) is dead.
+        'tkinter',
+        '_tkinter',
+        'tkinter.ttk',
+        # Unused Qt module — no QtPdf usage anywhere in the app.
+        'PyQt6.QtPdf',
+        'PyQt6.QtPdfWidgets',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
     noarchive=False,
 )
+
+# ── Strip dead weight PyInstaller auto-scooped into the bundle ──────────────
+# PyInstaller's binary/data scanner over-collects: on Windows it grabs the
+# Swift-for-Windows runtime off the build machine's PATH (the app has no Swift
+# component there — the Swift VPN CLI is macOS-only and added separately by the
+# build script), and every platform pulls Qt's PDF module, its ~40-language
+# translation catalogs (we ship our own i18n in utils/i18n), and Pillow's AVIF
+# codec (images go through webp/cairosvg). None of it runs. Filter it out.
+
+def _basename(dest):
+    return dest.replace('\\', '/').rsplit('/', 1)[-1].lower()
+
+def _is_dead_binary(dest):
+    name = _basename(dest)
+    path = dest.replace('\\', '/').lower()
+    # Pillow AVIF codec (~7.6MB) — unused.
+    if '_avif' in name:
+        return True
+    # Qt PDF viewer module — unused.
+    if 'qtpdf' in name or 'qt6pdf' in name:
+        return True
+    # tkinter runtime — the app is fully PyQt6. Match the _tkinter extension,
+    # the Tcl/Tk framework binaries (basename 'tcl'/'tk'), and libtcl*/libtk*.
+    if name.startswith('_tkinter') or name.startswith('libtcl') or name.startswith('libtk'):
+        return True
+    if name in {'tcl', 'tk'} or path.rsplit('/', 2)[0].endswith(('tcl.framework', 'tk.framework')):
+        return True
+    # Swift-for-Windows runtime — false positive from the build toolchain on PATH.
+    if IS_WINDOWS and name.endswith('.dll'):
+        if name.startswith('swift'):
+            return True
+        if name in {
+            'foundation.dll', 'foundationnetworking.dll', 'foundationxml.dll',
+            '_foundationicu.dll', 'blocksruntime.dll', 'dispatch.dll',
+        }:
+            return True
+    return False
+
+def _is_dead_data(dest):
+    path = dest.replace('\\', '/').lower()
+    # Qt's bundled UI translations (~6.5MB) — the app ships its own i18n.
+    if 'qt6/translations' in path:
+        return True
+    # Tcl/Tk runtime data — the app is PyQt6; nothing imports tkinter anymore.
+    if path.startswith('tcl/') or path.startswith('tk/') or '/tcl8' in path or '/tk8' in path:
+        return True
+    return False
+
+_bin_before, _data_before = len(a.binaries), len(a.datas)
+a.binaries = [e for e in a.binaries if not _is_dead_binary(e[0])]
+a.datas = [e for e in a.datas if not _is_dead_data(e[0])]
+print(f"[spec] stripped {_bin_before - len(a.binaries)} dead binaries, "
+      f"{_data_before - len(a.datas)} dead data files")
 
 # Remove duplicate files
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
@@ -175,8 +243,8 @@ if IS_MACOS:
         version=VERSION,
         info_plist={
             # Basic app info
-            'CFBundleName': APP_NAME,
-            'CFBundleDisplayName': 'Phoenix',
+            'CFBundleName': DISPLAY_NAME,
+            'CFBundleDisplayName': DISPLAY_NAME,
             'CFBundleExecutable': APP_NAME,
             'CFBundleIdentifier': BUNDLE_ID,
             'CFBundleVersion': VERSION,

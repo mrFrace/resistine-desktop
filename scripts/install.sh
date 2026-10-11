@@ -47,7 +47,7 @@ Linux*)
 	*debian* | *ubuntu*)
 		# Check if packages are already installed
 		PACKAGES_TO_INSTALL=""
-		for pkg in python3 python3-venv python3-pip python3-tk wireguard-tools; do
+		for pkg in python3 python3-venv python3-pip python3-tk wireguard-tools libxcb-cursor0; do
 			if ! dpkg -s "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi
@@ -70,7 +70,7 @@ Linux*)
 
 		# Check if packages are already installed
 		PACKAGES_TO_INSTALL=""
-		for pkg in python3 python3-pip python3-tkinter wireguard-tools; do
+		for pkg in python3 python3-pip python3-tkinter wireguard-tools xcb-util-cursor; do
 			if ! rpm -q "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi
@@ -86,7 +86,7 @@ Linux*)
 	*suse*)
 		# Check if packages are already installed
 		PACKAGES_TO_INSTALL=""
-		for pkg in python3 python3-pip python3-tk wireguard-tools; do
+		for pkg in python3 python3-pip python3-tk wireguard-tools libxcb-cursor0; do
 			if ! rpm -q "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi
@@ -111,7 +111,7 @@ Linux*)
 
 		# python on Arch is Python 3 and ships with venv; libarchive provides bsdtar for RPM extraction
 		PACKAGES_TO_INSTALL=""
-		for pkg in python python-pip tk wireguard-tools systemd-resolvconf libarchive; do
+		for pkg in python python-pip tk wireguard-tools systemd-resolvconf libarchive xcb-util-cursor; do
 			if ! pacman -Qi "$pkg" &>/dev/null; then
 				PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL $pkg"
 			fi

@@ -8,7 +8,7 @@
   "main.debug_window.title": "Phoenix Debug Output",
   "main.debug_window.button.clear": "Clear",
   "main.debug_window.button.save_log": "Save Log",
-  "main.debug_window.header": "=== RESISTINE DEBUG WINDOW ===",
+  "main.debug_window.header": "=== PHOENIX DEBUG WINDOW ===",
   "main.debug_window.message": "All print statements and logs will appear here.",
   "main.debug_window.separator": "==================================================",
   "main.debug_window.log_saved": "Log saved to: {filename}",

@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# freshclam-update.sh — Resistine ClamAV signature auto-updater (macOS)
+# freshclam-update.sh — Phoenix ClamAV signature auto-updater (macOS)
 #
 # Run by the root LaunchDaemon com.resistine.desktop.freshclam via /bin/bash.
 # Runs freshclam exactly ONCE and exits. The cadence (every 4h) is owned by

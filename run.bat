@@ -81,9 +81,12 @@ if "!SERVICE_RUNNING!"=="1" (
     )
 )
 
-:: Run the application (debug mode by default)
-echo Starting the application in debug mode...
-python main.py -d %*
+:: Run the application. Do NOT force -d here: that hardcoded the app into
+:: debug mode (verbose logs + the Debug sidebar page) on every Windows launch,
+:: while run.sh (mac/Linux) runs without it. Pass -d explicitly when you want
+:: debug, exactly like run.sh: run.bat -d
+echo Starting the application...
+python main.py %*
 
 :: Deactivate is implicitly handled by script exit since we used call/local
 :: but we can be explicit if needed.

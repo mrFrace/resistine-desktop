@@ -1,7 +1,8 @@
 """
 Unit tests for plugins/base_plugin.py — BasePlugin.
 
-GUI-heavy dependencies (customtkinter, PIL) are stubbed in conftest.py.
+The PyQt6 port uses QIcon/QPixmap for icons; icon tests run against a real
+QApplication (QT_QPA_PLATFORM=offscreen).
 
 Covers:
 - Initialization and attribute storage
@@ -12,9 +13,14 @@ Covers:
 - destroy is a no-op
 - uninstall — enabled / disabled / no app reference
 - Getters/setters
+- Icons: theme-dependent path selection, tinting, missing-file fallbacks
 """
+import os
+
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 # ---------------------------------------------------------------------------
@@ -47,8 +53,7 @@ class ConcretePlugin:
             uninstall_enabled=True,
         )
         defaults.update(kwargs)
-        with patch("plugins.base_plugin.Image.open", return_value=MagicMock()):
-            return _Concrete(**defaults)
+        return _Concrete(**defaults)
 
 
 @pytest.fixture()
@@ -134,11 +139,11 @@ class TestGetStatus:
 @pytest.mark.unit
 def test_create_main_screen_raises_not_implemented():
     from plugins.base_plugin import BasePlugin
-    with patch("plugins.base_plugin.Image.open", return_value=MagicMock()):
-        p = BasePlugin.__new__(BasePlugin)
-        # Call the abstract method directly
-        with pytest.raises(NotImplementedError):
-            BasePlugin.create_main_screen(p)
+    p = BasePlugin(
+        "id", "1", 1, "n", "ok", "d", ["Linux"], {}, None, None
+    )
+    with pytest.raises(NotImplementedError):
+        p.create_main_screen()
 
 
 # ===========================================================================
@@ -172,6 +177,7 @@ class TestUninstall:
         plugin.app = mock_app
         result = plugin.uninstall()
         mock_mgr.uninstall_plugin.assert_called_once_with(plugin)
+        assert result == "uninstalled"
 
 
 # ===========================================================================
@@ -210,10 +216,152 @@ class TestGettersSetters:
 
 
 # ===========================================================================
-# is_resistine_config (VPN specific static check via config_manager)
+# Status map / class defaults
 # ===========================================================================
 @pytest.mark.unit
 def test_status_map_completeness():
     from plugins.base_plugin import BasePlugin
     expected_keys = {"ok", "info", "warning", "error", "critical"}
     assert expected_keys == set(BasePlugin.status_map.keys())
+
+
+@pytest.mark.unit
+def test_class_defaults():
+    from plugins.base_plugin import BasePlugin
+    assert BasePlugin.hidden is False
+    assert BasePlugin.defer_reveal_until_settled is False
+
+
+@pytest.mark.unit
+def test_screen_contract_defaults(plugin):
+    assert plugin.screen_signature() is None
+    assert plugin.is_screen_ready() is True
+    assert plugin.on_screen_shown() is None
+
+
+# ===========================================================================
+# Icons (real QApplication, offscreen)
+# ===========================================================================
+@pytest.fixture(scope="module")
+def qapp():
+    from PyQt6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture()
+def theme_mode():
+    """Allow tests to switch theme mode; restore afterwards."""
+    from gui import theme
+    original = theme.get_mode()
+    yield theme.set_mode
+    theme.set_mode(original)
+
+
+@pytest.fixture()
+def icon_files(tmp_path, qapp):
+    """Write two opaque 32x32 PNGs (red=light, blue=dark) to disk."""
+    from PyQt6.QtGui import QColor, QPixmap
+
+    paths = {}
+    for name, col in (("light", "#FF0000"), ("dark", "#0000FF")):
+        pm = QPixmap(32, 32)
+        pm.fill(QColor(col))
+        path = tmp_path / f"icon_{name}.png"
+        assert pm.save(str(path), "PNG")
+        paths[name] = str(path)
+    return paths
+
+
+@pytest.mark.unit
+class TestIcons:
+    def test_icon_path_follows_theme(self, theme_mode):
+        p = ConcretePlugin.make()
+        theme_mode("Light")
+        assert p._icon_path() == "/fake/light.png"
+        theme_mode("Dark")
+        assert p._icon_path() == "/fake/dark.png"
+
+    def test_missing_file_returns_null_icon(self, qapp):
+        p = ConcretePlugin.make()  # /fake/*.png do not exist
+        assert p.get_icon().isNull()
+        assert p.get_nav_icon().isNull()
+        assert p.get_icon_large().isNull()
+        assert p.get_icon_pixmap().isNull()
+
+    def test_none_path_returns_null_icon(self, qapp):
+        p = ConcretePlugin.make(icon_light_path=None, icon_dark_path=None)
+        assert p.get_icon().isNull()
+        assert p.get_icon_pixmap(20).isNull()
+
+    def test_get_icon_pixmap_scaled_to_size(self, icon_files, theme_mode):
+        theme_mode("Light")
+        p = ConcretePlugin.make(icon_light_path=icon_files["light"],
+                                icon_dark_path=icon_files["dark"])
+        pm = p.get_icon_pixmap(16)
+        assert not pm.isNull()
+        assert (pm.width(), pm.height()) == (16, 16)
+        # Default size is 44
+        assert p.get_icon_pixmap().width() == 44
+
+    @pytest.mark.parametrize("mode", ["Light", "Dark"])
+    def test_icon_tinted_to_text_primary(self, icon_files, theme_mode, mode):
+        from PyQt6.QtGui import QColor
+
+        from gui import theme
+        theme_mode(mode)
+        p = ConcretePlugin.make(icon_light_path=icon_files["light"],
+                                icon_dark_path=icon_files["dark"])
+        img = p.get_icon_pixmap(32).toImage()
+        assert img.pixelColor(8, 8).name().lower() == \
+            QColor(theme.color("text_primary")).name().lower()
+
+    def test_get_icon_non_null_for_existing_file(self, icon_files, qapp):
+        p = ConcretePlugin.make(icon_light_path=icon_files["light"],
+                                icon_dark_path=icon_files["dark"])
+        icon = p.get_icon()
+        assert not icon.isNull()
+        assert not p.get_icon_large().isNull()
+
+    def test_tint_preserves_transparency(self, qapp):
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QColor, QPixmap
+
+        from plugins.base_plugin import BasePlugin
+        src = QPixmap(10, 10)
+        src.fill(Qt.GlobalColor.transparent)
+        out = BasePlugin._tint(src, "#00FF00").toImage()
+        assert out.pixelColor(5, 5).alpha() == 0
+
+        src.fill(QColor("#FF0000"))
+        out = BasePlugin._tint(src, "#00FF00").toImage()
+        assert out.pixelColor(5, 5).name().lower() == "#00ff00"
+
+    def test_tint_null_pixmap_returned_unchanged(self, qapp):
+        from PyQt6.QtGui import QPixmap
+
+        from plugins.base_plugin import BasePlugin
+        assert BasePlugin._tint(QPixmap()).isNull()
+
+    def test_nav_icon_uses_active_color_when_checked(self, icon_files,
+                                                     theme_mode):
+        from PyQt6.QtCore import QSize
+        from PyQt6.QtGui import QColor, QIcon
+
+        from gui import theme
+        theme_mode("Light")
+        p = ConcretePlugin.make(icon_light_path=icon_files["light"],
+                                icon_dark_path=icon_files["dark"])
+        icon = p.get_nav_icon()
+        assert not icon.isNull()
+
+        def px(mode, state):
+            img = icon.pixmap(QSize(32, 32), mode, state).toImage()
+            return img.pixelColor(8, 8).name().lower()
+
+        def c(name):
+            return QColor(theme.color(name)).name().lower()
+
+        assert px(QIcon.Mode.Normal, QIcon.State.Off) == c("text_secondary")
+        assert px(QIcon.Mode.Normal, QIcon.State.On) == \
+            c("sidebar_active_text")
+        assert px(QIcon.Mode.Active, QIcon.State.Off) == c("text_primary")

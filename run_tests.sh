@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Resistine Desktop — Test Runner
+# Phoenix Desktop — Test Runner
 # =============================================================================
 # Usage:
 #   ./run_tests.sh              # Run all tests

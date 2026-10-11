@@ -81,20 +81,20 @@ class TestGetConfigDir:
         from utils.settings import get_config_dir
         with patch("utils.settings.platform.system", return_value="Darwin"):
             path = get_config_dir()
-            assert "Library/Application Support/Resistine" in path
+            assert "Library/Application Support/Phoenix" in path
 
     def test_windows_returns_appdata_path(self):
         from utils.settings import get_config_dir
         with patch("utils.settings.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {"APPDATA": "C:\\Users\\test\\AppData\\Roaming"}):
                 path = get_config_dir()
-                assert "Resistine" in path
+                assert "Phoenix" in path
 
     def test_linux_returns_dot_config(self):
         from utils.settings import get_config_dir
         with patch("utils.settings.platform.system", return_value="Linux"):
             path = get_config_dir()
-            assert ".config/resistine" in path
+            assert ".config/phoenix" in path
 
     def test_unknown_platform_returns_config_dir(self):
         from utils.settings import get_config_dir

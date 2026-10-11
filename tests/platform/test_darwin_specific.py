@@ -25,7 +25,7 @@ class TestDarwinConfigDir:
         with patch.object(platform, "system", return_value="Darwin"):
             # Reimport to pick up the patched platform
             path = s.get_config_dir()
-            assert "Library/Application Support/Resistine" in path
+            assert "Library/Application Support/Phoenix" in path
 
     def test_config_dir_exists_under_home(self, monkeypatch):
         import utils.settings as s
@@ -47,8 +47,10 @@ class TestWazuhPaths:
         assert WAZUH_LAUNCHD_PLIST == "/Library/LaunchDaemons/com.wazuh.agent.plist"
 
     def test_env_file_in_tmp(self):
-        from plugins.wazuh.config import WAZUH_ENV_FILE
-        assert WAZUH_ENV_FILE == "/tmp/wazuh_envs"
+        # Wazuh's macOS .pkg install scripts read this fixed path as root; the
+        # app stages it there as root (never via a user-writable /tmp file).
+        from plugins.wazuh.config import WAZUH_PKG_ENV_FILE
+        assert WAZUH_PKG_ENV_FILE == "/tmp/wazuh_envs"
 
     def test_wazuh_control_binary_path(self):
         from plugins.wazuh.config import WAZUH_INSTALL_DIR

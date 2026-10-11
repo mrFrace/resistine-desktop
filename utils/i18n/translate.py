@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Auto-translation tool for Resistine i18n system.
+Auto-translation tool for Phoenix i18n system.
 Automatically translates missing keys using OpenAI API.
 
 Usage:
@@ -184,7 +184,7 @@ def list_languages(base_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Auto-translate Resistine i18n files using OpenAI"
+        description="Auto-translate Phoenix i18n files using OpenAI"
     )
     
     parser.add_argument(

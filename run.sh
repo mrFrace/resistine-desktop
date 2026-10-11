@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Description: This script updates all dependencies and runs the Resistine application.
+# Description: This script updates all dependencies and runs the Phoenix application.
 # If the .venv folder does not exist, it will run the install.sh script first.
 # Usage: ./run.sh
 
@@ -65,8 +65,8 @@ Darwin*)
 	# already holds the tunnel up, this process's traffic routes through the
 	# system tunnel even though *this* instance's internal VPN state stays
 	# "Stopped". Setting this var makes plugins.vpn.main.is_vpn_connected()
-	# return True so VPN-gated features (the chat access gate, wazuh_overview
-	# API fetches, etc.) actually run. If the .pkg tunnel ISN'T up the
+	# return True so VPN-gated features (the chat access gate, etc.)
+	# actually run. If the .pkg tunnel ISN'T up the
 	# downstream network calls will just fail — the obvious and expected
 	# failure mode in dev. Linux/Windows have different VPN backends, so
 	# this export is intentionally scoped to the Darwin arm only.
@@ -85,6 +85,13 @@ CYGWIN* | MINGW* | MSYS*)
 	exit 1
 	;;
 esac
+
+# Chat debugging: make the OpenAI-compatible client log the raw HTTP
+# request/response for every chat turn — you'll see whether stream:true
+# is sent, each streamed chunk, and exactly when the server closes the
+# stream (e.g. after a background run_security_diagnostic kickoff).
+# Override with `OPENAI_LOG=info ./run.sh` to quiet it down.
+export OPENAI_LOG="${OPENAI_LOG:-debug}"
 
 # Run the application
 python main.py "$@"

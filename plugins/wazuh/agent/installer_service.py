@@ -40,7 +40,7 @@ _lock = threading.Lock()
 # Cache path
 # ---------------------------------------------------------------------------
 _CACHE_DIR = os.path.join(
-    os.path.expanduser("~/Library/Application Support/Resistine"), "cache"
+    os.path.expanduser("~/Library/Application Support/Phoenix"), "cache"
 )
 _CACHED_PKG = os.path.join(_CACHE_DIR, "wazuh-agent.pkg")
 
@@ -60,10 +60,14 @@ def get_failure_reason() -> str:
     return settings.get(_NAMESPACE, "failure_reason", "")
 
 
-def ensure_download_started():
+def ensure_download_started(force: bool = False):
     """Idempotent. Download if registered + not cached + not installed.
 
     Call from: login success, app startup. Thread-safe.
+
+    ``force=True`` bypasses the auth-email gate — used when the user
+    explicitly asks to install without being signed in (e.g. they imported
+    a VPN config manually, or the Login plugin is uninstalled).
     """
     from plugins.wazuh.agent.wazuh_functions_darwin import is_agent_installed
 
@@ -83,8 +87,9 @@ def ensure_download_started():
             return
 
         # Not authenticated (check email rather than logged_in flag because
-        # the download thread may start before logged_in is persisted)
-        if not settings.get("auth", "email", ""):
+        # the download thread may start before logged_in is persisted).
+        # Skipped on force — an explicit user request to install anyway.
+        if not force and not settings.get("auth", "email", ""):
             return
 
         # Respect backoff on prior failure

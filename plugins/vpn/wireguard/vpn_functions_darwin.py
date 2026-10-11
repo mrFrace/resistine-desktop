@@ -14,6 +14,25 @@ from typing import Optional, Tuple
 
 from utils import settings
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    optional_peer_lines,
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
@@ -29,7 +48,8 @@ def get_writable_wireguard_dir():
         home, "Library", "Group Containers", "group.Resistine.WireguardTest"
     )
     wireguard_dir = os.path.join(app_group_container, "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
 
 
@@ -419,6 +439,20 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="resistine")
             logger.error("❌ Error: Private key not found in keychain")
             return None
 
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+            extra_peer_lines = optional_peer_lines(peer_config)
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
+            return None
+
         # Convert AllowedIPs array to comma-separated string
         allowed_ips_str = (
             ", ".join(allowed_ips)
@@ -444,6 +478,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Get writable WireGuard directory
         wireguard_dir = get_writable_wireguard_dir()
@@ -580,7 +616,7 @@ _EXTENSION_CACHE_TTL = 2  # seconds
 
 
 def is_extension_enabled():
-    """Check if the Resistine network extension is enabled in Login Items & Extensions.
+    """Check if the Phoenix network extension is enabled in Login Items & Extensions.
 
     Uses systemextensionsctl to verify the extension is both activated AND enabled.
     A NETunnelProviderManager can exist in preferences even when the extension is
@@ -617,92 +653,3 @@ def is_extension_enabled():
     except Exception as e:
         logger.warning(f"Extension status check failed: {e}")
         return False
-
-
-def ensure_helper_registered():
-    """Register the privileged helper on macOS (runs silently on startup)"""
-    import sys
-    import os
-
-    # Skip registration if running from source (SMAppService requires a bundle)
-    if not (".app/Contents/MacOS" in sys.executable or ".app/Contents/MacOS" in os.path.abspath(sys.argv[0])):
-        logger.debug("Skipping helper registration (not running as an app bundle)")
-        return
-
-    try:
-        from ServiceManagement import SMAppService
-
-        plist_name = "com.resistine.plist"
-
-        # Create the service
-        try:
-            service = SMAppService.daemonServiceWithPlistName_(plist_name)
-        except:
-            try:
-                service = SMAppService.daemonWithPlistName_(plist_name)
-            except:
-                logger.warning("Could not create SMAppService for helper")
-                return
-
-        # Check current status
-        status = int(service.status())
-        status_map = {
-            0: "notRegistered",
-            1: "enabled",
-            2: "requiresApproval",
-            3: "notFound",
-        }
-        status_str = status_map.get(status, "unknown")
-
-        if status == 1:  # Already enabled
-            logger.info("Helper already enabled")
-            return
-
-        if status == 2:  # Requires approval
-            logger.warning("Helper registered but requires user approval")
-            prompt_helper_approval(service)
-            return
-
-        # Not registered yet (0 or 3), try to register
-        logger.info("Registering privileged helper...")
-        error = service.registerAndReturnError_(None)
-
-        if error:
-            logger.error(f"Helper registration error: {error}")
-            new_status = int(service.status())
-            if new_status == 2:
-                prompt_helper_approval(service)
-        else:
-            logger.info("Helper registered successfully")
-
-    except ImportError:
-        logger.warning("ServiceManagement framework not available")
-    except Exception as e:
-        logger.error(f"Helper registration error: {e}")
-
-
-def prompt_helper_approval(service):
-    """Prompt user to approve helper in System Settings"""
-    try:
-        from gui.dialogs import ask_yes_no
-        import tkinter as tk
-
-        try:
-            root = tk._default_root
-        except:
-            root = None
-
-        def on_confirm(confirmed):
-            if confirmed:
-                service.openSystemSettingsLoginItems()
-                logger.info("Opened System Settings - Login Items")
-
-        ask_yes_no(
-            root,
-            "Helper Approval Required",
-            "Phoenix needs your approval to install a helper tool for VPN functionality.\n\n"
-            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-            on_confirm
-        )
-    except Exception as e:
-        logger.error(f"Could not prompt for approval: {e}")

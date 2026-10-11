@@ -508,6 +508,21 @@ def scan_path(
     if on_line:
         on_line(f"Scanning {short_name} ({engine})...")
 
+    # Count files on a side thread so the scan starts immediately but the
+    # progress bar can switch from indeterminate to percentage once the
+    # total lands (mirrors the ClamAV pre-count → on_total behaviour).
+    if on_total:
+        def _count():
+            try:
+                total = sum(1 for _ in _walk_files(
+                    target, whitelist, excluded_ext, max_bytes, cancel))
+                if not (cancel and cancel.is_set()):
+                    on_total(total)
+            except Exception:
+                pass  # bar simply stays indeterminate
+
+        threading.Thread(target=_count, daemon=True).start()
+
     start = time.monotonic()
     scanned = 0
     infected = 0

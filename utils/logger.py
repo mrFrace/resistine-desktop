@@ -15,11 +15,30 @@ from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import get_current_span
 
 
-_DEFAULT_OTLP_ENDPOINT = "http://otel.resisti.net:4318"
+_DEFAULT_OTLP_ENDPOINT = "http://otel.phoenix.exposed:4318"
+
+# Log shipping is off until the Phoenix collector (otel.phoenix.exposed) is
+# live; the old otel.resisti.net no longer resolves and the exporter filled
+# the log with retry errors every 30 s. Flip this to True to turn it back on.
+# PHOENIX_TELEMETRY=1/0 overrides it either way, and setting
+# OTEL_EXPORTER_OTLP_ENDPOINT (a collector to test against) also enables it.
+TELEMETRY_ENABLED = False
 
 
 def _otlp_endpoint():
     return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
+
+
+def telemetry_enabled() -> bool:
+    """Whether log records are shipped to the OTLP collector."""
+    flag = os.environ.get("PHOENIX_TELEMETRY", "").strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+        return True
+    return TELEMETRY_ENABLED
 
 
 # Loguru level name -> OTEL severity_number per OTEL log data model spec
@@ -38,7 +57,7 @@ class OTELink:
         # Initialize OTEL Logger Provider
         resource = Resource.create(
             {
-                "service.name": "resistine-desktop",
+                "service.name": "phoenix-desktop",
                 "service.version": "1.0.0",
             }
         )
@@ -46,7 +65,7 @@ class OTELink:
         self.logger_provider = LoggerProvider(resource=resource)
         _logs.set_logger_provider(self.logger_provider)
 
-        # OTLP/HTTP receiver. Default routes to the Resistine collector, which
+        # OTLP/HTTP receiver. Default routes to the Phoenix collector, which
         # forwards into the wazuh-indexer. Reachable only over the VPN; the
         # BatchLogRecordProcessor silently drops batches when unreachable.
         exporter = OTLPLogExporter(endpoint=f"{_otlp_endpoint()}/v1/logs")
@@ -54,7 +73,7 @@ class OTELink:
             BatchLogRecordProcessor(exporter)
         )
 
-        self.otel_logger = self.logger_provider.get_logger("resistine.logger")
+        self.otel_logger = self.logger_provider.get_logger("phoenix.logger")
 
     def __call__(self, message):
         record = message.record
@@ -127,10 +146,10 @@ class BufferedOTLPSink:
             timeout=self._EXPORT_TIMEOUT_SEC,
         )
         self._resource = Resource.create({
-            "service.name": "resistine-desktop",
+            "service.name": "phoenix-desktop",
             "service.version": "1.0.0",
         })
-        self._scope = InstrumentationScope("resistine.logger")
+        self._scope = InstrumentationScope("phoenix.logger")
         self._lock = threading.Lock()
         threading.Thread(
             target=self._flush_loop,
@@ -340,7 +359,7 @@ def setup_logging(level="INFO", log_to_file=True):
 
         log_dir = os.path.join(get_config_dir(), "logs")
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.path.join(log_dir, "resistine.log")
+        log_file = os.path.join(log_dir, "phoenix.log")
         logger.add(
             log_file,
             level=level,
@@ -353,7 +372,8 @@ def setup_logging(level="INFO", log_to_file=True):
     # OTLP sink: disk-buffered, flushed to the collector when reachable.
     # Records that happen before the VPN is up are buffered to disk and shipped
     # once the tunnel comes up; survives process restarts too.
-    if log_to_file:
+    # Off by default until the Phoenix collector exists (see TELEMETRY_ENABLED).
+    if log_to_file and telemetry_enabled():
         try:
             from utils.settings import get_config_dir
             buffer_path = os.path.join(

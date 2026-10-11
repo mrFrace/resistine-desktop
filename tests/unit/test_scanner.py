@@ -82,10 +82,12 @@ class TestScan:
         results = []
         with patch("plugins.antivirus.scanner.clamav") as mock_clamav:
             mock_clamav.is_available.return_value = False
+            mock_clamav.engine_name.return_value = "ClamAV"
             handle = scan("/tmp/test", on_complete=results.append)
 
         assert len(results) == 1
-        assert results[0].error == "ClamAV not installed — install it via the Store plugin."
+        # Message is engine-neutral (ClamAV on macOS/Linux, Defender on Windows).
+        assert results[0].error == "ClamAV is not available."
         assert results[0].target == "/tmp/test"
         assert isinstance(handle, ScanHandle)
 

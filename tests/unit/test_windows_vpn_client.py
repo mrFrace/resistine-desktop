@@ -287,37 +287,3 @@ class TestVpnWindowsClient:
             result = get_status("wg0")
 
         assert result.get("state") == "Stopped"
-
-    def test_toggle_connects_when_stopped(self):
-        """toggle() must call connect() when current state is Stopped."""
-        from plugins.vpn.wireguard.vpn_windows_client import toggle
-
-        with patch(
-            "plugins.vpn.wireguard.vpn_windows_client.get_status",
-            return_value={"state": "Stopped"},
-        ):
-            with patch(
-                "plugins.vpn.wireguard.vpn_windows_client.connect",
-                return_value={"status": "ok", "state": "Running"},
-            ) as mock_connect:
-                result = toggle("wg0", config_path="/path/to/conf")
-
-        mock_connect.assert_called_once_with("wg0", config_path="/path/to/conf")
-        assert result["state"] == "Running"
-
-    def test_toggle_disconnects_when_running(self):
-        """toggle() must call disconnect() when current state is Running."""
-        from plugins.vpn.wireguard.vpn_windows_client import toggle
-
-        with patch(
-            "plugins.vpn.wireguard.vpn_windows_client.get_status",
-            return_value={"state": "Running"},
-        ):
-            with patch(
-                "plugins.vpn.wireguard.vpn_windows_client.disconnect",
-                return_value={"status": "ok", "state": "Stopped"},
-            ) as mock_disconnect:
-                result = toggle("wg0")
-
-        mock_disconnect.assert_called_once_with("wg0")
-        assert result["state"] == "Stopped"

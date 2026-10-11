@@ -20,8 +20,7 @@ import zipfile
 
 from utils import settings
 from utils.logger import logger
-from utils.windows_admin import is_admin as _is_admin  # noqa: F401
-from utils.windows_admin import run_privileged as _run_privileged
+from utils.windows_admin import is_admin as _is_admin
 
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
@@ -36,7 +35,7 @@ from plugins.wazuh.config import (
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
 _CLIENT_KEYS = os.path.join(WINDOWS_WAZUH_DIR, "client.keys")
-_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Resistine", "wazuh_client.keys")
+_KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Phoenix", "wazuh_client.keys")
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 
@@ -61,7 +60,108 @@ _DEFENDER_LOCALFILE_BLOCK = """
     <log_format>eventchannel</log_format>
   </localfile>"""
 
+# PowerShell treats the typographic quotes U+2018..U+201B exactly like an ASCII
+# apostrophe as single-quote string delimiters, so all of them must be doubled.
+_PS_SINGLE_QUOTES = ("'", "\u2018", "\u2019", "\u201a", "\u201b")
 
+
+def _ps_escape_path(value):
+    """Escape *value* for use inside a PowerShell single-quoted string.
+
+    Single-quoted PowerShell strings expand nothing ($, backtick, double
+    quotes are literal); the only way out is a single quote, which is escaped
+    by doubling it.  Prevents injection via crafted paths/URLs (e.g. a user
+    profile directory named ``O'Brien`` or ``x'; Remove-Item ...``).
+    """
+    value = str(value)
+    for q in _PS_SINGLE_QUOTES:
+        value = value.replace(q, q + q)
+    return value
+
+
+def _ps_quote(value):
+    """Return *value* as a complete, safely escaped PowerShell '...' literal."""
+    return f"'{_ps_escape_path(value)}'"
+
+
+_PS_EXE = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]
+
+
+def _write_temp_ps1(body):
+    """Write *body* to a new temp .ps1 file and return its path.
+
+    UTF-8 *with BOM*: Windows PowerShell 5.1 reads BOM-less scripts as the
+    ANSI code page, which would corrupt non-ASCII paths.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".ps1", delete=False, encoding="utf-8-sig",
+    ) as f:
+        f.write(body)
+        return f.name
+
+
+def _run_privileged(command, timeout=300):
+    """Run a PowerShell script with admin privileges.  Returns (success, output).
+
+    The script is always written to a temp .ps1 and executed with ``-File``
+    (never interpolated into a ``-Command`` string).  If already admin it runs
+    directly; otherwise it is elevated with ``Start-Process -Verb RunAs`` and
+    the only values embedded in that launcher are our own temp paths, escaped
+    with _ps_escape_path.  Every value interpolated into *command* itself
+    must be quoted with _ps_quote().
+    """
+    script_path = ""
+    result_file = ""
+    try:
+        if _is_admin():
+            script_path = _write_temp_ps1(command)
+            result = subprocess.run(
+                _PS_EXE + ["-File", script_path],
+                capture_output=True, text=True, timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+            output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"_run_privileged: rc={result.returncode} output={output!r}")
+            return (result.returncode == 0, output)
+
+        # Not admin: wrap the command so the elevated process reports back via
+        # a result file, then elevate the script via -File.
+        result_file = os.path.join(
+            tempfile.gettempdir(), f"phoenix-wazuh-{os.getpid()}-{time.time_ns()}.result"
+        )
+        rf = _ps_quote(result_file)
+        script_path = _write_temp_ps1(
+            f"try {{\n{command}\n'SUCCESS' | Out-File -FilePath {rf} -Encoding utf8\n}}\n"
+            f"catch {{ $_.Exception.Message | Out-File -FilePath {rf} -Encoding utf8 }}\n"
+        )
+        # Start-Process joins -ArgumentList with spaces without quoting, so the
+        # script path is wrapped in literal double quotes (paths can't contain ").
+        elevate_cmd = (
+            "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden "
+            "-ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive',"
+            f"'-File','\"{_ps_escape_path(script_path)}\"'"
+        )
+        subprocess.run(
+            _PS_EXE + ["-Command", elevate_cmd],
+            capture_output=True, text=True, timeout=timeout,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if os.path.exists(result_file):
+            with open(result_file, encoding="utf-8-sig") as f:
+                output = f.read().strip()
+            return ("SUCCESS" in output, output)
+        return (False, "No result from elevated process")
+    except subprocess.TimeoutExpired:
+        return (False, "Command timed out")
+    except Exception as e:
+        return (False, str(e))
+    finally:
+        for path in (script_path, result_file):
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
 
 
 def _get_machine_guid():
@@ -95,7 +195,7 @@ def get_agent_name():
     # derived from the GUID so Wazuh enrollment still gets a unique value.
     if guid:
         return f"agent-{guid.replace('-', '')[-12:].upper()}"
-    return "resistine-agent"
+    return "phoenix-agent"
 
 
 def get_agent_group():
@@ -157,6 +257,21 @@ def get_agent_status():
     return "Stopped"
 
 
+def get_agent_connection():
+    """Return the agent's live manager-connection status.
+
+    One of ``connected`` / ``pending`` / ``disconnected`` / ``unknown``.
+    Reads Wazuh's own wazuh-agentd.state; falls back to ossec.log. Distinct
+    from get_agent_status(), which only reports whether the service is alive.
+    """
+    from plugins.wazuh.agent import agent_state
+
+    return agent_state.read_agent_connection(
+        os.path.join(WINDOWS_WAZUH_DIR, "wazuh-agentd.state"),
+        os.path.join(WINDOWS_WAZUH_DIR, "ossec.log"),
+    )
+
+
 def get_package_url():
     """Return the Wazuh MSI download URL."""
     return WINDOWS_WAZUH_MSI_URL
@@ -192,7 +307,7 @@ def _download_file(url, dest_path, progress_callback=None, label="Downloading...
     try:
         ps_cmd = (
             f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
-            f"Invoke-WebRequest -Uri '{url}' -OutFile '{dest_path}' -UseBasicParsing"
+            f"Invoke-WebRequest -Uri {_ps_quote(url)} -OutFile {_ps_quote(dest_path)} -UseBasicParsing"
         )
         result = subprocess.run(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
@@ -258,9 +373,10 @@ def _prepare_sysmon_download(progress_callback=None):
 def _sysmon_install_ps(sysmon):
     """PowerShell that installs Sysmon from a prepared download dict."""
     return (
-        f"New-Item -ItemType Directory -Path '{_SYSMON_DIR}' -Force | Out-Null; "
-        f"Copy-Item -Path '{sysmon['dir']}\\*' -Destination '{_SYSMON_DIR}' -Recurse -Force; "
-        f"& '{sysmon['exe']}' -accepteula -i '{sysmon['config']}'"
+        f"New-Item -ItemType Directory -Path {_ps_quote(_SYSMON_DIR)} -Force | Out-Null; "
+        f"Copy-Item -Path {_ps_quote(os.path.join(sysmon['dir'], '*'))} "
+        f"-Destination {_ps_quote(_SYSMON_DIR)} -Recurse -Force; "
+        f"& {_ps_quote(sysmon['exe'])} -accepteula -i {_ps_quote(sysmon['config'])}"
     )
 
 
@@ -315,7 +431,7 @@ def _localfile_injection_ps(blocks):
     entries_ps_str = ",\n".join(entries_ps)
 
     return (
-        f"$conf = '{_OSSEC_CONF}'\n"
+        f"$conf = {_ps_quote(_OSSEC_CONF)}\n"
         "if (-not (Test-Path $conf)) { throw 'ossec.conf missing' }\n"
         "$utf8NoBom = New-Object System.Text.UTF8Encoding($false)\n"
         "$content = [System.IO.File]::ReadAllText($conf, $utf8NoBom)\n"
@@ -332,9 +448,9 @@ def _localfile_injection_ps(blocks):
         "}\n"
         "if ($changed) {\n"
         "    [System.IO.File]::WriteAllText($conf, $content, $utf8NoBom)\n"
-        f"    $svc = Get-Service -Name '{_SERVICE_NAME}' -ErrorAction SilentlyContinue\n"
+        f"    $svc = Get-Service -Name {_ps_quote(_SERVICE_NAME)} -ErrorAction SilentlyContinue\n"
         "    if ($svc -and $svc.Status -eq 'Running') {\n"
-        f"        Restart-Service -Name '{_SERVICE_NAME}' -Force\n"
+        f"        Restart-Service -Name {_ps_quote(_SERVICE_NAME)} -Force\n"
         "    }\n"
         "}\n"
     )
@@ -379,9 +495,9 @@ def _ensure_ossec_address():
         return
     logger.warning(f"ossec.conf has wrong manager address — patching to {WAZUH_MANAGER}")
     patch_cmd = (
-        f"(Get-Content '{_OSSEC_CONF}') "
-        f"-replace '<address>.*</address>', '<address>{WAZUH_MANAGER}</address>' | "
-        f"Set-Content '{_OSSEC_CONF}'"
+        f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
+        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' | "
+        f"Set-Content {_ps_quote(_OSSEC_CONF)}"
     )
     _run_privileged(patch_cmd)
 
@@ -396,7 +512,7 @@ def start_agent():
     # Restore key if missing
     if os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS):
         restore_cmd = (
-            f"Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force"
+            f"Copy-Item -Path {_ps_quote(_KEY_BACKUP)} -Destination {_ps_quote(_CLIENT_KEYS)} -Force"
         )
         _run_privileged(restore_cmd)
 
@@ -418,7 +534,7 @@ def stop_agent():
     # Verify stopped
     if get_agent_status() == "Running":
         logger.warning("Service still running after NET STOP, force-stopping")
-        _run_privileged(f"Stop-Service -Name '{_SERVICE_NAME}' -Force")
+        _run_privileged(f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force")
 
     stopped = get_agent_status() != "Running"
     if stopped:
@@ -440,9 +556,9 @@ def restore_client_key_if_needed():
 
     # Only restore if missing
     script = (
-        f"if (-not (Test-Path '{_CLIENT_KEYS}')) {{ "
-        f"  Copy-Item -Path '{_KEY_BACKUP}' -Destination '{_CLIENT_KEYS}' -Force; "
-        f"  Restart-Service -Name '{_SERVICE_NAME}'; "
+        f"if (-not (Test-Path {_ps_quote(_CLIENT_KEYS)})) {{ "
+        f"  Copy-Item -Path {_ps_quote(_KEY_BACKUP)} -Destination {_ps_quote(_CLIENT_KEYS)} -Force; "
+        f"  Restart-Service -Name {_ps_quote(_SERVICE_NAME)}; "
         f"  Write-Output 'KEY_RESTORED' "
         f"}} else {{ "
         f"  Write-Output 'KEY_OK' "
@@ -457,6 +573,49 @@ def restore_client_key_if_needed():
     return success
 
 
+def reenroll_agent():
+    """Force a fresh manager registration to recover a dead/invalid key.
+
+    Used when the agent is Running but never reaches ``connected`` (e.g. the
+    old agent was deleted server-side after a reinstall, invalidating the
+    reused key). Wipes the local key + backup, enrolls under a fresh unique
+    name so the manager creates a brand-new record, then restarts the service.
+    Returns (ok, msg).
+    """
+    if not is_agent_installed():
+        return (False, "Wazuh agent is not installed")
+
+    base = get_agent_name()
+    new_name = f"{base}-{str(int(time.time()))[-6:]}"
+    group = get_agent_group()
+
+    script = (
+        f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue; "
+        f"Remove-Item -Path {_ps_quote(_CLIENT_KEYS)},{_ps_quote(_KEY_BACKUP)} -Force "
+        f"-ErrorAction SilentlyContinue; "
+        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ & {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
+        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} -A {_ps_quote(new_name)} -G {_ps_quote(group)} }}; "
+        f"if (-not (Test-Path {_ps_quote(_CLIENT_KEYS)}) -or "
+        f"((Get-Item {_ps_quote(_CLIENT_KEYS)}).Length -eq 0)) "
+        f"{{ Write-Output 'REENROLL_NO_KEY'; exit 1 }}; "
+        f"if (Test-Path {_ps_quote(_OSSEC_CONF)}) {{ (Get-Content {_ps_quote(_OSSEC_CONF)}) "
+        f"-replace '<agent_name>.*</agent_name>', '<agent_name>{_ps_escape_path(new_name)}</agent_name>' | "
+        f"Set-Content {_ps_quote(_OSSEC_CONF)} }}; "
+        f"New-Item -ItemType Directory -Path (Split-Path {_ps_quote(_KEY_BACKUP)}) -Force "
+        f"| Out-Null; "
+        f"Copy-Item {_ps_quote(_CLIENT_KEYS)} {_ps_quote(_KEY_BACKUP)} -Force; "
+        f"Start-Service -Name {_ps_quote(_SERVICE_NAME)}; "
+        f"Write-Output 'REENROLL_OK'"
+    )
+    success, output = _run_privileged(script)
+    if success and "REENROLL_OK" in (output or "") \
+            and "REENROLL_NO_KEY" not in (output or ""):
+        logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
+        return (True, f"Re-enrolled as {new_name}")
+    logger.error(f"Wazuh re-enroll failed: {output!r}")
+    return (False, output or "Re-enrollment failed")
+
+
 def remove_agent(wipe_keys: bool = False):
     """Stop and uninstall the Wazuh agent.
 
@@ -469,12 +628,12 @@ def remove_agent(wipe_keys: bool = False):
     backup_dir = os.path.dirname(_KEY_BACKUP)
     if wipe_keys:
         key_phase = (
-            f"if (Test-Path '{_KEY_BACKUP}') {{ Remove-Item -Force '{_KEY_BACKUP}' }}; "
+            f"if (Test-Path {_ps_quote(_KEY_BACKUP)}) {{ Remove-Item -Force {_ps_quote(_KEY_BACKUP)} }}; "
         )
     else:
         key_phase = (
-            f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
-            f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}; "
+            f"New-Item -ItemType Directory -Path {_ps_quote(backup_dir)} -Force | Out-Null; "
+            f"if (Test-Path {_ps_quote(_CLIENT_KEYS)}) {{ Copy-Item {_ps_quote(_CLIENT_KEYS)} {_ps_quote(_KEY_BACKUP)} -Force }}; "
         )
 
     script = (
@@ -484,7 +643,7 @@ def remove_agent(wipe_keys: bool = False):
         f"$app = Get-WmiObject -Class Win32_Product | Where-Object {{ $_.Name -like '*Wazuh*' }}; "
         f"if ($app) {{ $app.Uninstall() }}; "
         # Fallback: remove directory
-        f"if (Test-Path '{WINDOWS_WAZUH_DIR}') {{ Remove-Item -Recurse -Force '{WINDOWS_WAZUH_DIR}' }}"
+        f"if (Test-Path {_ps_quote(WINDOWS_WAZUH_DIR)}) {{ Remove-Item -Recurse -Force {_ps_quote(WINDOWS_WAZUH_DIR)} }}"
     )
     success, output = _run_privileged(script, timeout=300)
     if success:
@@ -518,15 +677,15 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
     # path is its own element so its spaces survive.
     msi_args = ",".join([
         "'/i'",
-        f"'{msi_path}'",
+        _ps_quote(msi_path),
         "'/qn'",
-        f"'WAZUH_MANAGER={WAZUH_MANAGER}'",
-        f"'WAZUH_MANAGER_PORT={WAZUH_MANAGER_PORT}'",
-        f"'WAZUH_PROTOCOL={WAZUH_PROTOCOL}'",
-        f"'WAZUH_REGISTRATION_SERVER={WAZUH_MANAGER}'",
-        f"'WAZUH_REGISTRATION_PORT={WAZUH_REGISTRATION_PORT}'",
-        f"'WAZUH_AGENT_NAME={agent_name}'",
-        f"'WAZUH_AGENT_GROUP={agent_group}'",
+        _ps_quote(f"WAZUH_MANAGER={WAZUH_MANAGER}"),
+        _ps_quote(f"WAZUH_MANAGER_PORT={WAZUH_MANAGER_PORT}"),
+        _ps_quote(f"WAZUH_PROTOCOL={WAZUH_PROTOCOL}"),
+        _ps_quote(f"WAZUH_REGISTRATION_SERVER={WAZUH_MANAGER}"),
+        _ps_quote(f"WAZUH_REGISTRATION_PORT={WAZUH_REGISTRATION_PORT}"),
+        _ps_quote(f"WAZUH_AGENT_NAME={agent_name}"),
+        _ps_quote(f"WAZUH_AGENT_GROUP={agent_group}"),
     ])
 
     parts = ["$ErrorActionPreference = 'Continue'"]
@@ -543,16 +702,16 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
     # Stop the service before enrollment so the final Start-Service loads the
     # freshly enrolled client.keys (the MSI may register it as auto-start).
     parts.append(_guard(
-        f"Stop-Service -Name '{_SERVICE_NAME}' -Force -ErrorAction SilentlyContinue"
+        f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue"
     ))
 
     # Patch manager address + agent name in ossec.conf.
     parts.append(_guard(
-        f"if (Test-Path '{_OSSEC_CONF}') {{ "
-        f"(Get-Content '{_OSSEC_CONF}') "
-        f"-replace '<address>.*</address>', '<address>{WAZUH_MANAGER}</address>' "
-        f"-replace '<agent_name>.*</agent_name>', '<agent_name>{agent_name}</agent_name>' | "
-        f"Set-Content '{_OSSEC_CONF}' }}"
+        f"if (Test-Path {_ps_quote(_OSSEC_CONF)}) {{ "
+        f"(Get-Content {_ps_quote(_OSSEC_CONF)}) "
+        f"-replace '<address>.*</address>', '<address>{_ps_escape_path(WAZUH_MANAGER)}</address>' "
+        f"-replace '<agent_name>.*</agent_name>', '<agent_name>{_ps_escape_path(agent_name)}</agent_name>' | "
+        f"Set-Content {_ps_quote(_OSSEC_CONF)} }}"
     ))
 
     # Inject Sysmon + Defender eventchannel monitoring.
@@ -563,21 +722,21 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir)
 
     # Enroll with the manager (writes client.keys).
     parts.append(_guard(
-        f"if (Test-Path '{_AGENT_AUTH}') {{ "
-        f"& '{_AGENT_AUTH}' -m '{WAZUH_MANAGER}' "
-        f"-P '{WAZUH_REGISTRATION_PORT}' "
-        f"-A '{agent_name}' -G '{agent_group}' }}"
+        f"if (Test-Path {_ps_quote(_AGENT_AUTH)}) {{ "
+        f"& {_ps_quote(_AGENT_AUTH)} -m {_ps_quote(WAZUH_MANAGER)} "
+        f"-p {_ps_quote(WAZUH_REGISTRATION_PORT)} "
+        f"-A {_ps_quote(agent_name)} -G {_ps_quote(agent_group)} }}"
     ))
 
     # Back up client.keys for future repair/recovery.
     parts.append(_guard(
-        f"New-Item -ItemType Directory -Path '{backup_dir}' -Force | Out-Null; "
-        f"if (Test-Path '{_CLIENT_KEYS}') {{ Copy-Item '{_CLIENT_KEYS}' '{_KEY_BACKUP}' -Force }}"
+        f"New-Item -ItemType Directory -Path {_ps_quote(backup_dir)} -Force | Out-Null; "
+        f"if (Test-Path {_ps_quote(_CLIENT_KEYS)}) {{ Copy-Item {_ps_quote(_CLIENT_KEYS)} {_ps_quote(_KEY_BACKUP)} -Force }}"
     ))
 
     # Start the service (stopped after a fresh MSI install, so it now loads
     # the freshly enrolled client.keys).
-    parts.append(_guard(f"Start-Service -Name '{_SERVICE_NAME}'"))
+    parts.append(_guard(f"Start-Service -Name {_ps_quote(_SERVICE_NAME)}"))
 
     return "\n\n".join(parts)
 

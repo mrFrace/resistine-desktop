@@ -23,6 +23,18 @@ from unittest.mock import MagicMock, patch, mock_open, call
 # win32 modules are stubbed centrally in tests/conftest.py
 
 
+@pytest.fixture(autouse=True)
+def _windows_subprocess_constants():
+    """Provide Windows-only subprocess.CREATE_NO_WINDOW when running off Windows.
+
+    The service's run_cmd() passes creationflags=subprocess.CREATE_NO_WINDOW,
+    which only exists on Windows. Patch it in (create=True) so the real
+    command-dispatch / output-parsing logic can be exercised on Linux CI.
+    """
+    with patch("subprocess.CREATE_NO_WINDOW", 0x08000000, create=True):
+        yield
+
+
 # ===========================================================================
 # IPC Token
 # ===========================================================================

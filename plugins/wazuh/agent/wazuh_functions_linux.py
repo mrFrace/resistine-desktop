@@ -12,6 +12,8 @@ import socket
 import subprocess
 import tempfile
 import re
+import shutil
+import ssl
 import urllib.error
 import urllib.request
 
@@ -29,7 +31,7 @@ from plugins.wazuh.config import (
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
-    LINUX_WAZUH_SEARCH_DIRS,
+    LINUX_WAZUH_DIR_CANDIDATES,
 )
 
 # Deployment-variable prefix passed to the package installer.  Carries the
@@ -69,12 +71,6 @@ def run_privileged_command(command, timeout=120):
         logger.warning(f"Error running pkexec: {e}")
 
     logger.info("Falling back to sudo with themed password prompt")
-    import tkinter as tk
-    try:
-        root = tk._default_root
-    except:
-        root = None
-    
     dialog = CTkPasswordDialog(title="Authentication Required", text="Enter password to modify Wazuh Agent settings:")
     password = dialog.get_input()
 
@@ -139,12 +135,87 @@ def needs_reenrollment():
         return True
     return False
 
+def _set_ossec_agent_name(ossec_conf, agent_name):
+    """Shell that pins wazuh-agentd's enrollment <agent_name> in ossec.conf.
+
+    The stock Wazuh agent config ships with NO <agent_name> — and often no
+    <enrollment> block at all (e.g. the RPM's CentOS-profile config) — so a
+    plain sed-replace is a no-op and wazuh-agentd's built-in auto-enrollment
+    falls back to the bare hostname ('archlinux' instead of the unique
+    'archlinux-<uuid>'). Worst on Arch, where bsdtar extraction runs no postinst
+    to apply WAZUH_AGENT_NAME. Handle all three shapes:
+
+      1. <agent_name> already present  -> replace it
+      2. <enrollment> present, no name -> insert <agent_name> into it
+      3. neither                       -> insert a full <enrollment> block
+                                          before </client>
+    """
+    return (
+        f"if grep -q '<agent_name>' '{ossec_conf}'; then "
+        f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"elif grep -q '<enrollment>' '{ossec_conf}'; then "
+        f"sed -i 's|<enrollment>|<enrollment>\\n      <agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
+        f"else "
+        f"sed -i 's|</client>|  <enrollment>\\n      <agent_name>{agent_name}</agent_name>\\n    </enrollment>\\n  </client>|' '{ossec_conf}'; "
+        f"fi"
+    )
+
+
+def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
+    """Pin BOTH <agent_name> and <groups> in the <enrollment> block.
+
+    agent-auth's -A/-G only set the name/group for that one explicit
+    registration. wazuh-agentd's built-in auto-enrollment (which fires on a
+    plain restart with no valid key — e.g. a region switch or key wipe) reads
+    <enrollment><agent_name>/<groups> from ossec.conf instead. The stock config
+    has neither tag, so auto-enrollment lands under the bare hostname with NO
+    group. Setting both here keeps every enrollment path (explicit or auto) on
+    the same unique name AND the correct group. Runs after _set_ossec_agent_name
+    so the <enrollment> block is guaranteed to exist for the <groups> insert.
+    """
+    return (
+        _set_ossec_agent_name(ossec_conf, agent_name)
+        + "\n"
+        + (
+            f"if grep -q '<groups>' '{ossec_conf}'; then "
+            f"sed -i 's|<groups>.*</groups>|<groups>{agent_group}</groups>|' '{ossec_conf}'; "
+            f"else "
+            f"sed -i 's|<enrollment>|<enrollment>\\n      <groups>{agent_group}</groups>|' '{ossec_conf}'; "
+            f"fi"
+        )
+    )
+
+
+def _make_agent_state_readable():
+    """Best-effort shell to let the (non-root) app read the agent's live state.
+
+    wazuh-agentd.state + ossec.log are root-owned and /var/ossec/var/run isn't
+    even traversable by the app user, so the UI's connection status reads as
+    'unknown'. Make the dirs traversable and the files world-readable so
+    get_agent_connection() can report connected/pending/disconnected. Guarded so
+    a permissions quirk never fails the enroll. (wazuh-agentd truncate-writes
+    the state file, so the mode persists across updates.)
+    """
+    run = f"{LINUX_WAZUH_DIR}/var/run"
+    return (
+        f"chmod o+rx '{LINUX_WAZUH_DIR}/var' '{run}' '{LINUX_WAZUH_DIR}/logs' 2>/dev/null || true; "
+        f"chmod o+r '{run}/wazuh-agentd.state' 2>/dev/null || true; "
+        f"chmod o+r '{LINUX_WAZUH_DIR}/logs/ossec.log' 2>/dev/null || true"
+    )
+
+
 def _get_os_info():
-    """Determine package family (deb, rpm, arch) using LinuxDistro utility."""
+    """Determine package family (deb, rpm, arch) using LinuxDistro utility.
+
+    openSUSE/SLES is rpm-based — it uses the same .rpm artifact and the same
+    ``rpm -ihv`` install path as Fedora — so it maps to "rpm".  remove_agent
+    picks the correct uninstall tool (zypper vs dnf/yum) from the detected
+    package manager independently, so it doesn't need its own family here.
+    """
     from utils.distro import LinuxDistro
     if LinuxDistro.is_debian_like():
         return "deb"
-    if LinuxDistro.is_fedora_like():
+    if LinuxDistro.is_fedora_like() or LinuxDistro.is_suse_like():
         return "rpm"
     if LinuxDistro.is_arch_like():
         return "arch"
@@ -160,62 +231,32 @@ def get_package_url():
         # Arch uses the RPM artifact and extracts it with bsdtar (libarchive); upstream Wazuh ships no pacman package
         arch_suffix = LINUX_PKG_ARCH_MAP_RPM.get(arch, "x86_64")
         return LINUX_WAZUH_RPM_URL.format(arch=arch_suffix)
-    elif os_type == "arch":
-        # Wazuh doesn't have an official Arch package, usually installed via AUR
-        # or we might need a specific handling. For now, mark as unsupported.
-        return None
     return None
 
+def installed_agent_dir():
+    """Return the install dir of an existing agent, or None.
+
+    Only the directory itself is stat'ed, so a root-only (0700) tree such as
+    the NixOS module's /opt/resistine is still detected.
+    """
+    for d in LINUX_WAZUH_DIR_CANDIDATES:
+        if os.path.isdir(d):
+            return d
+    return None
+
+
 def is_agent_installed():
-    return get_install_info()["path"] is not None
+    return installed_agent_dir() is not None
 
-def _is_wazuh_dir(path):
-    """True if *path* holds a Wazuh agent install.
 
-    Installs are usually wazuh:wazuh 0750, so an unprivileged user can't
-    look inside; ownership by the wazuh user or group counts as a match.
+def is_app_managed_agent():
+    """True only for the agent this app installs (upstream package, /var/ossec).
+
+    An agent under another candidate dir was installed some other way (the
+    Phoenix package, the NixOS module); the app shows it but never removes or
+    re-enrolls it.
     """
-    if not os.path.isdir(path):
-        return False
-    if os.path.exists(os.path.join(path, "bin", "wazuh-control")):
-        return True
-    try:
-        import grp
-        import pwd
-
-        st = os.stat(path)
-        return "wazuh" in (pwd.getpwuid(st.st_uid).pw_name,
-                           grp.getgrgid(st.st_gid).gr_name)
-    except (KeyError, OSError):
-        return False
-
-def get_install_info():
-    """Return ``{"path", "system_managed"}`` for the agent install.
-
-    Checks LINUX_WAZUH_SEARCH_DIRS in order, then the wazuh-agent systemd
-    unit for any other location. Only LINUX_WAZUH_DIR is the app's own
-    install; anything else is managed outside the app and must not be
-    re-keyed or removed by it. ``path`` is None when nothing is found.
-    """
-    for path in LINUX_WAZUH_SEARCH_DIRS:
-        if _is_wazuh_dir(path):
-            return {"path": path, "system_managed": path != LINUX_WAZUH_DIR}
-    try:
-        result = subprocess.run(
-            ["systemctl", "show", "wazuh-agent", "-p", "LoadState", "-p", "ExecStart"],
-            capture_output=True, text=True, timeout=5,
-        )
-        props = dict(
-            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
-        )
-        match = re.search(r"path=(\S+)", props.get("ExecStart", ""))
-        if props.get("LoadState") == "loaded" and match:
-            # .../bin/wazuh-control -> install root
-            root = os.path.dirname(os.path.dirname(match.group(1)))
-            return {"path": root, "system_managed": True}
-    except Exception as e:
-        logger.debug(f"Could not inspect wazuh-agent unit: {e}")
-    return {"path": None, "system_managed": False}
+    return os.path.isdir(LINUX_WAZUH_DIR)
 
 def get_agent_status():
     if not is_agent_installed():
@@ -247,6 +288,23 @@ def get_agent_status():
         
     return "Stopped"
 
+def get_agent_connection():
+    """Return the agent's live manager-connection status.
+
+    One of ``connected`` / ``pending`` / ``disconnected`` / ``unknown``.
+    Reads Wazuh's own wazuh-agentd.state; falls back to ossec.log. Distinct
+    from get_agent_status(), which only reports whether the daemon is alive.
+    """
+    from plugins.wazuh.agent import agent_state
+
+    agent_dir = installed_agent_dir() or LINUX_WAZUH_DIR
+    return agent_state.read_agent_connection(
+        os.path.join(agent_dir, "var", "run", "wazuh-agentd.state"),
+        os.path.join(agent_dir, "logs", "ossec.log"),
+    )
+
+_DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
+
 def download_package(progress_callback=None):
     url = get_package_url()
     if not url:
@@ -262,7 +320,13 @@ def download_package(progress_callback=None):
 
     logger.info(f"Downloading Wazuh package from {url}")
     try:
-        urllib.request.urlretrieve(url, pkg_path)
+        # urlopen verifies TLS certificates by default; pass an explicit
+        # default context anyway, plus a timeout so a stalled server can't
+        # hang the install thread forever (urlretrieve has no timeout).
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT, context=ctx) as resp, \
+                open(pkg_path, "wb") as out:
+            shutil.copyfileobj(resp, out)
         logger.info(f"Downloaded to {pkg_path}")
         return pkg_path
     except urllib.error.HTTPError as e:
@@ -279,15 +343,15 @@ def write_env_file(agent_name, agent_group):
     # Not using env file for Linux, we'll pass via environment to the installer or patch ossec.conf
     pass
 
-_KEY_BACKUP = os.path.expanduser("~/.config/resistine/wazuh_client.keys")
+_KEY_BACKUP = os.path.join(settings.get_config_dir(), "wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
 def start_agent():
     if get_agent_status() == "Running":
         return True
         
-    # Restore key if missing (only into the app's own install)
-    if os.path.exists(_KEY_BACKUP) and not get_install_info()["system_managed"]:
+    # Restore key if missing
+    if os.path.exists(_KEY_BACKUP):
         script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -309,7 +373,7 @@ def restore_client_key_if_needed():
     if needs_reenrollment():
         return False
         
-    if not os.path.exists(_KEY_BACKUP) or get_install_info()["system_managed"]:
+    if not os.path.exists(_KEY_BACKUP):
         return True
         
     script = f"""
@@ -327,8 +391,7 @@ def restore_client_key_if_needed():
     return success
 
 def stop_agent():
-    install_dir = get_install_info()["path"]
-    if not install_dir:
+    if not is_agent_installed():
         return True
         
     success, output = run_privileged_command(["systemctl", "stop", "wazuh-agent"])
@@ -336,53 +399,135 @@ def stop_agent():
     # Verify stopped
     try:
         if subprocess.run(["pgrep", "-x", "wazuh-agentd"], capture_output=True).returncode == 0:
-            run_privileged_command(["pkill", "-9", "-f", f"{install_dir}/bin/wazuh-"])
+            run_privileged_command(["pkill", "-9", "-f", f"{LINUX_WAZUH_DIR}/bin/wazuh-"])
     except:
         pass
         
     return get_agent_status() != "Running"
 
-def remove_agent(wipe_keys: bool = False):
-    info = get_install_info()
-    if info["system_managed"]:
-        logger.warning(
-            f"Wazuh agent at {info['path']} is managed outside the app; not removing it")
-        return False
-    if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
-        return True
+def agent_present(wipe_keys: bool = False) -> bool:
+    """Return True if there's a Wazuh agent (or key backup) worth removing.
+
+    Mirrors remove_agent's guard so callers batching privileged work (e.g. the
+    app uninstaller) can decide whether to include the teardown commands.
+    """
+    return is_app_managed_agent() or (wipe_keys and os.path.exists(_KEY_BACKUP))
+
+
+def build_remove_script(wipe_keys: bool = False) -> str:
+    """Build the privileged shell script that tears down the Wazuh agent.
+
+    Split out from remove_agent so the app-level uninstaller can fold these
+    commands into a single privilege-escalation prompt instead of running its
+    own. See remove_agent for the per-distro rationale.
+    """
+    from utils.distro import LinuxDistro
 
     os_type = _get_os_info()
+    pkg_mgr = LinuxDistro.get_package_manager()
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
-    uninstall_cmd = ""
-    if os_type == "deb":
-        uninstall_cmd = "apt-get remove -y wazuh-agent"
-    elif os_type == "rpm":
-        uninstall_cmd = "yum remove -y wazuh-agent || dnf remove -y wazuh-agent"
-    elif os_type == "arch":
-        # bsdtar-extracted install isn't tracked by pacman, so tear down by path
-        uninstall_cmd = (
-            "systemctl disable wazuh-agent 2>/dev/null; "
-            "rm -f /usr/lib/systemd/system/wazuh-agent.service /etc/systemd/system/wazuh-agent.service; "
-            "systemctl daemon-reload"
+    # --- Stop + disable the service (init-system aware) ---
+    # wazuh-control stops the agent regardless of init system; the unit/init
+    # script teardown then differs between systemd and OpenRC/SysV.
+    stop_cmd = f"'{LINUX_WAZUH_DIR}/bin/wazuh-control' stop 2>/dev/null || true"
+    if LinuxDistro.is_systemd():
+        service_teardown = (
+            "systemctl stop wazuh-agent || true; "
+            "systemctl disable wazuh-agent || true; "
+            "rm -f /usr/lib/systemd/system/wazuh-agent.service "
+            "/etc/systemd/system/wazuh-agent.service; "
+            "systemctl daemon-reload || true"
+        )
+    else:
+        # OpenRC (rc-service/rc-update) or SysV (service) fallback.
+        service_teardown = (
+            "(rc-service wazuh-agent stop 2>/dev/null || "
+            "service wazuh-agent stop 2>/dev/null) || true; "
+            "(rc-update del wazuh-agent 2>/dev/null || true); "
+            "rm -f /etc/init.d/wazuh-agent"
         )
 
+    # --- Package removal + orphan user/group cleanup ---
+    # Recognized package managers run postrm/postun hooks that drop the wazuh
+    # user/group, so we let them handle it. Arch and the no-package-manager
+    # fallback are extraction-based, so they must remove the user/group by hand.
+    manual_user_cleanup = (
+        "userdel wazuh 2>/dev/null || true; groupdel wazuh 2>/dev/null || true"
+    )
+    if os_type == "arch":
+        pkg_remove = ""
+        cleanup_users = manual_user_cleanup
+    elif pkg_mgr == "apt":
+        pkg_remove = "apt-get remove -y wazuh-agent || true"
+        cleanup_users = ""
+    elif pkg_mgr in ("dnf", "yum"):
+        pkg_remove = f"{pkg_mgr} remove -y wazuh-agent || true"
+        cleanup_users = ""
+    elif pkg_mgr == "zypper":
+        pkg_remove = "zypper --non-interactive remove wazuh-agent || true"
+        cleanup_users = ""
+    else:
+        # No recognized package manager: the install can only have been placed
+        # by extraction, so tear it down by path like the Arch case.
+        pkg_remove = ""
+        cleanup_users = manual_user_cleanup
+
+    # --- Preserve or wipe the enrollment key backup ---
+    # Runs before pkg_remove/rm -rf so client.keys still exists to be copied.
     if wipe_keys:
         key_phase = f"rm -f '{_KEY_BACKUP}'"
     else:
         key_phase = (
             f"mkdir -p '{backup_dir}'; "
-            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null; "
-            f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null"
+            f"cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null || true; "
+            f"chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null || true"
         )
 
-    script = f"""
-        systemctl stop wazuh-agent 2>/dev/null
+    if not is_app_managed_agent():
+        # The only agent (if any) was installed some other way (Phoenix
+        # package, NixOS module). Its service, unit and wazuh user belong to
+        # that install, so only the app's key backup is touched.
+        return f"""
+        {key_phase if wipe_keys else ""}
+    """
+
+    return f"""
+        {stop_cmd}
+        {service_teardown}
         {key_phase}
-        {uninstall_cmd}
+        {pkg_remove}
+        {cleanup_users}
         rm -rf '{LINUX_WAZUH_DIR}'
     """
+
+
+def remove_agent(wipe_keys: bool = False):
+    """Uninstall the Wazuh agent and clean up system resources.
+
+    Removal is driven by the detected package manager and init system rather
+    than a single hard-coded path, so it works across apt/dnf/yum/zypper and
+    both systemd and non-systemd (OpenRC/SysV) hosts:
+
+    * Package-managed installs (deb/rpm/zypper) are removed by the package
+      manager, whose postrm/postun hooks drop the wazuh user and group.
+    * Arch installs are bsdtar-extracted and tracked by no package manager, so
+      they are always torn down by path with a manual user/group cleanup.
+    * Hosts with no recognized package manager fall back to the same manual
+      teardown as Arch (the install can only have been extraction-based).
+
+    When ``wipe_keys=True`` (used on user logout) the persistent client.keys
+    backup is also deleted so the next user starts with a clean enrollment.
+    """
+    if not agent_present(wipe_keys):
+        return True
+
+    script = build_remove_script(wipe_keys)
     success, output = run_privileged_command(["sh", "-c", script])
+    if success:
+        logger.info("Wazuh agent removed successfully")
+    else:
+        logger.error(f"Failed to remove Wazuh agent: {output}")
     return success
 
 def full_install(progress_callback=None):
@@ -420,20 +565,24 @@ def full_install(progress_callback=None):
 
     # Always re-enroll so the manager receives the group on every install.
     # The key backup is still written for future repair/recovery flows.
+    # -p is the port flag; -P (uppercase) is the password-FILE path — passing
+    # the port to -P is a no-op that only works because 1515 is the default.
     enrollment_script = f"""
             rm -f '{_CLIENT_KEYS}'
-            '{agent_auth}' -m '{WAZUH_MANAGER}' -P '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
+            '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{agent_name}' -G '{agent_group}'
             mkdir -p '{backup_dir}' && cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
             chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
         """
 
     script = f"""
         {install_cmd}
-        sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'
+        {_set_ossec_enrollment(ossec_conf, agent_name, agent_group)}
         {enrollment_script}
         systemctl daemon-reload
         systemctl enable wazuh-agent
         systemctl restart wazuh-agent
+        sleep 2
+        {_make_agent_state_readable()}
     """
     
     if progress_callback:
@@ -450,3 +599,51 @@ def full_install(progress_callback=None):
     if progress_callback:
         progress_callback("Installation failed")
     return False
+
+def reenroll_agent():
+    """Force a fresh manager registration to recover a dead/invalid key.
+
+    Used when the agent is Running but never reaches ``connected`` (e.g. the
+    old agent was deleted server-side after a reinstall, invalidating the
+    reused key). Wipes the local key + backup, enrolls under a fresh unique
+    name so the manager creates a brand-new record, then restarts.
+    Returns (ok, msg).
+    """
+    import time
+
+    if not is_agent_installed():
+        return (False, "Wazuh agent is not installed")
+    if not is_app_managed_agent():
+        return (False, f"The agent in {installed_agent_dir()} is managed outside "
+                       "this app; re-enroll it with its own installer")
+
+    base = get_agent_name()
+    new_name = f"{base}-{str(int(time.time()))[-6:]}"
+    group = get_agent_group()
+    agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
+    ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
+    backup_dir = os.path.dirname(_KEY_BACKUP)
+
+    script = f"""
+        systemctl stop wazuh-agent 2>/dev/null
+        pkill -9 -f '{LINUX_WAZUH_DIR}/bin/wazuh-' 2>/dev/null
+        rm -f '{_CLIENT_KEYS}' '{_KEY_BACKUP}'
+        '{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' -A '{new_name}' -G '{group}'
+        if [ ! -s '{_CLIENT_KEYS}' ]; then echo REENROLL_NO_KEY; exit 1; fi
+        chmod 640 '{_CLIENT_KEYS}'
+        chown wazuh:wazuh '{_CLIENT_KEYS}' 2>/dev/null || chown root:wazuh '{_CLIENT_KEYS}' 2>/dev/null
+        {_set_ossec_enrollment(ossec_conf, new_name, group)}
+        mkdir -p '{backup_dir}'; cp '{_CLIENT_KEYS}' '{_KEY_BACKUP}' 2>/dev/null
+        chown {os.getuid()}:{os.getgid()} '{_KEY_BACKUP}' 2>/dev/null
+        systemctl enable wazuh-agent 2>/dev/null
+        systemctl restart wazuh-agent
+        sleep 2
+        {_make_agent_state_readable()}
+        echo REENROLL_OK
+    """
+    success, output = run_privileged_command(["sh", "-c", script])
+    if success and "REENROLL_NO_KEY" not in (output or ""):
+        logger.info(f"Wazuh re-enrolled under fresh name {new_name}")
+        return (True, f"Re-enrolled as {new_name}")
+    logger.error(f"Wazuh re-enroll failed: {output!r}")
+    return (False, output or "Re-enrollment failed")

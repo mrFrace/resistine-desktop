@@ -1,6 +1,6 @@
 # Dashboard Plugin
 
-The primary control surface for the Resistine application.
+The primary control surface for the Phoenix application.
 
 ## Features
 - Global protection status overview.

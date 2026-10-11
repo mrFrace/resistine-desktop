@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-:: Resistine VPN — Full Installer
+:: Phoenix VPN — Full Installer
 :: ============================================================
 setlocal EnableDelayedExpansion
 
@@ -20,11 +20,11 @@ set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set VENV_PIP=%VENV_DIR%\Scripts\pip.exe
 set REQUIREMENTS=%PROJECT_ROOT%\requirements\requirements-windows.txt
 if not exist "%REQUIREMENTS%" set REQUIREMENTS=%PROJECT_ROOT%\requirements.txt
-set APPDATA_DIR=%APPDATA%\Resistine
+set APPDATA_DIR=%APPDATA%\Phoenix
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
-set SHORTCUT=%USERPROFILE%\Desktop\Resistine VPN.lnk
+set SHORTCUT=%USERPROFILE%\Desktop\Phoenix VPN.lnk
 set STARTUP_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 set WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe
 set WG_INSTALLER=%TEMP%\wireguard-installer.exe
@@ -39,7 +39,7 @@ if "%1"=="/service" goto :install_service
 :: PART 1 — User level (no admin needed)
 :: ============================================================
 echo ============================================================
-echo  Resistine VPN Installer
+echo  Phoenix VPN Installer
 echo ============================================================
 echo.
 
@@ -164,7 +164,7 @@ set VBS=%TEMP%\resistine_shortcut.vbs
 >> "%VBS%" echo oLink.Arguments = """%MAIN_SCRIPT%"""
 >> "%VBS%" echo oLink.WorkingDirectory = "%SCRIPT_DIR%"
 >> "%VBS%" echo oLink.IconLocation = "%ICON%, 0"
->> "%VBS%" echo oLink.Description = "Resistine VPN"
+>> "%VBS%" echo oLink.Description = "Phoenix VPN"
 >> "%VBS%" echo oLink.Save
 
 cscript //nologo "%VBS%"
@@ -207,10 +207,8 @@ if %errorlevel% neq 0 (
 
 del "%TEMP%\resistine_python_path.txt" >nul 2>&1
 
-:: ---- Launch tray now ----
-echo.
-echo Starting tray icon...
-start "" "%VENV_PYTHON%" "%TRAY_SCRIPT%"
+:: The tray is now a native QSystemTrayIcon inside the app (gui/system_tray.py),
+:: started by main.py — no separate tray process to launch here.
 
 :: ============================================================
 :: Done

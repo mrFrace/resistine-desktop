@@ -1,5 +1,5 @@
 """
-Windows Service to manage WireGuard VPN tunnels for Resistine VPN.
+Windows Service to manage WireGuard VPN tunnels for Phoenix VPN.
 Authors: Merhawi
 Copyright (c) Resistine 2025
 This service listens for commands from the GUI and manages WireGuard tunnels
@@ -29,8 +29,8 @@ import shutil
 # ---------------- Configuration ----------------
 
 SERVICE_NAME         = "ResistineVPN"
-SERVICE_DISPLAY_NAME = "Resistine VPN Service"
-SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Resistine VPN"
+SERVICE_DISPLAY_NAME = "Phoenix VPN Service"
+SERVICE_DESCRIPTION  = "Manages WireGuard tunnels for Phoenix VPN"
 
 SERVICE_HOST = "127.0.0.1"
 SERVICE_PORT = 51888
@@ -147,7 +147,7 @@ def _get_log_file() -> str:
         return programdata_log
     except PermissionError:
         appdata_log = os.path.join(
-            os.environ.get("APPDATA", ""), "Resistine", "vpn_service.log"
+            os.environ.get("APPDATA", ""), "Phoenix", "vpn_service.log"
         )
         os.makedirs(os.path.dirname(appdata_log), exist_ok=True)
         return appdata_log
@@ -607,42 +607,6 @@ class ResistineVPNService(win32serviceutil.ServiceFramework):
             servicemanager.LogWarningMsg(f"Shutdown error: {e}")
 
         servicemanager.LogInfoMsg("ResistineVPN stopped")
-
-    def _auto_start(self):
-        """Auto-start default tunnel on service startup."""
-        try:
-            tunnel = find_default_tunnel()
-            if not tunnel:
-                logger.info("No tunnel config in ProgramData — skipping auto-start")
-                return
-
-            logger.info(f"Auto-start: tunnel='{tunnel}'")
-            state = status_tunnel(tunnel)
-            logger.info(f"Auto-start: state={state}")
-
-            if state == "Running":
-                logger.info("Tunnel already running")
-                return
-
-            ok, msg = install_tunnel(tunnel)
-            if not ok:
-                logger.error(f"Auto-start install failed: {msg}")
-                return
-
-            state = status_tunnel(tunnel)
-            if state == "Running":
-                logger.info("Tunnel running after install")
-                return
-
-            ok, msg = start_tunnel(tunnel)
-            if ok:
-                logger.info(f"Auto-start succeeded: {msg}")
-            else:
-                logger.error(f"Auto-start failed: {msg}")
-
-        except Exception as e:
-            logger.exception("Auto-start exception")
-            servicemanager.LogErrorMsg(f"Auto-start failed: {repr(e)}")
 
 
 if __name__ == "__main__":

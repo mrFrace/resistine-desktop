@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-:: Resistine — Full Uninstaller
+:: Phoenix (formerly Resistine) — Full Uninstaller
 :: Removes services, configs, registry entries, and data dirs.
 :: ============================================================
 setlocal EnableDelayedExpansion
@@ -19,12 +19,15 @@ if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wire
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
 set VENV_DIR=%PROJECT_ROOT%\.venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
-set APPDATA_DIR=%APPDATA%\Resistine
+set APPDATA_DIR=%APPDATA%\Phoenix
+set LEGACY_APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
 set SHORTCUT=%USERPROFILE%\Desktop\Resistine VPN.lnk
 set SHORTCUT2=%USERPROFILE%\Desktop\Resistine.lnk
+set SHORTCUT3=%USERPROFILE%\Desktop\Phoenix VPN.lnk
+set SHORTCUT4=%USERPROFILE%\Desktop\Phoenix.lnk
 set WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe
 
 :: ============================================================
@@ -36,12 +39,12 @@ if "%1"=="/service" goto :remove_service
 :: PART 1 — User level
 :: ============================================================
 echo ============================================================
-echo  Resistine Full Uninstaller
+echo  Phoenix Full Uninstaller
 echo ============================================================
 echo.
 
-:: ---- Kill all Resistine processes ----
-echo [1/6] Stopping Resistine processes...
+:: ---- Kill all Phoenix processes ----
+echo [1/6] Stopping Phoenix processes...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' -or $_.CommandLine -like '*main.py*' -or $_.CommandLine -like '*Resistine*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 taskkill /F /IM "Resistine.exe" >nul 2>&1
 echo       OK
@@ -57,6 +60,8 @@ echo       OK
 echo [3/6] Removing desktop shortcuts...
 if exist "%SHORTCUT%" del "%SHORTCUT%" >nul 2>&1
 if exist "%SHORTCUT2%" del "%SHORTCUT2%" >nul 2>&1
+if exist "%SHORTCUT3%" del "%SHORTCUT3%" >nul 2>&1
+if exist "%SHORTCUT4%" del "%SHORTCUT4%" >nul 2>&1
 echo       OK
 
 :: ---- Remove user config and data ----
@@ -67,6 +72,7 @@ if exist "%APPDATA_DIR%" (
 ) else (
     echo       Not found: %APPDATA_DIR%
 )
+if exist "%LEGACY_APPDATA_DIR%" rmdir /s /q "%LEGACY_APPDATA_DIR%"
 echo       OK
 
 :: ---- Remove venv ----
@@ -112,7 +118,7 @@ del "%TEMP%\resistine_python_path.txt" >nul 2>&1
 
 echo.
 echo ============================================================
-echo  Uninstall complete. All Resistine data has been removed.
+echo  Uninstall complete. All Phoenix data has been removed.
 echo ============================================================
 echo.
 exit /b 0
@@ -129,7 +135,7 @@ if %errorlevel% neq 0 (
 )
 
 echo ============================================================
-echo  Removing Resistine Services and System Data ^(Admin^)
+echo  Removing Phoenix Services and System Data ^(Admin^)
 echo ============================================================
 
 :: Read system Python path from temp file
@@ -275,9 +281,11 @@ echo       Not found, skipping
 :: ---- Remove keyring credentials ----
 echo Removing stored credentials...
 if defined SYS_PYTHON (
+    "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('phoenix-master-key', 'master-key')" >nul 2>&1
     "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-master-key', 'master-key')" >nul 2>&1
     "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-updates', 'resistine-updates')" >nul 2>&1
 )
+cmdkey /delete:phoenix-master-key >nul 2>&1
 cmdkey /delete:resistine-master-key >nul 2>&1
 cmdkey /delete:resistine-updates >nul 2>&1
 echo       OK

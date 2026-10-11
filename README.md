@@ -1,4 +1,4 @@
-# Resistine AI EndPoint Detection and Response (AI EDR)
+# Phoenix AI EndPoint Detection and Response (AI EDR)
 
 For Windows, Mac, and Linux desktops.
 
@@ -102,7 +102,7 @@ This script:
 6. Creates a DMG, notarizes, and staples it
 7. Installs to `/Applications/`
 
-Output: `dist/Resistine-Installer.dmg`
+Output: `dist/Phoenix-Installer.dmg` (contains `Resistine.app`; the bundle keeps its pre-rebrand file name for now)
 
 ### Local Dev Build (signed, not notarized)
 
@@ -164,6 +164,6 @@ Copyright (C) 2025 Resistine
 
 This program is free software under the terms of the GNU General Public License v2 or later.
 
-Resistine comes with ABSOLUTELY NO WARRANTY.
+Phoenix comes with ABSOLUTELY NO WARRANTY.
 
 See the [LICENSE](LICENSE.md) file for more details.

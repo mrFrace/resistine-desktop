@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-:: Resistine VPN Service Installer
+:: Phoenix VPN Service Installer
 :: Must be run as Administrator
 :: ============================================================
 
@@ -252,7 +252,7 @@ if %errorlevel% neq 0 (
 :: ============================================================
 echo.
 echo ============================================================
-echo  Resistine VPN Service installed successfully!
+echo  Phoenix VPN Service installed successfully!
 echo  Python     : %PYTHON_FULL%
 echo  Service    : %SERVICE_NAME%
 echo  Config dir : %PROGRAMDATA_DIR%

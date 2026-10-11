@@ -26,6 +26,9 @@ _WRAPPER = os.path.join(
 )
 
 
+# Shims use `#!/usr/bin/env bash`, not `#!/bin/bash`: /bin/bash does not
+# exist on NixOS (only /usr/bin/env is guaranteed), and a bad shebang makes
+# every shim exec fail ("bad interpreter").
 def _write_exec(path, body):
     path.write_text(body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -68,7 +71,7 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True,
     # actually sleep). The wrapper runs once and exits, so no kill needed.
     _write_exec(
         bindir / "sleep",
-        f'#!/bin/bash\necho "$1" >> {sleep_log!s}\nexit 0\n',
+        f'#!/usr/bin/env bash\necho "$1" >> {sleep_log!s}\nexit 0\n',
     )
 
     # Patch the three hardcoded constants to point at our shims.
@@ -111,7 +114,7 @@ class TestFreshclamWrapperRunOnce:
         proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body='#!/bin/bash\nexit 0\n',
+            freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert proc.returncode == 0
         assert "freshclam update OK" in proc.stdout
@@ -127,7 +130,7 @@ class TestFreshclamWrapperRunOnce:
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
             freshclam_body=(
-                f'#!/bin/bash\necho "$@" > {marker!s}\necho x >> {count!s}\nexit 0\n'
+                f'#!/usr/bin/env bash\necho "$@" > {marker!s}\necho x >> {count!s}\nexit 0\n'
             ),
         )
         assert marker.exists(), f"freshclam never invoked; stdout={proc.stdout}"
@@ -140,7 +143,7 @@ class TestFreshclamWrapperRunOnce:
         _, intervals, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body='#!/bin/bash\nexit 0\n',
+            freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert intervals == [], f"jitter should be skipped in test mode; got {intervals}"
 
@@ -148,7 +151,7 @@ class TestFreshclamWrapperRunOnce:
         # No override → exactly one pre-update jitter sleep in [0, 60).
         _, intervals, _ = _run_wrapper(
             tmp_path, {},
-            freshclam_body='#!/bin/bash\nexit 0\n',
+            freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert len(intervals) == 1, f"expected one jitter sleep; got {intervals}"
         assert 0 <= intervals[0] < 60
@@ -160,7 +163,7 @@ class TestFreshclamWrapperRunOnce:
         proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body='#!/bin/bash\nexit 47\n',
+            freshclam_body='#!/usr/bin/env bash\nexit 47\n',
         )
         assert proc.returncode == 0
         assert "FAILED" in proc.stdout
@@ -170,7 +173,7 @@ class TestFreshclamWrapperRunOnce:
         proc, _, stamp = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body='#!/bin/bash\nexit 0\n',
+            freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert proc.returncode == 0
         assert stamp.exists(), "last-run stamp not written"
@@ -186,7 +189,7 @@ class TestFreshclamWrapperRateLimit:
         marker = tmp_path / "ran"
         proc, _, _ = _run_wrapper(
             tmp_path, {},  # production mode (guard active)
-            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             stamp_age=600,
         )
         assert proc.returncode == 0
@@ -198,7 +201,7 @@ class TestFreshclamWrapperRateLimit:
         marker = tmp_path / "ran"
         proc, _, _ = _run_wrapper(
             tmp_path, {},
-            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             stamp_age=7200,
         )
         assert proc.returncode == 0
@@ -212,7 +215,7 @@ class TestFreshclamWrapperRateLimit:
         proc, _, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             stamp_age=60,
         )
         assert marker.exists(), "test mode must bypass the rate-limit guard"
@@ -227,7 +230,7 @@ class TestFreshclamWrapperGuard:
         proc, intervals, _ = _run_wrapper(
             tmp_path,
             {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
-            freshclam_body=f'#!/bin/bash\necho ran > {marker!s}\nexit 0\n',
+            freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             conf_exists=False,
         )
         assert proc.returncode == 1

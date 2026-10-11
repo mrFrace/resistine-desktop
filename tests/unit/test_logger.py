@@ -148,3 +148,57 @@ class TestOTELinkLevelMap:
 
         # Should not raise
         link(message)
+
+
+# ---------------------------------------------------------------------------
+# Telemetry switch (off until otel.phoenix.exposed is live)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestTelemetrySwitch:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv("PHOENIX_TELEMETRY", raising=False)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    def test_off_by_default_and_points_at_phoenix(self):
+        import utils.logger as lg
+        assert lg.TELEMETRY_ENABLED is False
+        assert lg.telemetry_enabled() is False
+        assert lg._otlp_endpoint() == "http://otel.phoenix.exposed:4318"
+
+    def test_env_overrides(self, monkeypatch):
+        import utils.logger as lg
+        monkeypatch.setenv("PHOENIX_TELEMETRY", "1")
+        assert lg.telemetry_enabled() is True
+        monkeypatch.setenv("PHOENIX_TELEMETRY", "off")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+        assert lg.telemetry_enabled() is False
+
+    def test_explicit_endpoint_enables(self, monkeypatch):
+        import utils.logger as lg
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+        assert lg.telemetry_enabled() is True
+        assert lg._otlp_endpoint() == "http://collector:4318"
+
+    def test_no_sink_when_off(self, tmp_path, monkeypatch):
+        import utils.logger as lg
+        monkeypatch.setattr("utils.settings.get_config_dir", lambda: str(tmp_path))
+        created = []
+        monkeypatch.setattr(lg, "BufferedOTLPSink", lambda path: created.append(path))
+        setup_logging(level="INFO", log_to_file=True)
+        assert created == []
+
+    def test_sink_when_on(self, tmp_path, monkeypatch):
+        import utils.logger as lg
+        monkeypatch.setattr("utils.settings.get_config_dir", lambda: str(tmp_path))
+        monkeypatch.setattr(lg, "TELEMETRY_ENABLED", True)
+        created = []
+
+        def fake_sink(path):
+            created.append(path)
+            return lambda message: None
+
+        monkeypatch.setattr(lg, "BufferedOTLPSink", fake_sink)
+        setup_logging(level="INFO", log_to_file=True)
+        assert created and created[0].endswith("otlp_buffer.jsonl")

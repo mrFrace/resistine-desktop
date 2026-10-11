@@ -92,13 +92,21 @@ class TestAgentNameSanitization:
         name = self._get_name_with_hostname("hôst-名前")
         assert self.SAFE_PATTERN.match(name)
 
-    def test_empty_result_handled(self):
-        """Hostname of only special chars should produce 'imported' equivalent or safe fallback."""
-        name = self._get_name_with_hostname("@#$%^&*()")
-        # May be empty or sanitized to something safe
-        assert isinstance(name, str)
-        if name:
-            assert self.SAFE_PATTERN.match(name)
+    def test_empty_result_rejected(self):
+        """A hostname of only special chars (and no hardware UUID) sanitizes to
+        an empty name; get_agent_name must fail closed rather than return ''."""
+        with pytest.raises(ValueError, match="empty after sanitizing"):
+            self._get_name_with_hostname("@#$%^&*()")
+
+    def test_special_char_hostname_with_uuid_is_safe(self):
+        """With a hardware UUID the suffix alone keeps the name non-empty."""
+        name = self._get_name_with_hostname(
+            "@#$%^&*()",
+            uuid_line='"IOPlatformUUID" = "AABBCCDD-1234-5678-90AB-CDEF01234567"\n',
+        )
+        assert name
+        assert self.SAFE_PATTERN.match(name)
+        assert name.endswith("90ABCDEF01234567"[-12:])
 
 
 # ===========================================================================

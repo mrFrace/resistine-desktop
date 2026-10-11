@@ -1,138 +1,130 @@
-import customtkinter
-from typing import Callable, Optional
+"""Cross-platform modal dialogs (PyQt6).
 
-class SafeDialog(customtkinter.CTkToplevel):
-    """
-    A custom dialog system that avoids native macOS NSAlert calls 
-    to prevent Bus Error crashes on Python 3.14/ARM64.
-    """
-    def __init__(
-        self, 
-        master, 
-        title: str, 
-        message: str, 
-        icon: str = "info",
-        options: list = ["OK"],
-        callback: Optional[Callable[[str], None]] = None
-    ):
-        super().__init__(master)
-        
-        self.title(title)
-        self.lift()  # Bring to front
-        self.attributes("-topmost", True)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        
-        self.callback = callback
-        self.result = None
+Ports the CustomTkinter dialog helpers used by the platform backends (sudo
+password prompts on Linux, helper-approval confirmations on macOS, update
+notices). The public names/signatures are unchanged — ``CTkPasswordDialog``,
+``ask_yes_no``, ``show_info`` — so the backend modules that import them keep
+working verbatim.
 
-        # Design
-        self.grid_columnconfigure(0, weight=1)
-        self.configure(padx=20, pady=20)
-        
-        # Message Label
-        self.label = customtkinter.CTkLabel(
-            self, 
-            text=message, 
-            wraplength=350,
-            font=customtkinter.CTkFont(size=14)
+Crucially, these are invoked from BACKGROUND THREADS (e.g. while a VPN/Wazuh
+operation runs off the GUI thread). Qt widgets may only be touched on the GUI
+thread, so every dialog is marshalled onto it via :func:`_run_on_main`, which
+blocks the calling worker until the user responds and returns the result.
+
+Author: Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
+from __future__ import annotations
+
+import threading
+from typing import Callable
+
+from PyQt6.QtCore import QCoreApplication, QObject, Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox
+
+
+class _Invoker(QObject):
+    """Runs a callable on the thread this object lives in (the GUI thread)."""
+
+    _signal = pyqtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self._signal.connect(self._run, Qt.ConnectionType.QueuedConnection)
+
+    def _run(self, fn):
+        fn()
+
+
+_invoker: _Invoker | None = None
+
+
+def _get_invoker() -> _Invoker | None:
+    global _invoker
+    app = QCoreApplication.instance()
+    if app is None:
+        return None
+    if _invoker is None:
+        _invoker = _Invoker()
+        _invoker.moveToThread(app.thread())
+    return _invoker
+
+
+def _run_on_main(fn: Callable):
+    """Execute ``fn`` on the GUI thread, blocking the caller for the result."""
+    app = QCoreApplication.instance()
+    if app is None or QThread.currentThread() == app.thread():
+        return fn()
+    invoker = _get_invoker()
+    if invoker is None:
+        return fn()
+    box: dict = {}
+    done = threading.Event()
+
+    def wrapper():
+        try:
+            box["value"] = fn()
+        except Exception as e:
+            box["error"] = e
+        finally:
+            done.set()
+
+    invoker._signal.emit(wrapper)
+    done.wait()
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _active_parent():
+    app = QCoreApplication.instance()
+    try:
+        return QApplication.activeWindow() if app is not None else None
+    except Exception:
+        return None
+
+
+def ask_yes_no(master, title: str, message: str,
+               callback: Callable[[bool], None]):
+    """Safe replacement for messagebox.askyesno (async via callback)."""
+    def _do() -> bool:
+        result = QMessageBox.question(
+            _active_parent(), title, message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        self.label.grid(row=0, column=0, pady=(0, 20), sticky="nsew")
-        
-        # Buttons Frame
-        self.button_frame = customtkinter.CTkFrame(self, fg_color="transparent")
-        self.button_frame.grid(row=1, column=0, sticky="ew")
-        
-        for i, option in enumerate(options):
-            self.button_frame.grid_columnconfigure(i, weight=1)
-            btn = customtkinter.CTkButton(
-                self.button_frame,
-                text=option,
-                command=lambda opt=option: self._on_button_click(opt)
-            )
-            btn.grid(row=0, column=i, padx=5)
+        return result == QMessageBox.StandardButton.Yes
 
-        # Center on screen
-        self.after(10, self._center_window)
+    answer = _run_on_main(_do)
+    if callback:
+        callback(bool(answer))
 
-    def _center_window(self):
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
-
-    def _on_button_click(self, option: str):
-        self.result = option
-        if self.callback:
-            self.callback(option)
-        self.destroy()
-
-    def _on_close(self):
-        self._on_button_click(None)
-
-def ask_yes_no(master, title: str, message: str, callback: Callable[[bool], None]):
-    """Safe replacement for messagebox.askyesno"""
-    def _internal_callback(result):
-        callback(result == "Yes")
-        
-    SafeDialog(
-        master, 
-        title, 
-        message, 
-        options=["Yes", "No"], 
-        callback=_internal_callback
-    )
 
 def show_info(master, title: str, message: str):
-    """Safe replacement for messagebox.showinfo"""
-    SafeDialog(master, title, message, options=["OK"])
+    """Safe replacement for messagebox.showinfo."""
+    _run_on_main(
+        lambda: QMessageBox.information(_active_parent(), title, message))
 
-class CTkPasswordDialog(customtkinter.CTkToplevel):
+
+class CTkPasswordDialog:
+    """Modal password prompt. Construct, then call :meth:`get_input`.
+
+    The Qt widget is built lazily inside ``get_input`` so construction is safe
+    from any thread; only the actual exec() is marshalled to the GUI thread.
+    """
+
     def __init__(self, title: str, text: str, **kwargs):
-        super().__init__(**kwargs)
-        self.title(title)
-        self.lift()
-        self.attributes("-topmost", True)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.title = title
+        self.text = text
         self.result = None
-
-        self.grid_columnconfigure(0, weight=1)
-        self.configure(padx=20, pady=20)
-
-        self.label = customtkinter.CTkLabel(self, text=text, wraplength=350, font=customtkinter.CTkFont(size=14))
-        self.label.grid(row=0, column=0, pady=(0, 20), sticky="nsew", columnspan=2)
-
-        self.entry = customtkinter.CTkEntry(self, show="*")
-        self.entry.grid(row=1, column=0, columnspan=2, pady=(0, 20), sticky="ew")
-        self.entry.bind("<Return>", lambda event: self._on_ok())
-
-        self.button_ok = customtkinter.CTkButton(self, text="OK", command=self._on_ok)
-        self.button_ok.grid(row=2, column=0, padx=5, sticky="e")
-
-        self.button_cancel = customtkinter.CTkButton(self, text="Cancel", fg_color="transparent", border_width=1, command=self._on_cancel)
-        self.button_cancel.grid(row=2, column=1, padx=5, sticky="w")
-
-        # Center on screen
-        self.after(10, self._center_window)
-
-    def _center_window(self):
-        self.update_idletasks()
-        width = self.winfo_width()
-        height = self.winfo_height()
-        x = (self.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.winfo_screenheight() // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
-        self.entry.focus()
-
-    def _on_ok(self):
-        self.result = self.entry.get()
-        self.destroy()
-
-    def _on_cancel(self):
-        self.result = None
-        self.destroy()
 
     def get_input(self):
-        self.wait_window()
+        def _do():
+            value, ok = QInputDialog.getText(
+                _active_parent(), self.title, self.text,
+                QLineEdit.EchoMode.Password)
+            return value if ok else None
+
+        self.result = _run_on_main(_do)
         return self.result

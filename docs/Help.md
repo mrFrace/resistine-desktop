@@ -1,46 +1,56 @@
-# Resistine Help
+# Phoenix Help
 
-Welcome to Resistine! This application is designed to help you manage your digital privacy and security.
+Welcome to **Phoenix** — AI EndPoint Detection and Response (AI EDR) for
+Windows, macOS, and Linux. This page is your starting point; use the dropdown
+above to browse the other help topics.
 
 ## Getting Started
 
-To get started, simply navigate through the tabs on the left side of the window. Each tab corresponds to a different feature or plugin.
+Sign in from the **Login** screen, then use the sidebar on the left to move
+between features. The **Dashboard** gives you a one-glance view of your
+protection status — start there.
 
 ## Features
 
-- **Dashboard**: View an overview of your system's status.
-- **Chat**: Chat with Resistine AI.
-- **EndPoint**: Manage your computer.
-- **Antivirus**: Manage your antivirus.
-- **VPN**: Connect to a secure VPN server.
-- **Store**: Browse and purchase plugins.
-- **Help**: View this help and documentation.
-- **Settings**: Configure the application preferences.
+Each item in the sidebar is a feature:
 
-## Documentation
+- **Dashboard** — See your protection status at a glance.
+- **Chat** — Ask the Phoenix AI assistant for help and guidance.
+- **VPN** — Connect to a secure WireGuard VPN and manage your configurations.
+- **Endpoint** — Install and manage the SIEM agent that monitors your device.
+- **Antivirus** — Scan, quarantine, and protect against malware.
+- **Store** — Browse and install additional plugins.
+- **Help** — This documentation.
+- **Settings** — Manage your account and application preferences.
 
-For detailed documentation, please see:
-
-- [Documentation](Documentation.md) - Comprehensive documentation including settings and internationalization guides
+Some features (such as Chat and the Endpoint agent) require an active VPN
+connection. If a feature seems unavailable, connect the VPN first.
 
 ## Troubleshooting
 
-If you encounter any issues, please check the logs or contact support.
+- **A feature won't load** — Make sure you're signed in and, where required,
+  connected to the VPN. Restarting the app clears most transient issues.
+- **VPN won't connect** — Check your internet connection and confirm your
+  configuration under the VPN tab.
+- **Something looks wrong** — Phoenix updates itself automatically. See
+  **Releases** (in the dropdown above) for version and update details.
 
-### Common Issues
+## More Information
 
-- **Connection Failed**: Check your internet connection.
-- **Plugin Error**: Try restarting the application.
+- **Releases** — Version history, system requirements, and how updates work.
+- **LICENSE** — The GNU General Public License v2 (or later) that Phoenix is
+  distributed under.
+- **LICENSE-3rd-Party** — The full third-party software bill of materials
+  (SBOM): every bundled component with its version and license.
 
 ## About
 
-Resistine AI EndPoint Detection and Response (AI EDR)
-for Windows, Mac and Linux Desktops
+Phoenix AI EndPoint Detection and Response (AI EDR)
+for Windows, macOS, and Linux desktops.
 
 Copyright (C) 2025 Resistine
 
-This program is free software under the terms of the GNU General Public License v2 or later
+This program is free software under the terms of the GNU General Public
+License v2 or later. Phoenix comes with ABSOLUTELY NO WARRANTY.
 
-Resistine comes with ABSOLUTELY NO WARRANTY.
-
-See the [LICENSE](../LICENSE.md) file for more details.
+See the **LICENSE** entry in the dropdown above for full details.

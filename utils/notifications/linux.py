@@ -111,11 +111,11 @@ def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str):
     msg = new_method_call(
         addr, "Notify", "susssasa{sv}i",
         ("Phoenix", 0, _dbus_icon(icon), title, body, [],
-         # desktop-entry ties the notification to our installed resistine.desktop
+         # desktop-entry ties the notification to our installed phoenix.desktop
          # (see utils/linux_desktop.py) so GNOME shows "Phoenix" + our icon
          # instead of the window's WM_CLASS-derived name.
          {"urgency": ("y", urgency_byte),
-          "desktop-entry": ("s", "resistine")}, -1),
+          "desktop-entry": ("s", "phoenix")}, -1),
     )
 
     last_err = ""

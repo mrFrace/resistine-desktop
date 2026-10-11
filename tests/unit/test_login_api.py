@@ -335,3 +335,201 @@ class TestLoginAPIInit:
         """LoginAPI must not silently strip trailing slashes — URL concatenation relies on exact value."""
         api = LoginAPI("https://backend.io/")
         assert api.base_url == "https://backend.io/"
+
+
+# ===========================================================================
+# Log redaction (email masked, response bodies never logged)
+# ===========================================================================
+@pytest.fixture()
+def captured_logs():
+    from utils.logger import logger
+
+    lines = []
+    sink_id = logger.add(lambda m: lines.append(str(m)), level="DEBUG")
+    yield lines
+    logger.remove(sink_id)
+
+
+class TestMaskEmail:
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "email,expected",
+        [
+            ("john@example.com", "j***@example.com"),
+            ("a@b.io", "a***@b.io"),
+            ("no-at-sign", "***"),
+            ("@example.com", "***"),
+            ("", "<none>"),
+            (None, "<none>"),
+        ],
+    )
+    def test_mask(self, email, expected):
+        from plugins.login.api import mask_email
+
+        assert mask_email(email) == expected
+
+
+class TestLogRedaction:
+    SECRET = "SUPERSECRETTOKEN"
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_send_otp_masks_email_and_omits_body(self, mock_post, api, captured_logs):
+        mock_post.return_value = _mock_response(
+            body={"status": "success", "message": f"sent to john.doe@acme.com {self.SECRET}"}
+        )
+        api.send_otp("john.doe@acme.com")
+        logs = "\n".join(captured_logs)
+        assert "john.doe@acme.com" not in logs
+        assert "j***@acme.com" in logs
+        assert "HTTP 200" in logs
+        assert self.SECRET not in logs
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_send_otp_non_json_body_not_logged(self, mock_post, api, captured_logs):
+        mock_post.return_value = _mock_response(body=f"<html>{self.SECRET}</html>", raise_json=True)
+        api.send_otp("john.doe@acme.com")
+        assert self.SECRET not in "\n".join(captured_logs)
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_send_otp_error_body_not_logged(self, mock_post, api, captured_logs):
+        mock_post.return_value = _mock_response(
+            ok=False, status_code=400, body={"message": "bad", "detail": self.SECRET}
+        )
+        api.send_otp("john.doe@acme.com")
+        logs = "\n".join(captured_logs)
+        assert self.SECRET not in logs
+        assert "HTTP 400" in logs
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_verify_otp_masks_email_and_omits_body(self, mock_post, api, captured_logs):
+        mock_post.return_value = _mock_response(
+            body={"status": "success", "message": "verified", "vpn_config": {"PrivateKey": self.SECRET}}
+        )
+        api.verify_otp("john.doe@acme.com", "123456", "pubkey==")
+        logs = "\n".join(captured_logs)
+        assert "john.doe@acme.com" not in logs
+        assert "j***@acme.com" in logs
+        assert self.SECRET not in logs
+        assert "123456" not in logs
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_verify_otp_error_body_not_logged(self, mock_post, api, captured_logs):
+        mock_post.return_value = _mock_response(
+            ok=False, status_code=401, body={"message": "nope", "token": self.SECRET}
+        )
+        api.verify_otp("john.doe@acme.com", "123456", "pubkey==")
+        logs = "\n".join(captured_logs)
+        assert self.SECRET not in logs
+        assert "HTTP 401" in logs
+
+
+# ===========================================================================
+# OTP verification backoff (2s base, doubling, 64s cap; reset on success)
+# ===========================================================================
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture()
+def clocked_api():
+    clock = _Clock()
+    return LoginAPI(BASE_URL, clock=clock), clock
+
+
+def _fail():
+    return _mock_response(body={"status": "failed", "message": "Invalid OTP"})
+
+
+def _ok():
+    return _mock_response(body={"status": "success"})
+
+
+class TestOtpBackoff:
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_first_attempt_not_throttled(self, mock_post, clocked_api):
+        api, _ = clocked_api
+        mock_post.return_value = _ok()
+        ok, _, _ = api.verify_otp("u@e.com", "123456", "pk")
+        assert ok
+        assert api.otp_retry_after() == 0
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_failure_blocks_next_attempt_without_network(self, mock_post, clocked_api):
+        api, clock = clocked_api
+        mock_post.return_value = _fail()
+        api.verify_otp("u@e.com", "000000", "pk")
+        assert mock_post.call_count == 1
+
+        clock.t += 1
+        ok, msg, data = api.verify_otp("u@e.com", "000001", "pk")
+        assert not ok
+        assert mock_post.call_count == 1  # server not contacted
+        assert "wait 1s" in msg
+        assert data == {"retry_after": 1}
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_delay_doubles_and_caps_at_64(self, mock_post, clocked_api):
+        api, clock = clocked_api
+        mock_post.return_value = _fail()
+        delays = []
+        for _ in range(8):
+            api.verify_otp("u@e.com", "000000", "pk")
+            delays.append(api.otp_retry_after())
+            clock.t += delays[-1]  # wait out the backoff
+        assert delays == [2, 4, 8, 16, 32, 64, 64, 64]
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_allowed_after_wait(self, mock_post, clocked_api):
+        api, clock = clocked_api
+        mock_post.return_value = _fail()
+        api.verify_otp("u@e.com", "000000", "pk")
+        clock.t += 2
+        mock_post.return_value = _ok()
+        ok, _, _ = api.verify_otp("u@e.com", "123456", "pk")
+        assert ok
+        assert mock_post.call_count == 2
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_success_resets_backoff(self, mock_post, clocked_api):
+        api, clock = clocked_api
+        mock_post.return_value = _fail()
+        api.verify_otp("u@e.com", "0", "pk")
+        clock.t += 2
+        api.verify_otp("u@e.com", "0", "pk")
+        clock.t += 4
+        mock_post.return_value = _ok()
+        assert api.verify_otp("u@e.com", "1", "pk")[0]
+        mock_post.return_value = _fail()
+        api.verify_otp("u@e.com", "0", "pk")
+        assert api.otp_retry_after() == 2  # back to the base delay
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_http_error_counts_as_failure(self, mock_post, clocked_api):
+        api, _ = clocked_api
+        mock_post.return_value = _mock_response(ok=False, status_code=401, body={"message": "bad otp"})
+        api.verify_otp("u@e.com", "0", "pk")
+        assert api.otp_retry_after() == 2
+
+    @pytest.mark.unit
+    @patch("plugins.login.api.requests.post")
+    def test_network_error_does_not_trigger_backoff(self, mock_post, clocked_api):
+        api, _ = clocked_api
+        mock_post.side_effect = requests.exceptions.ConnectionError("down")
+        ok, msg, data = api.verify_otp("u@e.com", "0", "pk")
+        assert not ok and "Network error" in msg and data == {}
+        assert api.otp_retry_after() == 0

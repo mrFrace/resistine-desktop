@@ -4,21 +4,42 @@ Covers: check_status, _on_action routing, _handle_scan_complete,
 _offer_quarantine_batch, destroy, status state mapping, and auto-update scheduler.
 """
 
+import os
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from plugins.antivirus.main import Plugin
-from plugins.antivirus.scanner import ScanResult
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QLabel,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QStackedWidget,
+    QWidget,
+)
+
+from plugins.antivirus.main import Plugin  # noqa: E402
+from plugins.antivirus.scanner import ScanResult  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(scope="module")
+def qapp():
+    """Real (offscreen) QApplication so scan-UI widgets are genuine Qt widgets."""
+    return QApplication.instance() or QApplication([])
+
+
 @pytest.fixture()
-def plugin():
-    """Create a Plugin instance with a mocked app."""
+def plugin(qapp):
+    """Create a Plugin instance with a mocked app and real scan widgets."""
     with patch("plugins.antivirus.main.clamav") as mock_clamav, \
          patch("plugins.antivirus.main.threading"), \
          patch("plugins.antivirus.main.settings") as mock_settings, \
@@ -34,14 +55,15 @@ def plugin():
         app = MagicMock()
         p = Plugin(app)
 
-        # Wire up mock UI components for scan-related tests
-        p._scan_log = MagicMock()
-        p._scan_progress = MagicMock()
-        p._scan_status_label = MagicMock()
+        # Wire up real Qt widgets for scan-related tests (what qt_ui builds).
+        p._scan_log = QPlainTextEdit()
+        p._scan_progress = QProgressBar()
+        p._scan_status_label = QLabel()
         p._action_buttons = {
-            "scan": MagicMock(),
-            "cancel_scan": MagicMock(),
-            "update_sigs": MagicMock(),
+            "scan": QPushButton("Scan"),
+            "scan_computer": QPushButton("Scan Computer"),
+            "cancel_scan": QPushButton("Cancel"),
+            "update_sigs": QPushButton("Update"),
         }
         return p
 
@@ -98,6 +120,9 @@ class TestOnAction:
 class TestHandleScanComplete:
     def test_clean_scan(self, plugin):
         plugin._last_state = "protected"
+        plugin._scanning = True
+        plugin._scan_handle = MagicMock()
+        plugin._scan_progress.show()
         result = ScanResult(
             target="/tmp/test", scanned=10, infected=0,
             duration="2.5 sec",
@@ -106,11 +131,12 @@ class TestHandleScanComplete:
 
         assert plugin._scanning is False
         assert plugin._scan_handle is None
-        plugin._scan_progress.stop.assert_called_once()
-        plugin._scan_status_label.configure.assert_called()
-        # Check final status says "No threats found"
-        last_call = plugin._scan_status_label.configure.call_args
-        assert "No threats" in last_call.kwargs.get("text", "")
+        assert plugin._scan_progress.isHidden()
+        assert plugin._scan_progress.value() == 1000
+        assert plugin._scan_status_label.text() == "No threats found"
+        log = plugin._scan_log.toPlainText()
+        assert "10 files scanned, 0 infected" in log
+        assert "Time: 2.5 sec" in log
 
     def test_infected_scan_offers_quarantine(self, plugin):
         plugin._last_state = "protected"
@@ -121,49 +147,58 @@ class TestHandleScanComplete:
                 "/tmp/test/virus2.dll: Backdoor.Agent FOUND",
             ],
         )
-        with patch.object(plugin, "_offer_quarantine_batch") as mock_offer:
+        with patch.object(plugin, "_offer_quarantine_batch") as mock_offer, \
+             patch("plugins.antivirus.threat_log.log_threat_detected") as mock_log, \
+             patch("utils.notifications.send") as mock_notify:
             plugin._handle_scan_complete(result)
             mock_offer.assert_called_once()
             paths = mock_offer.call_args[0][0]
             assert "/tmp/test/virus1.exe" in paths
             assert "/tmp/test/virus2.dll" in paths
+            assert mock_log.call_count == 2
+            mock_notify.assert_called_once()
+        assert plugin._scan_status_label.text() == "Threats found: 2"
 
     def test_scan_error(self, plugin):
         plugin._last_state = "protected"
         result = ScanResult(target="/tmp/test", error="ClamAV crashed")
         plugin._handle_scan_complete(result)
-        # Should show "Scan failed"
-        calls = plugin._scan_status_label.configure.call_args_list
-        texts = [c.kwargs.get("text", "") for c in calls]
-        assert any("failed" in t.lower() for t in texts)
+        assert plugin._scan_status_label.text() == "Scan failed"
+        assert "Error: ClamAV crashed" in plugin._scan_log.toPlainText()
+        assert plugin._scan_progress.value() == 0
 
     def test_scan_cancelled(self, plugin):
         plugin._last_state = "protected"
         result = ScanResult(target="/tmp/test", error="Scan cancelled.")
         plugin._handle_scan_complete(result)
-        calls = plugin._scan_status_label.configure.call_args_list
-        texts = [c.kwargs.get("text", "") for c in calls]
-        assert any("cancelled" in t.lower() for t in texts)
+        assert plugin._scan_status_label.text() == "Scan cancelled"
+        assert "Scan cancelled." in plugin._scan_log.toPlainText()
 
     def test_buttons_reenabled_after_scan(self, plugin):
         plugin._last_state = "protected"
+        plugin._set_scan_buttons_state("disabled")
         result = ScanResult(target="/tmp/test", scanned=1)
         plugin._handle_scan_complete(result)
-        plugin._action_buttons["scan"].configure.assert_called()
+        assert plugin._action_buttons["scan"].isEnabled()
+        assert plugin._action_buttons["scan_computer"].isEnabled()
 
-    def test_buttons_disabled_when_no_database(self, plugin):
-        plugin._last_state = "no_database"
+    @pytest.mark.parametrize("state", ["no_database", "not_installed"])
+    def test_buttons_disabled_when_engine_unusable(self, plugin, state):
+        plugin._last_state = state
         result = ScanResult(target="/tmp/test", scanned=0)
         plugin._handle_scan_complete(result)
-        btn = plugin._action_buttons["scan"]
-        last_call = btn.configure.call_args
-        assert last_call.kwargs.get("state") == "disabled"
+        assert not plugin._action_buttons["scan"].isEnabled()
+        assert not plugin._action_buttons["scan_computer"].isEnabled()
 
-    def test_cancel_button_hidden_after_scan(self, plugin):
+    def test_cancel_button_hidden_and_reset_after_scan(self, plugin):
         plugin._last_state = "protected"
+        cancel = plugin._action_buttons["cancel_scan"]
+        cancel.show()
+        cancel.setEnabled(False)  # as left by _cancel_scan
         result = ScanResult(target="/tmp/test", scanned=1)
         plugin._handle_scan_complete(result)
-        plugin._action_buttons["cancel_scan"].grid_remove.assert_called()
+        assert cancel.isHidden()
+        assert cancel.isEnabled()
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +213,9 @@ class TestCancelScan:
         plugin._scan_handle = handle
         plugin._cancel_scan()
         handle.cancel.assert_called_once()
+        assert plugin._cancel_requested is True
+        assert not plugin._action_buttons["cancel_scan"].isEnabled()
+        assert "Cancelling scan..." in plugin._scan_log.toPlainText()
 
     def test_cancel_no_active_scan(self, plugin):
         plugin._scan_handle = None
@@ -198,67 +236,87 @@ class TestCancelScan:
 
 @pytest.mark.unit
 class TestOfferQuarantineBatch:
+    _YES = QMessageBox.StandardButton.Yes
+    _NO = QMessageBox.StandardButton.No
+
     def test_user_accepts(self, plugin):
-        with patch("plugins.antivirus.main.messagebox") as mock_mb, \
-             patch("plugins.antivirus.main.clamav") as mock_clamav:
-            mock_mb.askyesno.return_value = True
+        with patch.object(QMessageBox, "question", return_value=self._YES), \
+             patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch("plugins.antivirus.threat_log.log_threat_quarantined") as mock_log:
             mock_clamav.quarantine_file.return_value = (True, "/quarantine/virus.exe.quarantined")
 
             plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
             mock_clamav.quarantine_file.assert_called_once_with("/tmp/virus.exe")
+            mock_log.assert_called_once_with(
+                "Win.Trojan", "/tmp/virus.exe", "/quarantine/virus.exe.quarantined")
+        log = plugin._scan_log.toPlainText()
+        assert "Quarantined: virus.exe" in log
+        assert "Quarantined 1/1 files" in log
 
     def test_user_declines(self, plugin):
-        with patch("plugins.antivirus.main.messagebox") as mock_mb, \
+        with patch.object(QMessageBox, "question", return_value=self._NO), \
              patch("plugins.antivirus.main.clamav") as mock_clamav:
-            mock_mb.askyesno.return_value = False
-
             plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
             mock_clamav.quarantine_file.assert_not_called()
 
     def test_quarantine_failure_logged(self, plugin):
-        with patch("plugins.antivirus.main.messagebox") as mock_mb, \
+        with patch.object(QMessageBox, "question", return_value=self._YES), \
              patch("plugins.antivirus.main.clamav") as mock_clamav:
-            mock_mb.askyesno.return_value = True
             mock_clamav.quarantine_file.return_value = (False, "Permission denied")
             mock_clamav.list_quarantined.return_value = []
 
             plugin._offer_quarantine_batch({"/tmp/virus.exe": "Win.Trojan"})
 
-            # Should still complete without raising
             mock_clamav.quarantine_file.assert_called_once()
+        log = plugin._scan_log.toPlainText()
+        assert "Quarantine failed (virus.exe): Permission denied" in log
+        assert "Quarantined 0/1 files" in log
 
     def test_truncates_long_listing(self, plugin):
         """Message shows first 20 files and '... and N more'."""
         infections = {f"/tmp/virus{i}.exe": f"Sig.{i}" for i in range(25)}
-        with patch("plugins.antivirus.main.messagebox") as mock_mb, \
-             patch("plugins.antivirus.main.clamav") as mock_clamav:
-            mock_mb.askyesno.return_value = False
+        with patch.object(QMessageBox, "question", return_value=self._NO) as mock_q, \
+             patch("plugins.antivirus.main.clamav"):
             plugin._offer_quarantine_batch(infections)
-            msg = mock_mb.askyesno.call_args[0][1]
+            msg = mock_q.call_args[0][2]
             assert "25 infected" in msg
+            assert "virus19.exe" in msg
+            assert "virus20.exe" not in msg
             assert "5 more" in msg
 
 
 # ---------------------------------------------------------------------------
-# _start_file_scan / _start_directory_scan guards
+# _start_scan guards
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
 class TestScanGuards:
     def test_scan_blocked_while_scanning(self, plugin):
         plugin._scanning = True
-        with patch("plugins.antivirus.main.pick_scan_targets") as mock_pick:
+        with patch.object(plugin, "_pick_scan_targets") as mock_pick:
             plugin._start_scan()
             mock_pick.assert_not_called()
 
     def test_scan_cancelled_dialog(self, plugin):
         plugin._scanning = False
-        with patch("plugins.antivirus.main.pick_scan_targets", return_value=None), \
+        with patch.object(plugin, "_pick_scan_targets", return_value=[]), \
              patch.object(plugin, "_run_multi_scan") as mock_run:
             plugin._start_scan()
             mock_run.assert_not_called()
+
+    def test_whitelisted_targets_skipped(self, plugin):
+        plugin._scanning = False
+        with patch.object(plugin, "_pick_scan_targets",
+                          return_value=["/a", "/b", "/a"]), \
+             patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch.object(QMessageBox, "information") as mock_info, \
+             patch.object(plugin, "_run_multi_scan") as mock_run:
+            mock_clamav.is_path_whitelisted.side_effect = lambda p: p == "/b"
+            plugin._start_scan()
+            mock_run.assert_called_once_with(["/a"], label="Scan")
+            mock_info.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +330,15 @@ class TestDestroy:
         plugin._banner_label = MagicMock()
         plugin._banner_subtitle = MagicMock()
         plugin._banner_action_btn = MagicMock()
-        plugin.main_container = MagicMock()
+        container = MagicMock()
+        plugin.main_container = container
 
         with patch.object(plugin, "_stop_auto_update_scheduler") as mock_stop:
             plugin.destroy()
             mock_stop.assert_called_once()
+
+        container.deleteLater.assert_called_once()
+        assert plugin._destroyed is True
 
         assert plugin._banner_frame is None
         assert plugin._banner_label is None
@@ -300,7 +362,7 @@ class TestToggleAutoUpdate:
     def test_toggle_on_non_darwin_starts_scheduler(self, plugin):
         # On Linux/Windows the in-process scheduler still drives updates.
         plugin._auto_update_switch = MagicMock()
-        plugin._auto_update_switch.get.return_value = True
+        plugin._auto_update_switch.isChecked.return_value = True
         with patch("platform.system", return_value="Linux"), \
              patch("plugins.antivirus.main.settings") as mock_settings, \
              patch("plugins.antivirus.main.clamav") as mock_clamav, \
@@ -316,7 +378,7 @@ class TestToggleAutoUpdate:
 
     def test_toggle_off_non_darwin_stops_scheduler(self, plugin):
         plugin._auto_update_switch = MagicMock()
-        plugin._auto_update_switch.get.return_value = False
+        plugin._auto_update_switch.isChecked.return_value = False
         with patch("platform.system", return_value="Linux"), \
              patch("plugins.antivirus.main.settings") as mock_settings, \
              patch("plugins.antivirus.main.clamav") as mock_clamav, \
@@ -441,16 +503,21 @@ class TestAutoUpdateScheduler:
         # Should be within 24h + jitter (max ~26 hours)
         assert delay < 26 * 3600
 
-    def test_auto_update_loop_calls_freshclam(self, plugin):
-        """Verify the loop calls run_freshclam when the timer fires."""
-        call_count = 0
+    @staticmethod
+    def _run_loop(plugin, last_sig_update_ts):
+        """Run _auto_update_loop until its second wait; return the clamav mock.
+
+        The first wait "expires" (one scheduled update), the second stops the
+        loop. Settings are mocked so the loop's stale-signature catch-up
+        depends only on *last_sig_update_ts*, and a successful update can't
+        write the timestamp into the real config.
+        """
+        waits = 0
 
         def fake_wait(timeout):
-            nonlocal call_count
-            call_count += 1
-            if call_count >= 2:
-                return True  # Signal stop on second wait
-            return False  # First wait "expires" — triggers freshclam
+            nonlocal waits
+            waits += 1
+            return waits >= 2
 
         plugin._auto_update_stop = MagicMock()
         plugin._auto_update_stop.is_set.return_value = False
@@ -459,10 +526,25 @@ class TestAutoUpdateScheduler:
         plugin.app = MagicMock()
 
         with patch("plugins.antivirus.main.clamav") as mock_clamav, \
+             patch("plugins.antivirus.main.settings") as mock_settings, \
              patch.object(plugin, "_seconds_until_next_run", return_value=0):
+            mock_settings.get.return_value = last_sig_update_ts
             mock_clamav.run_freshclam.return_value = (True, "Updated")
             plugin._auto_update_loop()
-            mock_clamav.run_freshclam.assert_called_once()
+        return mock_clamav, mock_settings
+
+    def test_auto_update_loop_calls_freshclam(self, plugin):
+        """Fresh signatures: only the scheduled update runs."""
+        mock_clamav, mock_settings = self._run_loop(plugin, time.time())
+        mock_clamav.run_freshclam.assert_called_once()
+        mock_settings.set.assert_called_once()
+        assert mock_settings.set.call_args.args[:2] == (
+            "antivirus", "last_sig_update_ts")
+
+    def test_auto_update_loop_catches_up_when_stale(self, plugin):
+        """Never-updated signatures: a catch-up runs before the scheduled one."""
+        mock_clamav, _ = self._run_loop(plugin, 0)
+        assert mock_clamav.run_freshclam.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -472,26 +554,19 @@ class TestAutoUpdateScheduler:
 @pytest.mark.unit
 class TestSetScanButtonsState:
     def test_enables_scan(self, plugin):
+        for key in ("scan", "scan_computer"):
+            plugin._action_buttons[key].setEnabled(False)
         plugin._set_scan_buttons_state("normal")
-        call_kwargs = plugin._action_buttons["scan"].configure.call_args.kwargs
-        # Production passes state + hover + fg_color + text_color so the
-        # button restores to a fully-active visual. Assert state and hover —
-        # color values are restored from the captured original `_enabled_*`
-        # attrs on the mock (MagicMock values), so we only assert keys exist.
-        assert call_kwargs.get("state") == "normal"
-        assert call_kwargs.get("hover") is True
-        assert "fg_color" in call_kwargs
-        assert "text_color" in call_kwargs
+        assert plugin._action_buttons["scan"].isEnabled()
+        assert plugin._action_buttons["scan_computer"].isEnabled()
 
     def test_disables_scan(self, plugin):
         plugin._set_scan_buttons_state("disabled")
-        call_kwargs = plugin._action_buttons["scan"].configure.call_args.kwargs
-        # Disabled state: production must mute BOTH the background (fg_color)
-        # AND the label text (text_color) the same way for the whole scan.
-        assert call_kwargs.get("state") == "disabled"
-        assert call_kwargs.get("hover") is False
-        assert call_kwargs.get("fg_color") == ("#D1D5DB", "#3A3A3C")
-        assert call_kwargs.get("text_color") == ("#9CA3AF", "#71717A")
+        assert not plugin._action_buttons["scan"].isEnabled()
+        assert not plugin._action_buttons["scan_computer"].isEnabled()
+        # Only the scan buttons are toggled — not cancel / update.
+        assert plugin._action_buttons["cancel_scan"].isEnabled()
+        assert plugin._action_buttons["update_sigs"].isEnabled()
 
     def test_missing_button_no_crash(self, plugin):
         plugin._action_buttons = {}
@@ -504,22 +579,30 @@ class TestSetScanButtonsState:
 
 @pytest.mark.unit
 class TestViewSwitching:
-    def test_view_swap_reruns_layout_finalizer(self, plugin):
-        # Regression: swapping main<->settings must re-run the layout finalizer
-        # so the re-mapped CTkScrollableFrame refits and doesn't paint blank
-        # until the next window resize.
-        plugin.main_container = MagicMock()
-        plugin.main_frame = MagicMock()
-        plugin._settings_frame = MagicMock()  # already built -> no real widget
+    def test_view_swap_switches_stacked_page(self, plugin):
+        plugin._view_stack = QStackedWidget()
+        plugin._main_view = QWidget()
+        plugin._settings_view = QWidget()
+        plugin._view_stack.addWidget(plugin._main_view)
+        plugin._view_stack.addWidget(plugin._settings_view)
+        plugin._view_stack.setCurrentWidget(plugin._main_view)
         plugin._current_view = "main"
+        plugin.app = MagicMock()
 
-        with patch.object(plugin, "_refresh_siem_switch"):
-            plugin._show_settings_view()
+        plugin._show_settings_view()
         assert plugin._current_view == "settings"
-        plugin.main_frame.grid_remove.assert_called()
-        plugin.main_container._resistine_finalize.assert_called()  # regressed call
+        assert plugin._view_stack.currentWidget() is plugin._settings_view
+        # Settings lists + SIEM switch are refreshed (deferred via app.after).
+        scheduled = [c.args[1] for c in plugin.app.after.call_args_list]
+        assert plugin._refresh_whitelist in scheduled
+        assert plugin._refresh_exclusions in scheduled
+        assert plugin._refresh_siem_switch in scheduled
+
+        # Re-showing the current view is a no-op.
+        plugin.app.after.reset_mock()
+        plugin._show_settings_view()
+        plugin.app.after.assert_not_called()
 
         plugin._show_main_view()
         assert plugin._current_view == "main"
-        plugin.main_frame.grid.assert_called()
-        assert plugin.main_container._resistine_finalize.call_count >= 2
+        assert plugin._view_stack.currentWidget() is plugin._main_view

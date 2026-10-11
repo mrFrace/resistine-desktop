@@ -1,6 +1,6 @@
 # AI Security Assistant (Chat Plugin)
 
-The Chat plugin transforms the Resistine XDR system into an intelligent, conversational security platform. It acts as your **AI Security Assistant**, helping you navigate complex security data and manage your infrastructure through natural language.
+The Chat plugin transforms the Phoenix XDR system into an intelligent, conversational security platform. It acts as your **AI Security Assistant**, helping you navigate complex security data and manage your infrastructure through natural language.
 
 ## Empowering Your Security Workflow
 
@@ -18,19 +18,19 @@ To support high-stakes security analysis, the plugin features a state-of-the-art
 - **Rich Security Reporting**: High-fidelity Markdown rendering for vulnerability tables, security scan results, and formatted code snippets.
 - **Live Response Streaming**: Real-time token delivery ensures you get security answers the moment they are generated.
 - **Responsive Adaptive Interface**: Optimally constrained bubbles and dynamic reflow for a professional, readable chat experience that adapts to any window size.
-- **Seamless Continuity**: Your security context and conversation history are preserved even as you switch between different Resistine plugins.
+- **Seamless Continuity**: Your security context and conversation history are preserved even as you switch between different Phoenix plugins.
 
 ## Technical Architecture
 
 - **MarkdownBubble Engine**: A specialized rendering component for compliant HTML/CSS display of security data.
 - **Decoupled Modular Styling**: Dedicated chat stylesheets ensure visual isolation and consistent performance.
-- **Hybrid API Support**: Optimized for both standard OpenAI and stateful custom Resistine API endpoints.
+- **Hybrid API Support**: Optimized for both standard OpenAI and stateful custom Phoenix API endpoints.
 
 ## Getting Started
 
 Visit the **Settings** plugin to bridge your AI assistant to your preferred backend:
 
-- Configure **OpenAI** or **Custom Resistine API** endpoints.
+- Configure **OpenAI** or **Custom Phoenix API** endpoints.
 - Select your preferred **Inference Model**.
 - Define the **Security System Prompt**.
 - Toggle UI preferences like **Typing Animations**.
