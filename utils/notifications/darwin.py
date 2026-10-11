@@ -88,7 +88,7 @@ def init():
         )
 
         view_action = UNNotificationAction.actionWithIdentifier_title_options_(
-            "VIEW", "View in Resistine", 1 << 2,  # foreground
+            "VIEW", "View in Phoenix", 1 << 2,  # foreground
         )
         threat_category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
             _THREAT_CATEGORY_ID, [view_action], [], 0,

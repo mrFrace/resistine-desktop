@@ -5,27 +5,60 @@
 
 """Dashboard plugin UI.
 
-This implementation ports the UI_Dev dashboard layout ideas (protection panel + grid cards)
-while preserving existing functionality (plugin list + navigation via App.select_frame_by_name).
-
-IMPORTANT:
-- UI only (no backend changes)
-- Logo is in side menu only (not on dashboard)
-- Does NOT use Resistine shield / RSheild assets
+Header (product, signed-in account, website link), the protection banner, and
+three status cards: Endpoint, AI assistant and System. Card values are
+collected on a background thread and refreshed while the dashboard is shown.
 
 Author: P3, Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import importlib
 import os
+import threading
+import webbrowser
+from urllib.parse import urlparse
 
 import customtkinter
 from customtkinter import ThemeManager
+from PIL import Image
 
 from plugins.base_plugin import BasePlugin
 from plugins.plugin_manager import PluginManager
+from utils import branding, chat_endpoint, system_info
 from utils import settings as app_settings
+from utils.functions import get_resource_path
+from utils.logger import logger
+
+_REFRESH_MS = 30_000
+_PENDING = "…"
+_NONE = "—"
+# Content width (logical px) below which the cards stack in one column.
+_STACK_BELOW = 900
+
+_FONT_TITLE = dict(family="Inter", size=26, weight="bold")
+_FONT_CARD_TITLE = dict(family="Inter", size=17, weight="bold")
+_FONT_LABEL = dict(family="Inter", size=13)
+_FONT_VALUE = dict(family="Inter", size=13, weight="bold")
+_COLOR_MUTED = ("#6B7280", "#9CA3AF")
+_COLOR_LINK = ("#0D5394", "#3a7ebf")
+_COLOR_CARD_BG = ("#FFFFFF", "#0F1A2E")
+_COLOR_CARD_BORDER = ("#E5E7EB", "#1E2A44")
+_COLOR_DIVIDER = ("#E5E7EB", "#1E2A44")
+
+# Status pill colors: (background, text) as (light, dark) pairs.
+_PILL = {
+    "ok": (("#DCFCE7", "#0A2F1A"), ("#15803D", "#4ADE80")),
+    "warn": (("#FEF3C7", "#2D1F05"), ("#B45309", "#FBBF24")),
+    "error": (("#FEE2E2", "#3B0D0D"), ("#B91C1C", "#F87171")),
+    "neutral": (("#F3F4F6", "#1F2937"), ("#4B5563", "#9CA3AF")),
+}
+
+_ENDPOINT_ROWS = ("Service", "Connection", "Agent name", "Group", "Manager", "Install")
+_ASSISTANT_ROWS = ("Server", "Model", "Access", "Models", "Latency")
+_SYSTEM_ROWS = ("Device", "System", "Kernel", "CPU", "Memory", "Disk",
+                "Uptime", "Local IP", "VPN", branding.APP_NAME)
 
 
 class Plugin(BasePlugin):
@@ -50,408 +83,458 @@ class Plugin(BasePlugin):
             uninstall_enabled=False,
         )
         self.app = app
-        self._dashboard_logo_image = None
         self.status = self.get_status()
+        self._cards = []
+        self._value_labels = {}
+        self._pills = {}
+        self._refresh_id = None
+        self._collecting = False
+        self._resize_after_id = None
+        self._resize_handler_id = None
 
-    def _effective_appearance_mode(self) -> str:
-        # Use user_interface's detection if available
-        try:
-            # Accessing the internal function if necessary, or just rely on ctk
-            # But user_interface has `_effective_appearance_mode`.
-            # Let's just use ctk for now or replicate logic.
-            # Actually, user_interface exposed it? No, it's `def _effective_appearance_mode`.
-            pass
-        except Exception:
-            pass
-        mode = customtkinter.get_appearance_mode()
-        return mode
+    # -- helpers -------------------------------------------------------
+
+    def _plugins(self):
+        if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
+            return PluginManager(self.app).plugins
+        return self.app.plugin_list
+
+    def _plugin(self, name):
+        return next((p for p in self._plugins() if p.get_name() == name), None)
+
+    def _vpn_ok(self):
+        vpn = self._plugin("VPN")
+        return bool(vpn and vpn.get_status() == "OK")
 
     def _widget_scale(self):
-        """Physical→logical scale factor for the app window.
-
-        winfo_width() returns *physical* pixels under CTk's DPI scaling, so it
-        must be divided by the real OS-DPI ratio before being compared against
-        the logical 480/680 column thresholds. CTk's widget scaling gives that
-        ratio on every platform (2.0 at 200% on Windows, 1.0 on macOS, and
-        == _hidpi_factor on Linux). Using _hidpi_factor alone was wrong on
-        Windows, where it stays 1.0 while CTk still scales the UI 2x — so
-        physical px leaked into the thresholds and over-counted columns,
-        squishing the plugin cards.
-        """
+        """Physical→logical scale factor (winfo_width() is physical px)."""
         try:
             return customtkinter.ScalingTracker.get_widget_scaling(self.app)
         except Exception:
             return getattr(self.app, "_hidpi_factor", 1.0) or 1.0
 
+    def _columns(self):
+        """3 cards per row on wide windows, stacked otherwise."""
+        scale = self._widget_scale()
+        width = self.app.winfo_width()
+        if width <= 1:
+            width = int(1344 * scale)
+        content_width = width / scale - 250 - 40
+        return 1 if content_width < _STACK_BELOW else 3
+
+    def _open(self, plugin):
+        try:
+            self.app.select_frame_by_name(
+                f"frame_{plugin.get_name()}", button=plugin.get_button())
+        except Exception:
+            plugin.create_main_screen().grid(row=0, column=1, sticky="nsew")
+
+    # -- build ---------------------------------------------------------
+
     def create_main_screen(self):
-        # Use a ScrollableFrame for the dashboard to prevent clipping on smaller screens
+        self._stop_refresh()
         self.main_frame = customtkinter.CTkScrollableFrame(
-            self.app,
-            corner_radius=0,
-            fg_color="transparent",
-        )
+            self.app, corner_radius=0, fg_color="transparent")
         self.main_frame.grid_columnconfigure(0, weight=1)
-        
-        # We don't need fixed row weights in a scrollable frame as much, 
-        # but we'll ensure the grid is clean.
-        
-        appearance_mode = self._effective_appearance_mode()
-        is_dark = appearance_mode == "Dark"
 
-        # --- Plugins list (needed for banner + grid) ---
-        if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
-            plugin_list = PluginManager(self.app).plugins
-        else:
-            plugin_list = self.app.plugin_list
+        self._build_header(self.main_frame).grid(
+            row=0, column=0, sticky="ew", padx=20, pady=(16, 12))
+        self._build_banner(self.main_frame).grid(
+            row=1, column=0, sticky="ew", padx=20, pady=(0, 16))
 
-        # --- Protection Status Bar ---
-        top_margin_spacer = customtkinter.CTkLabel(self.main_frame, text="", height=16)
-        top_margin_spacer.grid(row=0, column=0, sticky="ew")
+        self._cards_frame = customtkinter.CTkFrame(
+            self.main_frame, fg_color="transparent")
+        self._cards_frame.grid(row=2, column=0, sticky="new", padx=20, pady=(0, 20))
 
-        vpn_plugin = next(
-            (p for p in plugin_list if p.get_name() == "VPN"), None
-        )
-        vpn_ok = vpn_plugin and vpn_plugin.get_status() == "OK" if vpn_plugin else False
-
-        if vpn_ok:
-            banner_bg = ThemeManager.theme.get("Theme", {}).get(
-                "protection_bg_ok", ["#DCFCE7", "#0A2F1A"]
-            )
-            banner_text_color = ThemeManager.theme.get("Theme", {}).get(
-                "protection_text_ok", ["#15803D", "#4ADE80"]
-            )
-            banner_text = "\u2713  Protected"
-        else:
-            banner_bg = ThemeManager.theme.get("Theme", {}).get(
-                "protection_bg_warn", ["#FEF3C7", "#2D1F05"]
-            )
-            banner_text_color = ThemeManager.theme.get("Theme", {}).get(
-                "protection_text_warn", ["#B45309", "#FBBF24"]
-            )
-            banner_text = "\u26A0  Not Protected"
-
-        protection_frame = customtkinter.CTkFrame(
-            self.main_frame,
-            fg_color=banner_bg,
-            corner_radius=12,
-            height=48,
-        )
-        protection_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 16))
-        protection_frame.grid_propagate(False)
-        protection_frame.grid_columnconfigure(0, weight=1)
-        protection_frame.grid_rowconfigure(0, weight=1)
-
-        protection_label = customtkinter.CTkLabel(
-            protection_frame,
-            text=banner_text,
-            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
-            text_color=banner_text_color,
-            justify="center",
-            anchor="center",
-        )
-        protection_label.place(relx=0.5, rely=0.5, anchor="center")
-
-        # Filter plugins for the grid:
-        # Exclude Dashboard itself.
-        # Exclude non-navigable plugins (order <= 0) by default — *except*
-        # Login (id "007"), which surfaces here only when the user isn't
-        # signed in, as a clear call-to-action card that opens the
-        # full-screen login when clicked.
-        logged_in = app_settings.get("auth", "logged_in", False)
-        plugins = [
-            p for p in plugin_list
-            if p.get_name() != "Dashboard"
-            and (p.order > 0 or (not logged_in and getattr(p, "id", None) == "007"))
+        self._value_labels = {}
+        self._pills = {}
+        endpoint = self._plugin("Endpoint")
+        chat = self._plugin("Chat")
+        self._cards = [
+            self._build_card("endpoint", "Endpoint", endpoint, _ENDPOINT_ROWS),
+            self._build_card("assistant", "AI assistant", chat, _ASSISTANT_ROWS),
+            self._build_card("system", "System", self, _SYSTEM_ROWS,
+                             open_link=False, show_pill=False),
         ]
-        
-        # Store plugins for responsive rebuild
-        self._dashboard_plugins = plugins
-        
-        # Responsive layout: determine max columns based on content width.
-        # Use absolute pixel thresholds (not screen percentages) so the layout
-        # is consistent regardless of screen size. winfo_width() is physical px
-        # under CTk DPI scaling, so normalize it to logical units via
-        # _widget_scale() before comparing against the logical 480/680 cutoffs.
-        import platform as _plat
-        _sidebar = 250
-        _padding = 60 if _plat.system() == "Windows" else 40
-        _scale = self._widget_scale()
-        # Force pending geometry to be applied so winfo_width() returns the
-        # actual window size rather than a stale pre-layout value.
-        self.app.update_idletasks()
-        window_width = self.app.winfo_width()
-        if window_width <= 1:
-            # Window not yet mapped — fall back to the geometry-targeted size
-            # (1920 * 0.7 logical = 1344, then scaled to physical).
-            window_width = int(1344 * _scale)
-        window_width = int(window_width / _scale)
-
-        content_width = max(1, window_width - _sidebar - _padding)
-        # Set hint for AppUI to use in create_grid synchronously
-        self.app._content_width_hint = content_width
-
-        # Column thresholds based on content width:
-        # < 480px  → 1 col  (very narrow, ~750px window)
-        # < 680px  → 2 cols
-        # else     → up to 4 cols (natural sqrt layout)
-        if content_width < 480:
-            max_cols = 1
-        elif content_width < 680:
-            max_cols = 2
-        else:
-            max_cols = 4
-        min_cols = None
-        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-
-        # Store current column count to detect changes
-        self._current_cols = len(cols)
-        self._current_max_cols = max_cols
-
-        content_frame = customtkinter.CTkFrame(
-            self.main_frame, corner_radius=0, fg_color="transparent"
-        )
-        # Place grid at row 2
-        content_frame.grid(row=2, column=0, sticky="new", padx=15, pady=0)
-        content_frame.grid_columnconfigure(0, weight=1)
-        
-        # Store reference for rebuilding
-        self._content_frame = content_frame
-
-        self.grid_frame = self.app.create_grid(
-            frame=content_frame,
-            row=0,
-            column=0,
-            plugins=plugins,
-            color="transparent",
-            sticky="nsew",
-            max_cols=max_cols,
-            min_cols=min_cols,
-            aspect_ratio=1.0
-        )
-
-        def open_plugin(p):
-            # Preserve existing functionality: use app frame switching (updates sidebar state)
-            try:
-                self.app.select_frame_by_name(
-                    f"frame_{p.get_name()}", button=p.get_button()
-                )
-            except Exception:
-                p.create_main_screen().grid(row=0, column=1, sticky="nsew")
-
-        for index, plugin in enumerate(plugins):
-            r = index // len(cols)
-            c = index % len(cols)
-            self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin, 
-                show_description=True
-            )
-        
-        # Bind resize handler to app window for responsive layout
+        self._layout_cards(self._columns())
         self._bind_responsive_resize()
-
+        self._schedule_refresh(0)
         return self.main_frame
-    
-    def _resolve_max_cols(self):
-        """Column count for the current content width (mirrors create_main_screen)."""
-        import platform as _plat
-        _sidebar = 250
-        _padding = 60 if _plat.system() == "Windows" else 40
-        # Match create_main_screen/on_resize: winfo_width() is physical px, so
-        # normalize to logical units before comparing against the logical 480/680
-        # thresholds. Without this, the cache signature uses the wrong column
-        # count on any HiDPI display (Windows 200%, HiDPI Linux) and makes stale
-        # keep/rebuild decisions.
-        _scale = self._widget_scale()
-        window_width = self.app.winfo_width()
-        if window_width <= 1:
-            window_width = int(1344 * _scale)
-        window_width = int(window_width / _scale)
-        content_width = max(1, window_width - _sidebar - _padding)
-        if content_width < 480:
-            return 1
-        if content_width < 680:
-            return 2
-        return 4
+
+    def _build_header(self, parent):
+        header = customtkinter.CTkFrame(parent, fg_color="transparent")
+        header.grid_columnconfigure(1, weight=1)
+
+        try:
+            mark = Image.open(get_resource_path(
+                os.path.join("resources", "icons", branding.LOGO_MARK)))
+            customtkinter.CTkLabel(
+                header, text="",
+                image=customtkinter.CTkImage(mark, mark, size=(48, 48)),
+            ).grid(row=0, column=0, rowspan=2, padx=(0, 14))
+        except OSError as e:
+            logger.warning(f"Dashboard logo load failed: {e}")
+
+        customtkinter.CTkLabel(
+            header, text=branding.APP_NAME,
+            font=customtkinter.CTkFont(**_FONT_TITLE), anchor="w",
+        ).grid(row=0, column=1, sticky="sw")
+
+        logged_in = app_settings.get("auth", "logged_in", False)
+        email = app_settings.get("auth", "email", "")
+        account = customtkinter.CTkLabel(
+            header,
+            text=(f"Signed in as {email}" if logged_in and email
+                  else "Not signed in — sign in"),
+            font=customtkinter.CTkFont(family="Inter", size=13),
+            text_color=_COLOR_MUTED if logged_in else _COLOR_LINK,
+            anchor="w",
+        )
+        account.grid(row=1, column=1, sticky="nw")
+        if not logged_in and hasattr(self.app, "show_login_screen"):
+            account.configure(cursor="hand2")
+            account.bind("<Button-1>", lambda _e: self._show_login())
+
+        site = customtkinter.CTkLabel(
+            header,
+            text=f"{urlparse(branding.WEBSITE_URL).netloc} ↗",
+            font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"),
+            text_color=_COLOR_LINK,
+            cursor="hand2",
+        )
+        site.grid(row=0, column=2, rowspan=2, sticky="e")
+        site.bind("<Button-1>", lambda _e: webbrowser.open(branding.WEBSITE_URL))
+        return header
+
+    def _show_login(self):
+        # Full-window takeover; same path as the Settings "Log In" button.
+        try:
+            self.app.show_login_screen()
+        except Exception as e:
+            logger.error(f"Dashboard: could not open login: {e}")
+
+    def _build_banner(self, parent):
+        theme = ThemeManager.theme.get("Theme", {})
+        if self._vpn_ok():
+            bg = theme.get("protection_bg_ok", ["#DCFCE7", "#0A2F1A"])
+            fg = theme.get("protection_text_ok", ["#15803D", "#4ADE80"])
+            text = "✓  Protected"
+        else:
+            bg = theme.get("protection_bg_warn", ["#FEF3C7", "#2D1F05"])
+            fg = theme.get("protection_text_warn", ["#B45309", "#FBBF24"])
+            text = "⚠  Not Protected"
+        banner = customtkinter.CTkFrame(parent, fg_color=bg, corner_radius=12, height=48)
+        banner.grid_propagate(False)
+        customtkinter.CTkLabel(
+            banner, text=text, text_color=fg,
+            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
+        ).place(relx=0.5, rely=0.5, anchor="center")
+        return banner
+
+    def _build_card(self, key, title, plugin, rows, open_link=True, show_pill=True):
+        card = customtkinter.CTkFrame(
+            self._cards_frame, corner_radius=12, border_width=1,
+            fg_color=_COLOR_CARD_BG, border_color=_COLOR_CARD_BORDER)
+        card.grid_columnconfigure(0, weight=1)
+
+        head = customtkinter.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 10))
+        head.grid_columnconfigure(1, weight=1)
+
+        icon = None
+        if plugin is not None and plugin is not self:
+            try:
+                icon = plugin.get_icon()
+            except Exception:
+                icon = None
+        customtkinter.CTkLabel(
+            head, text=f"  {title}" if icon else title, image=icon, compound="left",
+            font=customtkinter.CTkFont(**_FONT_CARD_TITLE), anchor="w",
+        ).grid(row=0, column=0, sticky="w")
+
+        if show_pill:
+            pill = customtkinter.CTkLabel(
+                head, text="", corner_radius=8, height=22,
+                font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"))
+            pill.grid(row=0, column=2, padx=(8, 0))
+            self._pills[key] = pill
+            self._set_pill(key, _PENDING, "neutral")
+
+        if open_link and plugin is not None:
+            link = customtkinter.CTkLabel(
+                head, text="Open", text_color=_COLOR_LINK, cursor="hand2",
+                font=customtkinter.CTkFont(family="Inter", size=13, weight="bold"))
+            link.grid(row=0, column=3, padx=(12, 0))
+            link.bind("<Button-1>", lambda _e, p=plugin: self._open(p))
+
+        customtkinter.CTkFrame(card, height=1, fg_color=_COLOR_DIVIDER).grid(
+            row=1, column=0, sticky="ew", padx=18)
+
+        body = customtkinter.CTkFrame(card, fg_color="transparent")
+        body.grid(row=2, column=0, sticky="nsew", padx=18, pady=(10, 16))
+        body.grid_columnconfigure(1, weight=1)
+        for i, name in enumerate(rows):
+            customtkinter.CTkLabel(
+                body, text=name, text_color=_COLOR_MUTED, anchor="nw",
+                font=customtkinter.CTkFont(**_FONT_LABEL),
+            ).grid(row=i, column=0, sticky="nw", padx=(0, 18), pady=2)
+            value = customtkinter.CTkLabel(
+                body, text=_PENDING if plugin is not None else _NONE,
+                anchor="nw", justify="left", wraplength=260,
+                font=customtkinter.CTkFont(**_FONT_VALUE))
+            value.grid(row=i, column=1, sticky="nw", pady=2)
+            self._value_labels[(key, name)] = value
+
+        if plugin is None:
+            self._set_pill(key, "Not installed", "neutral")
+        return card
+
+    def _layout_cards(self, columns):
+        self._current_cols = columns
+        for i in range(3):
+            self._cards_frame.grid_columnconfigure(
+                i, weight=1 if i < columns else 0, uniform="cards" if i < columns else "")
+        for i, card in enumerate(self._cards):
+            card.grid_forget()
+            card.grid(row=i // columns, column=i % columns, sticky="nsew",
+                      padx=(0 if i % columns == 0 else 8, 0), pady=(0, 12))
+
+    def _set_pill(self, key, text, kind):
+        pill = self._pills.get(key)
+        if pill is None:
+            return
+        bg, fg = _PILL[kind]
+        try:
+            pill.configure(text=f"  {text}  ", fg_color=bg, text_color=fg)
+        except Exception:
+            pass
+
+    # -- data ----------------------------------------------------------
+
+    def _alive(self):
+        try:
+            return self.main_frame.winfo_exists()
+        except Exception:
+            return False
+
+    def _schedule_refresh(self, delay_ms=_REFRESH_MS):
+        self._refresh_id = self.app.after(delay_ms, self._refresh)
+
+    def _stop_refresh(self):
+        if self._refresh_id is not None:
+            try:
+                self.app.after_cancel(self._refresh_id)
+            except Exception:
+                pass
+            self._refresh_id = None
+
+    def _refresh(self):
+        self._refresh_id = None
+        if not self._alive():
+            return
+        # Skip work while another screen is showing; keep the timer so the
+        # cached dashboard is current again shortly after it is re-shown.
+        if self.main_frame.winfo_ismapped() and not self._collecting:
+            self._collecting = True
+            context = self._collect_context()
+            threading.Thread(
+                target=self._collect, args=(context,), daemon=True).start()
+        self._schedule_refresh()
+
+    def _collect_context(self):
+        """Values that must be read on the Tk thread."""
+        chat = self._plugin("Chat")
+        return {
+            "has_endpoint": self._plugin("Endpoint") is not None,
+            "has_chat": chat is not None,
+            "model": getattr(chat, "model", None),
+        }
+
+    def _collect(self, context):
+        data = {}
+        try:
+            if context["has_endpoint"]:
+                data["endpoint"] = _endpoint_data()
+            if context["has_chat"]:
+                data["assistant"] = _assistant_data(context["model"])
+            data["system"] = _system_data()
+        except Exception as e:
+            logger.error(f"Dashboard: collecting card data failed: {e}")
+        try:
+            self.app.after(0, self._apply, data)
+        except Exception:
+            self._collecting = False
+
+    def _apply(self, data):
+        self._collecting = False
+        if not self._alive():
+            return
+        for key, (pill, values) in data.items():
+            if pill[0] is not None:
+                self._set_pill(key, *pill)
+            for name, value in values.items():
+                label = self._value_labels.get((key, name))
+                if label is not None:
+                    try:
+                        label.configure(text=value or _NONE)
+                    except Exception:
+                        pass
+
+    # -- caching / resize ----------------------------------------------
 
     def screen_signature(self):
-        """Cache the built dashboard until something it displays actually changes.
+        """Rebuild only when the banner, account or theme changes.
 
-        Captures every volatile input the build bakes in: appearance mode, the
-        VPN "Protected" banner state, each card's status badge, and the column
-        count (which depends on window width). Any change → unequal signature →
-        full rebuild; otherwise the screen is re-shown instantly.
+        Card values refresh in place, so they are not part of the signature.
         """
         try:
-            if not hasattr(self.app, "plugin_list") or not self.app.plugin_list:
-                plugin_list = PluginManager(self.app).plugins
-            else:
-                plugin_list = self.app.plugin_list
-
-            plugins = [
-                p for p in plugin_list
-                if p.get_name() != "Dashboard" and p.order != -1
-            ]
-            statuses = tuple((p.get_name(), p.get_status()) for p in plugins)
-
-            vpn_plugin = next(
-                (p for p in plugin_list if p.get_name() == "VPN"), None
-            )
-            vpn_ok = bool(vpn_plugin and vpn_plugin.get_status() == "OK")
-
             return (
                 "dashboard",
-                self._effective_appearance_mode(),
-                vpn_ok,
-                self._resolve_max_cols(),
-                statuses,
+                customtkinter.get_appearance_mode(),
+                self._vpn_ok(),
+                app_settings.get("auth", "logged_in", False),
+                app_settings.get("auth", "email", ""),
             )
         except Exception:
-            # Any failure → no caching (rebuild as before).
             return None
 
     def _bind_responsive_resize(self):
-        """
-        Bind a resize handler to rebuild grid when the column count needs to change.
-
-        Uses a 250ms debounce so the grid is only rebuilt once the user finishes (or
-        pauses) resizing — not on every pixel during a drag.  Position-only Configure
-        events (window moved but not resized) are filtered out immediately so they
-        never queue a rebuild at all.
-        """
-        def on_resize(event=None):
-            if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
+        """Re-grid the cards when the window crosses the stacking width."""
+        def on_resize():
+            self._resize_after_id = None
+            if not self._alive():
                 return
-            try:
-                if not self._content_frame.winfo_exists():
-                    return
-            except Exception:
-                return
+            columns = self._columns()
+            if columns != getattr(self, "_current_cols", None):
+                self._layout_cards(columns)
 
-            _scale = self._widget_scale()
-            window_width = int(self.app.winfo_width() / _scale)
-            content_width = max(1, window_width - 250 - self._padding_offset)
-
-            if content_width < 480:
-                max_cols = 1
-            elif content_width < 680:
-                max_cols = 2
-            else:
-                max_cols = 4
-            min_cols = None
-
-            target_cols = len(self.app.calculate_rows_cols(
-                len(self._dashboard_plugins), max_cols=max_cols, min_cols=min_cols)[1])
-
-            if getattr(self, '_current_cols', None) == target_cols:
-                return
-
-            self._rebuild_grid(max_cols, min_cols)
-
-        self._resize_after_id = None
-        # Track the last known window dimensions so we can ignore position-only events.
-        self._last_win_size = [0, 0]
-        import platform as _plat
-        self._padding_offset = 60 if _plat.system() == "Windows" else 40
-
-        def debounced_resize(event=None):
-            # Filter: ignore Configure events that only changed position, not size.
-            if event:
-                if event.width == self._last_win_size[0] and event.height == self._last_win_size[1]:
-                    return
-                self._last_win_size[0] = event.width
-                self._last_win_size[1] = event.height
-
-            # Skip if dashboard is no longer visible or has been destroyed.
-            if not hasattr(self, 'main_frame'):
-                return
-            try:
-                if not self.main_frame.winfo_exists() or not self.main_frame.winfo_ismapped():
-                    return
-            except Exception:
-                return
-
-            # Always debounce — never fire mid-drag, even on threshold crossings.
-            # Rebuilding the grid while the user is still dragging causes the visible
-            # flash/glitch on Windows; waiting until they pause/stop eliminates it.
+        def debounced(_event=None):
             if self._resize_after_id:
                 self.app.after_cancel(self._resize_after_id)
             self._resize_after_id = self.app.after(250, on_resize)
 
-        # LEAK PREVENTION: unbind any handler left over from a previous tab visit.
-        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+        if self._resize_handler_id:
             try:
                 self.app.unbind("<Configure>", self._resize_handler_id)
             except Exception:
                 pass
+        self._resize_handler_id = self.app.bind("<Configure>", debounced, add="+")
 
-        self._resize_handler_id = self.app.bind("<Configure>", debounced_resize, add="+")
-    
     def destroy(self):
         """Cleanup handler for uninstallation."""
-        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+        self._stop_refresh()
+        if self._resize_after_id:
             try:
                 self.app.after_cancel(self._resize_after_id)
-            except:
+            except Exception:
                 pass
-        
-        if hasattr(self, '_resize_handler_id') and self._resize_handler_id:
+        if self._resize_handler_id:
             try:
                 self.app.unbind("<Configure>", self._resize_handler_id)
-            except:
+            except Exception:
                 pass
-        
         super().destroy()
-    
-    def _rebuild_grid(self, max_cols, min_cols=None):
-        """Rebuild the plugin grid with new column count."""
-        if not hasattr(self, '_dashboard_plugins') or not hasattr(self, '_content_frame'):
-            return
-        
-        plugins = self._dashboard_plugins
-        
-        # Destroy old grid
-        if hasattr(self, 'grid_frame') and self.grid_frame:
-            try:
-                self.grid_frame.destroy()
-            except:
-                pass
-        
-        rows, cols = self.app.calculate_rows_cols(len(plugins), max_cols=max_cols, min_cols=min_cols)
-        self._current_cols = len(cols)
-        self._current_max_cols = max_cols
 
-        # Refresh the content_width hint with the current window size.
-        # Without this, create_grid would walk up to find the stale hint that
-        # was set during the initial dashboard load (when winfo_width hadn't
-        # been applied yet), giving wrong target_height on the rebuilt grid.
-        _scale = self._widget_scale()
-        window_width = int(self.app.winfo_width() / _scale)
-        content_width = max(1, window_width - 250 - self._padding_offset)
-        self.app._content_width_hint = content_width
 
-        self.grid_frame = self.app.create_grid(
-            frame=self._content_frame,
-            row=0,
-            column=0,
-            plugins=plugins,
-            color="transparent",
-            sticky="nsew",
-            max_cols=max_cols,
-            min_cols=min_cols,
-            aspect_ratio=1.0,
-        )
+# -- card data (background thread; no Tk access) ---------------------------
 
-        for index, plugin in enumerate(plugins):
-            r = index // len(cols)
-            c = index % len(cols)
-            self.app.create_plugin_card(
-                r, c, self.grid_frame, plugin,
-                show_description=True
-            )
 
-        # Settle the rebuilt cards synchronously so a column-count change during
-        # resize lands in its final layout in one pass (no post-rebuild reflow).
-        try:
-            self.app._settle_screen(self.main_frame)
-        except Exception:
-            pass
+def _endpoint_data():
+    """Return ((pill_text, kind), {row: value}) for the Endpoint card."""
+    import plugins.wazuh.main as wazuh
+    from plugins.wazuh import config
+
+    if not wazuh._platform_supported:
+        return ("Unsupported", "neutral"), {}
+    status = wazuh.get_agent_status()
+    # The platform module wazuh.main imported its agent functions from.
+    module = importlib.import_module(wazuh.get_agent_status.__module__)
+    if hasattr(module, "get_install_info"):
+        info = module.get_install_info()
+    else:
+        path = {"Darwin": config.WAZUH_INSTALL_DIR,
+                "Windows": config.WINDOWS_WAZUH_DIR}.get(wazuh._PLATFORM)
+        info = {"path": path if path and os.path.exists(path) else None,
+                "system_managed": False}
+    install = info["path"]
+    if install and info["system_managed"]:
+        install = f"{install} (system-managed)"
+    kind = {"Running": "ok", "Stopped": "error"}.get(status, "warn")
+    return (status, kind), {
+        "Service": status,
+        # No unprivileged "connected to manager" signal exists (the agent
+        # state file is root-owned).
+        "Connection": _NONE,
+        "Agent name": wazuh.get_agent_name(),
+        "Group": wazuh.get_agent_group(),
+        "Manager": config.WAZUH_MANAGER,
+        "Install": install,
+    }
+
+
+def _assistant_data(model):
+    """Return ((pill_text, kind), {row: value}) for the AI assistant card."""
+    vpn_on = _vpn_connected()
+    try:
+        from plugins.wazuh.main import is_agent_running
+
+        agent_on = is_agent_running()
+    except Exception:
+        agent_on = False
+    # Mirrors the chat access gate (VPN connected + endpoint agent running).
+    if vpn_on and agent_on:
+        access = "Unlocked (VPN + endpoint agent)"
+    else:
+        missing = [n for n, ok in (("VPN", vpn_on), ("endpoint agent", agent_on)) if not ok]
+        access = f"Locked (needs {' + '.join(missing)})"
+
+    if chat_endpoint.get_transport() == chat_endpoint.TRANSPORT_MATRIX:
+        return ("Matrix", "neutral"), {
+            "Server": chat_endpoint.get_assistant_mxid(),
+            "Model": None, "Access": access, "Models": None, "Latency": None,
+        }
+
+    base_url = chat_endpoint.get_base_url()
+    result = chat_endpoint.probe(
+        base_url, app_settings.get_secret("chat", "openai_api_key"))
+    parsed = urlparse(base_url)
+    return (("Online", "ok") if result["online"] else ("Offline", "error")), {
+        "Server": parsed.netloc or base_url,
+        "Model": model,
+        "Access": access,
+        "Models": (f"{result['models']} available"
+                   if result["models"] is not None else None),
+        "Latency": (f"{result['latency_ms']} ms"
+                    if result["latency_ms"] is not None else None),
+    }
+
+
+def _system_data():
+    """Return ((pill_text, kind), {row: value}) for the System card."""
+    try:
+        from utils.updates.version import get_current_version
+
+        version = get_current_version()
+    except Exception:
+        version = None
+    return (None, None), {
+        "Device": system_info.device_name(),
+        "System": system_info.os_name(),
+        "Kernel": system_info.kernel(),
+        "CPU": system_info.cpu(),
+        "Memory": system_info.format_usage(system_info.memory()),
+        "Disk": system_info.format_usage(system_info.disk()),
+        "Uptime": system_info.format_uptime(system_info.uptime_seconds()),
+        "Local IP": system_info.local_ip(),
+        "VPN": "On" if _vpn_connected() else "Off",
+        branding.APP_NAME: version,
+    }
+
+
+def _vpn_connected():
+    try:
+        from plugins.vpn.main import is_vpn_connected
+
+        return bool(is_vpn_connected())
+    except Exception:
+        return False

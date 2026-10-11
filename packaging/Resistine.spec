@@ -176,7 +176,7 @@ if IS_MACOS:
         info_plist={
             # Basic app info
             'CFBundleName': APP_NAME,
-            'CFBundleDisplayName': 'Resistine',
+            'CFBundleDisplayName': 'Phoenix',
             'CFBundleExecutable': APP_NAME,
             'CFBundleIdentifier': BUNDLE_ID,
             'CFBundleVersion': VERSION,
@@ -193,7 +193,7 @@ if IS_MACOS:
 
             # Permissions (will be expanded with actual entitlements)
             'NSNetworkClient': True,
-            'NSSystemAdministrationUsageDescription': 'Resistine needs admin access to manage VPN connections.',
+            'NSSystemAdministrationUsageDescription': 'Phoenix needs admin access to manage VPN connections.',
 
             # XPC Services (will be populated by build script)
             'NSXPCServices': ['ResistineVPNXPC'],

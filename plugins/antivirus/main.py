@@ -779,7 +779,7 @@ class Plugin(BasePlugin):
                     "it from your distribution's package manager."
                     if is_linux else
                     "ClamAV binaries were not found.\n"
-                    "Reinstall Resistine or run the build script "
+                    "Reinstall Phoenix or run the build script "
                     "to set up antivirus protection."
                 ),
                 "action": (
@@ -851,8 +851,8 @@ class Plugin(BasePlugin):
             reason_text = {
                 "dns_failed": "Could not reach the update server. Check your internet connection.",
                 "network_timeout": "Download timed out. Check your internet connection.",
-                "certs_missing": "Certificate verification failed. Try reinstalling Resistine.",
-                "binary_missing": "ClamAV binaries not found. Reinstall Resistine.",
+                "certs_missing": "Certificate verification failed. Try reinstalling Phoenix.",
+                "binary_missing": "ClamAV binaries not found. Reinstall Phoenix.",
                 "partial_download": "Download was incomplete. Tap Retry to try again.",
                 "freshclam_failed": "Signature download failed. Tap Retry to try again.",
             }.get(reason, "Download failed. Tap Retry to try again.")
@@ -940,7 +940,7 @@ class Plugin(BasePlugin):
                 "bg": warn_bg, "title": "Full Disk Access Required",
                 "title_color": warn_tx,
                 "subtitle": (
-                    "Resistine needs Full Disk Access to monitor files "
+                    "Phoenix needs Full Disk Access to monitor files "
                     "in real time. Grant access in System Settings "
                     "\u203A Privacy & Security \u203A Full Disk Access."
                 ),
@@ -1074,7 +1074,7 @@ class Plugin(BasePlugin):
             resources = t.get("resources", [])
             path = resources[0] if resources else "unknown location"
             _send_notification(
-                "Resistine — Threat Blocked",
+                "Phoenix — Threat Blocked",
                 f"{name} was blocked at {os.path.basename(path)}",
             )
             threat_log.log_threat_detected(name, path)
@@ -1145,14 +1145,14 @@ class Plugin(BasePlugin):
     def _handle_rtd_on_main(self, filepath: str, signature: str):
         basename = os.path.basename(filepath)
         notifications.send(
-            "Resistine \u2014 Threat Blocked",
+            "Phoenix \u2014 Threat Blocked",
             f"Malware detected: {signature}\n{basename}",
             urgency="critical",
         )
 
     def _handle_rtd_summary_on_main(self, count: int):
         notifications.send(
-            "Resistine \u2014 Threat Blocked",
+            "Phoenix \u2014 Threat Blocked",
             f"{count} additional threat(s) detected",
             urgency="critical",
         )
@@ -1867,7 +1867,7 @@ class Plugin(BasePlugin):
                 text=f"Threats found: {result.infected}",
             )
             notifications.send(
-                "Resistine — Threats Detected",
+                "Phoenix — Threats Detected",
                 f"{result.infected} infected file(s) found during scan.",
                 urgency="critical",
             )

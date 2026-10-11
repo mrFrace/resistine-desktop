@@ -78,7 +78,7 @@ class UpdateDialog(customtkinter.CTkToplevel):
 
         customtkinter.CTkLabel(
             header,
-            text="A new version of Resistine\nis available!",
+            text="A new version of Phoenix\nis available!",
             font=customtkinter.CTkFont(size=16, weight="bold"),
             justify="left",
             anchor="w",
@@ -87,7 +87,7 @@ class UpdateDialog(customtkinter.CTkToplevel):
         customtkinter.CTkLabel(
             header,
             text=(
-                f"Resistine {new_version} is now available "
+                f"Phoenix {new_version} is now available "
                 f"(you have {current_version})."
             ),
             font=customtkinter.CTkFont(size=13),

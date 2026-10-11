@@ -140,7 +140,7 @@ def _show_up_to_date():
     show_info(
         _app,
         "Software Update",
-        f"You're up to date!\n\nResistine {version} is the latest version.",
+        f"You're up to date!\n\nPhoenix {version} is the latest version.",
     )
 
 

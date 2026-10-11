@@ -312,7 +312,7 @@ class TestMigrateLegacyConfig:
 @pytest.mark.unit
 class TestGetDisplayName:
     def test_default_config_display_name(self, mgr):
-        assert mgr.get_display_name(RESISTINE_CONFIG_NAME) == "Resistine (Default)"
+        assert mgr.get_display_name(RESISTINE_CONFIG_NAME) == "Phoenix (Default)"
 
     def test_registered_config_display_name(self, mgr, isolated_settings):
         mgr.register_config("mycfg", source="import", display_name="My Config")

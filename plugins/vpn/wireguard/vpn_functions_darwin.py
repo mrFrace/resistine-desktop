@@ -700,7 +700,7 @@ def prompt_helper_approval(service):
         ask_yes_no(
             root,
             "Helper Approval Required",
-            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
+            "Phoenix needs your approval to install a helper tool for VPN functionality.\n\n"
             "Click 'Yes' to open System Settings where you can enable it in Login Items.",
             on_confirm
         )

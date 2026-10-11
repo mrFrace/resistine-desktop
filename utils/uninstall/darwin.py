@@ -133,7 +133,7 @@ def run_uninstall(app, progress_callback=None):
 
     if errors:
         return (False, f"Completed with errors: {'; '.join(errors)}")
-    return (True, "Resistine has been uninstalled successfully.")
+    return (True, "Phoenix has been uninstalled successfully.")
 
 
 class _UserCancelled(Exception):

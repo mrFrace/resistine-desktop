@@ -314,7 +314,7 @@ class Plugin(BasePlugin):
             card,
             text=(
                 "The SIEM agent collects security telemetry from this machine "
-                "and reports to the Resistine SIEM dashboard."
+                "and reports to the Phoenix SIEM dashboard."
             ),
             font=customtkinter.CTkFont(size=13),
             text_color=_COLOR_MUTED, wraplength=460, justify="left",

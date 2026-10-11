@@ -29,6 +29,7 @@ from plugins.wazuh.config import (
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
     LINUX_WAZUH_DIR,
+    LINUX_WAZUH_SEARCH_DIRS,
 )
 
 # Deployment-variable prefix passed to the package installer.  Carries the
@@ -166,7 +167,55 @@ def get_package_url():
     return None
 
 def is_agent_installed():
-    return os.path.exists(LINUX_WAZUH_DIR)
+    return get_install_info()["path"] is not None
+
+def _is_wazuh_dir(path):
+    """True if *path* holds a Wazuh agent install.
+
+    Installs are usually wazuh:wazuh 0750, so an unprivileged user can't
+    look inside; ownership by the wazuh user or group counts as a match.
+    """
+    if not os.path.isdir(path):
+        return False
+    if os.path.exists(os.path.join(path, "bin", "wazuh-control")):
+        return True
+    try:
+        import grp
+        import pwd
+
+        st = os.stat(path)
+        return "wazuh" in (pwd.getpwuid(st.st_uid).pw_name,
+                           grp.getgrgid(st.st_gid).gr_name)
+    except (KeyError, OSError):
+        return False
+
+def get_install_info():
+    """Return ``{"path", "system_managed"}`` for the agent install.
+
+    Checks LINUX_WAZUH_SEARCH_DIRS in order, then the wazuh-agent systemd
+    unit for any other location. Only LINUX_WAZUH_DIR is the app's own
+    install; anything else is managed outside the app and must not be
+    re-keyed or removed by it. ``path`` is None when nothing is found.
+    """
+    for path in LINUX_WAZUH_SEARCH_DIRS:
+        if _is_wazuh_dir(path):
+            return {"path": path, "system_managed": path != LINUX_WAZUH_DIR}
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", "wazuh-agent", "-p", "LoadState", "-p", "ExecStart"],
+            capture_output=True, text=True, timeout=5,
+        )
+        props = dict(
+            line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+        )
+        match = re.search(r"path=(\S+)", props.get("ExecStart", ""))
+        if props.get("LoadState") == "loaded" and match:
+            # .../bin/wazuh-control -> install root
+            root = os.path.dirname(os.path.dirname(match.group(1)))
+            return {"path": root, "system_managed": True}
+    except Exception as e:
+        logger.debug(f"Could not inspect wazuh-agent unit: {e}")
+    return {"path": None, "system_managed": False}
 
 def get_agent_status():
     if not is_agent_installed():
@@ -237,8 +286,8 @@ def start_agent():
     if get_agent_status() == "Running":
         return True
         
-    # Restore key if missing
-    if os.path.exists(_KEY_BACKUP):
+    # Restore key if missing (only into the app's own install)
+    if os.path.exists(_KEY_BACKUP) and not get_install_info()["system_managed"]:
         script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -260,7 +309,7 @@ def restore_client_key_if_needed():
     if needs_reenrollment():
         return False
         
-    if not os.path.exists(_KEY_BACKUP):
+    if not os.path.exists(_KEY_BACKUP) or get_install_info()["system_managed"]:
         return True
         
     script = f"""
@@ -278,7 +327,8 @@ def restore_client_key_if_needed():
     return success
 
 def stop_agent():
-    if not is_agent_installed():
+    install_dir = get_install_info()["path"]
+    if not install_dir:
         return True
         
     success, output = run_privileged_command(["systemctl", "stop", "wazuh-agent"])
@@ -286,13 +336,18 @@ def stop_agent():
     # Verify stopped
     try:
         if subprocess.run(["pgrep", "-x", "wazuh-agentd"], capture_output=True).returncode == 0:
-            run_privileged_command(["pkill", "-9", "-f", f"{LINUX_WAZUH_DIR}/bin/wazuh-"])
+            run_privileged_command(["pkill", "-9", "-f", f"{install_dir}/bin/wazuh-"])
     except:
         pass
         
     return get_agent_status() != "Running"
 
 def remove_agent(wipe_keys: bool = False):
+    info = get_install_info()
+    if info["system_managed"]:
+        logger.warning(
+            f"Wazuh agent at {info['path']} is managed outside the app; not removing it")
+        return False
     if not is_agent_installed() and not (wipe_keys and os.path.exists(_KEY_BACKUP)):
         return True
 

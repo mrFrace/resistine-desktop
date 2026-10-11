@@ -612,7 +612,7 @@ class ChatUIMixin:
         bar.place(relx=0.5, rely=1.0, anchor="s", relwidth=0.96, y=-14)
         bar.grid_columnconfigure(0, weight=1)
         self.chat_entry = EmojiEntry(
-            bar, placeholder_text="Message Resistine AI...",
+            bar, placeholder_text="Message Phoenix AI...",
             corner_radius=20, border_width=0, height=44,
             font=customtkinter.CTkFont(family=ui_family(), size=16),
             fg_color="transparent", text_color=fg,
@@ -654,7 +654,7 @@ class ChatUIMixin:
         self._toggle_btn.grid(row=0, column=0, padx=(12, 0), pady=4)
 
         self._header_label = customtkinter.CTkLabel(
-            header, text="Resistine AI",
+            header, text="Phoenix AI",
             font=customtkinter.CTkFont(
                 family=ui_family(), size=16, weight="bold"),
             text_color=fg, fg_color="transparent")

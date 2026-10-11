@@ -25,6 +25,7 @@ from plugins.login.api import LoginAPI
 
 # Removed unused settings import
 from utils.logger import logger
+from utils import branding
 from utils.functions import get_resource_path
 
 # Removed standard logging setup
@@ -53,7 +54,7 @@ class Plugin(BasePlugin):
             order=0,
             name="Login",
             status=None,
-            description="Login to the Resistine application.",
+            description="Login to the Phoenix application.",
             supported_systems=["Windows", "Linux", "Mac"],
             translations={"US": "Login", "ES": "Acceso", "FR": "Connexion"},
             icon_light_path=os.path.join(
@@ -169,67 +170,47 @@ class Plugin(BasePlugin):
         self.content_frame.grid(row=1, column=0, sticky="n")
         self.content_frame.grid_columnconfigure(0, weight=1)
 
-        # 1. Shield Logo
-        shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineShield.png"))
+        # 1. Logo
+        logo_path = get_resource_path(
+            os.path.join("resources", "icons", branding.LOGO_MARK))
         try:
-            shield_img = Image.open(shield_path)
-            shield_ctk = customtkinter.CTkImage(shield_img, size=(200, 200))
+            logo_img = Image.open(logo_path)
+            logo_ctk = customtkinter.CTkImage(logo_img, size=(200, 200))
             self.shield_label = customtkinter.CTkLabel(
-                self.content_frame, text="", image=shield_ctk
+                self.content_frame, text="", image=logo_ctk
             )
-            # Smaller shield + tighter padding so the content plus the footer
-            # (Privacy / Terms of Use) fit in the window and the terms text is
-            # visible on open without scrolling.
+            # Tight padding so the content plus the footer fit in the window
+            # without scrolling.
             self.shield_label.grid(row=0, column=0, pady=(0, 16))
         except OSError as e:
-            logger.warning(f"Shield logo load failed: {e}")
+            logger.warning(f"Logo load failed: {e}")
 
         # 2. Main Title
         self.title_label = customtkinter.CTkLabel(
             self.content_frame,
-            text="Sign in with your Resistine account to get started.",
+            text=f"Sign in with your {branding.APP_NAME} account to get started.",
             font=customtkinter.CTkFont(family="Inter", size=16),
             text_color=("#333333", "#FFFFFF"),
         )
         self.title_label.grid(row=1, column=0, pady=(0, 25))
 
-        # Get theme corner radius
         corner_radius = ThemeManager.theme.get("Theme", {}).get("corner_radius", 15)
 
-        # 3. Email Entry (bordered frame wrapper — see _make_bordered_entry)
-        self.email_entry = self._make_bordered_entry(
-            2, "Enter your email address", corner_radius)
-        self.active_input_entry = self.email_entry
-
-        # 4. Sign in Button
-        self.signin_button = customtkinter.CTkButton(
+        # 3. Landing action. The email -> code steps open from here.
+        self.phoenix_signin_button = customtkinter.CTkButton(
             self.content_frame,
-            text="Sign in",
-            command=self.handle_signin_click,
+            text=f"Sign in with {branding.APP_NAME}",
+            command=self._show_email_step,
             width=400,
             height=45,
             corner_radius=corner_radius,
-            fg_color="#0D5394",  # Professional blue
+            fg_color="#0D5394",
             hover_color="#0A4275",
             font=customtkinter.CTkFont(family="Inter", size=16, weight="bold"),
         )
-        self.signin_button.grid(row=3, column=0, pady=(0, 20))
+        self.phoenix_signin_button.grid(row=2, column=0, pady=(0, 20))
 
-        # 5. Create new account link
-        self.create_account_btn = customtkinter.CTkButton(
-            self.content_frame,
-            text="Create new account",
-            fg_color="transparent",
-            hover_color=None,
-            text_color=("#0D5394", "#3a7ebf"),
-            font=customtkinter.CTkFont(family="Inter", size=15, weight="bold"),
-            command=lambda: __import__("webbrowser").open(
-                "https://resistine-main2-v3-33249814.dev.odoo.com/web/signup?redirect=%2Fodoo%3F"
-            ),
-        )
-        self.create_account_btn.grid(row=4, column=0, pady=(0, 40))
-
-        # 6. Status/Error Label (Hidden by default)
+        # 4. Status/Error Label (empty by default)
         self.status_label = customtkinter.CTkLabel(
             self.content_frame,
             text="",
@@ -238,18 +219,21 @@ class Plugin(BasePlugin):
         )
         self.status_label.grid(row=5, column=0)
 
-        # 7. Footer
+        # 5. Footer
         footer_frame = customtkinter.CTkFrame(self.login_frame, fg_color="transparent")
         footer_frame.grid(row=2, column=0, sticky="s", pady=20)
 
-        self.privacy_label = customtkinter.CTkLabel(
+        self.account_label = customtkinter.CTkLabel(
             footer_frame,
-            text="Privacy and Cookies",
-            font=customtkinter.CTkFont(family="Inter", size=12),
+            text=f"Manage your {branding.APP_NAME} account",
+            font=customtkinter.CTkFont(family="Inter", size=12, weight="bold"),
             text_color=("#0D5394", "#3a7ebf"),
             cursor="hand2",
         )
-        self.privacy_label.pack(side="top")
+        self.account_label.pack(side="top")
+        self.account_label.bind(
+            "<Button-1>",
+            lambda _e: __import__("webbrowser").open(branding.ACCOUNT_URL))
 
         self.terms_label = customtkinter.CTkLabel(
             footer_frame,
@@ -259,13 +243,12 @@ class Plugin(BasePlugin):
         )
         self.terms_label.pack(side="top", pady=(5, 0))
 
-        # 8. "Use without an account" button — bottom-right corner so it sits
-        # outside the centered footer block.
+        # 6. Skip — bottom-right corner, outside the centered footer block.
         self.skip_button = customtkinter.CTkButton(
             self.login_frame,
-            text="Use without an account",
+            text="Skip",
             command=self.skip_login,
-            width=220,
+            width=80,
             height=34,
             corner_radius=corner_radius,
             fg_color="transparent",
@@ -278,6 +261,13 @@ class Plugin(BasePlugin):
         self.skip_button.place(relx=0.98, rely=0.98, anchor="se")
 
         return self.login_frame
+
+    def _show_email_step(self):
+        """Swap the landing button for the email entry step."""
+        if (hasattr(self, "phoenix_signin_button")
+                and self.phoenix_signin_button.winfo_exists()):
+            self.phoenix_signin_button.destroy()
+        self.back_to_email()
 
     def skip_login(self):
         """Skip login and go to dashboard."""
@@ -374,7 +364,7 @@ class Plugin(BasePlugin):
 
         # Restore title
         self.title_label.configure(
-            text="Sign in with your Resistine account to get started."
+            text=f"Sign in with your {branding.APP_NAME} account to get started."
         )
 
         # Recreate email entry

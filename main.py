@@ -130,7 +130,7 @@ class App(AppUI):
             self.debug_window = DebugWindow(self)
             self.debug_window.create_debug_window()
 
-        self.title("Resistine")
+        self.title("Phoenix")
         self._set_app_icon()
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
@@ -247,7 +247,7 @@ class App(AppUI):
             logger.warning(f"Failed to initialize system notifications: {e}")
 
         # Linux: self-install a .desktop entry so the dock tile + notifications
-        # show "Resistine" + our icon (not the default Tkinter "Tk"). No-op
+        # show "Phoenix" + our icon (not the default Tkinter "Tk"). No-op
         # elsewhere and on repeat launches. See utils/linux_desktop.py.
         try:
             from utils.linux_desktop import ensure_desktop_entry
@@ -363,7 +363,7 @@ class App(AppUI):
             logger.warning(f"Failed to start system tray: {e}")
 
     def _restore_window(self):
-        """Show and focus the main window (called from tray 'Open Resistine')."""
+        """Show and focus the main window (called from tray 'Open Phoenix')."""
         self.deiconify()
         self.lift()
         self.focus_force()
@@ -435,7 +435,7 @@ if __name__ == "__main__":
 
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
-        description="Resistine Desktop Application",
+        description="Phoenix Desktop Application",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(

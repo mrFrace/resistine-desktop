@@ -103,13 +103,13 @@ class VPNOnboardingScreen:
         # Subtitle
         if self.is_macos:
             subtitle = (
-                "To secure your connection, Resistine needs to install\n"
+                "To secure your connection, Phoenix needs to install\n"
                 "a system network extension. This is a one-time setup\n"
                 "that requires your approval in System Settings."
             )
         else:
             subtitle = (
-                "To secure your connection, Resistine uses WireGuard.\n"
+                "To secure your connection, Phoenix uses WireGuard.\n"
                 "Click below to verify your system is ready."
             )
 
@@ -292,7 +292,7 @@ class VPNOnboardingScreen:
         # Subtitle
         customtkinter.CTkLabel(
             container,
-            text="Your connection is now ready to be secured\nwith Resistine VPN.",
+            text="Your connection is now ready to be secured\nwith Phoenix VPN.",
             font=customtkinter.CTkFont(family="Inter", size=14),
             text_color=("#666666", "#AAAAAA"),
             justify="center",
@@ -432,9 +432,9 @@ class VPNOnboardingScreen:
         return container
 
     def _add_shield_logo(self, parent, row=0, size=120):
-        """Add the Resistine shield logo to the container."""
+        """Add the Phoenix logo to the container."""
         from utils.functions import get_resource_path
-        shield_path = get_resource_path(os.path.join("resources", "icons", "ResistineShield.png"))
+        shield_path = get_resource_path(os.path.join("resources", "icons", "PhoenixMark.png"))
         try:
             shield_img = Image.open(shield_path)
             shield_ctk = customtkinter.CTkImage(shield_img, size=(size, size))

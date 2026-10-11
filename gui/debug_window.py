@@ -15,7 +15,7 @@ class DebugWindow:
     def create_debug_window(self):
         """Create the debug window"""
         self.debug_window = tk.Toplevel(self.parent)
-        self.debug_window.title("Resistine Debug Output")
+        self.debug_window.title("Phoenix Debug Output")
         self.debug_window.geometry("800x600")
 
         # Create text widget WITHOUT scroll

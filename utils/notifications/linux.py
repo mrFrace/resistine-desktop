@@ -110,9 +110,9 @@ def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str):
     #        critical-urgency notifications persist until dismissed.
     msg = new_method_call(
         addr, "Notify", "susssasa{sv}i",
-        ("Resistine", 0, _dbus_icon(icon), title, body, [],
+        ("Phoenix", 0, _dbus_icon(icon), title, body, [],
          # desktop-entry ties the notification to our installed resistine.desktop
-         # (see utils/linux_desktop.py) so GNOME shows "Resistine" + our icon
+         # (see utils/linux_desktop.py) so GNOME shows "Phoenix" + our icon
          # instead of the window's WM_CLASS-derived name.
          {"urgency": ("y", urgency_byte),
           "desktop-entry": ("s", "resistine")}, -1),
@@ -143,7 +143,7 @@ def _send_via_notify_send(title: str, body: str, urgency: str,
         return False
     try:
         subprocess.Popen(
-            ["notify-send", "--app-name=Resistine",
+            ["notify-send", "--app-name=Phoenix",
              f"--urgency={urgency}", "-i", icon, title, body],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

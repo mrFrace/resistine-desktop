@@ -33,7 +33,7 @@ LINUX_PKG_ARCH_MAP_RPM = {
 }
 
 # --- Manager Connection ---
-WAZUH_MANAGER = "dashboard.resisti.net"
+WAZUH_MANAGER = "dashboard.phoenix.exposed"
 WAZUH_MANAGER_PORT = "1514"
 WAZUH_REGISTRATION_PORT = "1515"
 WAZUH_PROTOCOL = "tcp"
@@ -43,7 +43,15 @@ WAZUH_INSTALL_DIR = "/Library/Ossec"
 WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
 WAZUH_ENV_FILE = "/tmp/wazuh_envs"
 
-LINUX_WAZUH_DIR = "/var/ossec"
+LINUX_WAZUH_DIR = "/var/ossec"  # where the app itself installs the agent
+# Where an existing agent is looked for, in order. Anything other than
+# LINUX_WAZUH_DIR is managed outside the app (e.g. a NixOS module).
+LINUX_WAZUH_SEARCH_DIRS = (
+    LINUX_WAZUH_DIR,
+    "/opt/resistine",
+    "/opt/phoenix-agent",
+    "/opt/agent-phoenix",
+)
 
 # --- Windows Config ---
 WINDOWS_WAZUH_VERSION = "4.11.0"

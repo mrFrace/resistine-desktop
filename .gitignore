@@ -169,3 +169,6 @@ LICENSE.txt
 /bom.json
 /bom.xml
 /*.cdx.xml
+
+# Public CA for the Phoenix chat endpoint (no private key)
+!resources/certs/cloudflare-origin-ca.pem

@@ -13,14 +13,22 @@ Licensed under the GNU General Public License v2 or later
 
 import glob
 import os
+import re
 import sys
 
 import customtkinter
 
 from plugins.base_plugin import BasePlugin
-from utils import settings
+from utils import chat_endpoint
+from utils import branding, settings
 from utils.i18n import get_text
 from utils.logger import logger
+
+_TRANSPORT_LABELS = {
+    chat_endpoint.TRANSPORT_OPENAI: "OpenAI API (HTTPS)",
+    chat_endpoint.TRANSPORT_MATRIX: "Matrix (end-to-end encrypted)",
+}
+_MXID_RE = re.compile(r"^@[a-z0-9._=\-/+]+:[A-Za-z0-9.\-]+(:\d+)?$")
 
 
 class Plugin(BasePlugin):
@@ -186,36 +194,84 @@ class Plugin(BasePlugin):
 
         _section_title(api_card, get_text("settings.apikey.label"), 0)
 
-        self.api_key_entry = customtkinter.CTkEntry(
+        # Transport selector: the OpenAI-compatible HTTPS API, or Matrix.
+        customtkinter.CTkLabel(
             api_card,
+            text="Chat transport",
+            font=customtkinter.CTkFont(size=13),
+            text_color=text_secondary,
+        ).grid(row=2, column=0, padx=16, pady=(2, 4), sticky="w")
+
+        self.transport_var = customtkinter.StringVar(
+            value=_TRANSPORT_LABELS[chat_endpoint.get_transport()])
+        customtkinter.CTkOptionMenu(
+            api_card,
+            values=list(_TRANSPORT_LABELS.values()),
+            variable=self.transport_var,
+            command=lambda _v: self._show_transport_fields(),
+            height=36,
+            corner_radius=8,
+        ).grid(row=3, column=0, padx=16, pady=(0, 10), sticky="ew")
+
+        # OpenAI fields
+        self._openai_fields = customtkinter.CTkFrame(api_card, fg_color="transparent")
+        self._openai_fields.grid_columnconfigure(0, weight=1)
+
+        self.api_key_entry = customtkinter.CTkEntry(
+            self._openai_fields,
             placeholder_text=get_text("settings.apikey.placeholder"),
             height=36,
             show="*",
         )
-        self.api_key_entry.grid(row=2, column=0, padx=16, pady=(0, 10), sticky="ew")
+        self.api_key_entry.grid(row=0, column=0, padx=16, pady=(0, 10), sticky="ew")
 
         customtkinter.CTkLabel(
-            api_card,
+            self._openai_fields,
             text=get_text("settings.apibase.label"),
             font=customtkinter.CTkFont(size=13),
             text_color=text_secondary,
-        ).grid(row=3, column=0, padx=16, pady=(2, 4), sticky="w")
+        ).grid(row=1, column=0, padx=16, pady=(2, 4), sticky="w")
 
         self.api_base_entry = customtkinter.CTkEntry(
-            api_card,
+            self._openai_fields,
             placeholder_text=get_text("settings.apibase.placeholder"),
             height=36,
         )
-        self.api_base_entry.grid(row=4, column=0, padx=16, pady=(0, 10), sticky="ew")
+        self.api_base_entry.grid(row=2, column=0, padx=16, pady=(0, 10), sticky="ew")
 
         existing_key = settings.get_secret("chat", "openai_api_key")
         if existing_key:
             self.api_key_entry.insert(0, existing_key)
+        self.api_base_entry.insert(0, chat_endpoint.get_base_url())
 
-        existing_base = settings.get("chat", "openai_base_url")
-        self.api_base_entry.insert(
-            0, existing_base or "http://dashboard.resisti.net:8001/v1",
+        # Matrix fields
+        self._matrix_fields = customtkinter.CTkFrame(api_card, fg_color="transparent")
+        self._matrix_fields.grid_columnconfigure(0, weight=1)
+
+        customtkinter.CTkLabel(
+            self._matrix_fields,
+            text="Assistant Matrix ID",
+            font=customtkinter.CTkFont(size=13),
+            text_color=text_secondary,
+        ).grid(row=0, column=0, padx=16, pady=(2, 4), sticky="w")
+
+        self.assistant_mxid_entry = customtkinter.CTkEntry(
+            self._matrix_fields,
+            placeholder_text=branding.CHAT_DEFAULT_ASSISTANT_MXID,
+            height=36,
         )
+        self.assistant_mxid_entry.grid(row=1, column=0, padx=16, pady=(0, 6), sticky="ew")
+        self.assistant_mxid_entry.insert(0, chat_endpoint.get_assistant_mxid())
+
+        customtkinter.CTkLabel(
+            self._matrix_fields,
+            text=f"Uses your {branding.APP_NAME} account; "
+                 "messages are end-to-end encrypted.",
+            font=customtkinter.CTkFont(size=12),
+            text_color=text_secondary,
+        ).grid(row=2, column=0, padx=16, pady=(0, 6), sticky="w")
+
+        self._show_transport_fields()
 
         # Disable Typing Animation Checkbox
         self.disable_animation_var = customtkinter.BooleanVar(
@@ -320,7 +376,7 @@ class Plugin(BasePlugin):
 
         customtkinter.CTkLabel(
             uninstall_card,
-            text="Permanently remove Resistine and all associated data from this computer.",
+            text="Permanently remove Phoenix and all associated data from this computer.",
             font=customtkinter.CTkFont(size=13),
             text_color=text_secondary,
             wraplength=500,
@@ -335,7 +391,7 @@ class Plugin(BasePlugin):
 
         self.uninstall_button = customtkinter.CTkButton(
             uninstall_card,
-            text="Uninstall Resistine",
+            text="Uninstall Phoenix",
             height=34,
             corner_radius=8,
             fg_color="#DC3545",
@@ -352,21 +408,49 @@ class Plugin(BasePlugin):
         disable = self.disable_animation_var.get()
         settings.set("chat", "disable_animation", disable)
 
+    def _selected_transport(self) -> str:
+        var = getattr(self, "transport_var", None)
+        if var is None:  # card not built
+            return chat_endpoint.TRANSPORT_OPENAI
+        label = var.get()
+        return next((k for k, v in _TRANSPORT_LABELS.items() if v == label),
+                    chat_endpoint.TRANSPORT_OPENAI)
+
+    def _show_transport_fields(self):
+        """Show the field group for the selected transport."""
+        if self._selected_transport() == chat_endpoint.TRANSPORT_MATRIX:
+            self._openai_fields.grid_forget()
+            self._matrix_fields.grid(row=4, column=0, sticky="ew")
+        else:
+            self._matrix_fields.grid_forget()
+            self._openai_fields.grid(row=4, column=0, sticky="ew")
+
     def save_api_key(self):
-        api_key = self.api_key_entry.get().strip()
-        api_base = self.api_base_entry.get().strip()
+        transport = self._selected_transport()
+        if transport == chat_endpoint.TRANSPORT_MATRIX:
+            mxid = self.assistant_mxid_entry.get().strip()
+            if not _MXID_RE.match(mxid):
+                self.status_label.configure(
+                    text="Enter a Matrix ID like @secagent:phoenix.exposed",
+                    text_color="red")
+                return
+            success_key = settings.set("chat", "assistant_mxid", mxid)
+            success_base = settings.set("chat", "transport", transport)
+        else:
+            api_key = self.api_key_entry.get().strip()
+            api_base = self.api_base_entry.get().strip()
 
-        if not api_key and not api_base:
-            return
+            if not api_key and not api_base:
+                return
 
-        success_key = (
-            settings.set_secret("chat", "openai_api_key", api_key)
-            if api_key else True
-        )
-        # Always set/update base_url, even if empty (to allow clearing it)
-        success_base = settings.set(
-            "chat", "openai_base_url", api_base if api_base else None
-        )
+            success_key = (
+                settings.set_secret("chat", "openai_api_key", api_key)
+                if api_key else True
+            )
+            # Always set/update base_url, even if empty (to allow clearing it)
+            success_base = settings.set(
+                "chat", "openai_base_url", api_base if api_base else None
+            ) and settings.set("chat", "transport", transport)
 
         if success_key and success_base:
             self.status_label.configure(
@@ -460,8 +544,8 @@ class Plugin(BasePlugin):
         import tkinter.messagebox
 
         confirmed = tkinter.messagebox.askyesno(
-            "Uninstall Resistine",
-            "Are you sure you want to completely uninstall Resistine?\n\n"
+            "Uninstall Phoenix",
+            "Are you sure you want to completely uninstall Phoenix?\n\n"
             "This will remove all VPN configurations, application data, "
             "and the application itself.\n\n"
             "This action cannot be undone.",
@@ -542,7 +626,7 @@ class Plugin(BasePlugin):
             "this device.\n\n"
             "An administrator password may be required to fully uninstall "
             "the Wazuh agent.\n\n"
-            "You will need to sign in again to use Resistine.",
+            "You will need to sign in again to use Phoenix.",
         )
         if not confirmed:
             return

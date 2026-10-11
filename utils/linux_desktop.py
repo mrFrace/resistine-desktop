@@ -49,8 +49,8 @@ def _desktop_contents() -> str:
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        "Name=Resistine\n"
-        "Comment=Resistine Security Desktop\n"
+        "Name=Phoenix\n"
+        "Comment=Phoenix Security Desktop\n"
         f"Exec={_exec_command()}\n"
         f"Icon={_icon()}\n"
         "Terminal=false\n"

@@ -1,9 +1,10 @@
-"""Resistine AI Chat plugin."""
+"""Phoenix AI Chat plugin."""
 from __future__ import annotations
 
 import os
 
 from plugins.base_plugin import BasePlugin
+from utils import chat_endpoint as endpoint
 from plugins.chat.bubble import BubbleRow
 from plugins.chat.chat_ui import ChatUIMixin
 from plugins.chat.fonts import RESISTINE_BLUE, _is_dark_mode
@@ -15,7 +16,6 @@ from utils.logger import logger
 _SYSTEM_PROMPT = "You are SOC Copilot specialized in cybersecurity."
 _ICON_DIR = os.path.dirname(os.path.realpath(__file__))
 _SYS_MSG = {"role": "system", "content": _SYSTEM_PROMPT}
-_DEFAULT_BASE_URL = "http://dashboard.resisti.net:8001/v1"
 
 # Canned assistant message when the user navigates away from a chat
 # (switch chat, + New, delete, leave plugin) while a response is still
@@ -86,9 +86,8 @@ class Plugin(ChatUIMixin, BasePlugin):
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the OpenAI client from the current settings."""
         api_key = settings.get_secret("chat", "openai_api_key")
-        self.base_url = (
-            settings.get("chat", "openai_base_url") or _DEFAULT_BASE_URL
-        )
+        self.transport = endpoint.get_transport()
+        self.base_url = endpoint.get_base_url()
         self.session_id = None
         if self.base_url:
             self.model, self.conversation_history = "ministral-3:14b", []
@@ -102,6 +101,7 @@ class Plugin(ChatUIMixin, BasePlugin):
             kwargs: dict = {"api_key": api_key or "unused"}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
+                kwargs["http_client"] = endpoint.make_http_client(self.base_url)
             from openai import OpenAI
             self.client = OpenAI(**kwargs)
         except Exception as e:
@@ -310,6 +310,12 @@ class Plugin(ChatUIMixin, BasePlugin):
             return
         if self._stream_ctrl and self._stream_ctrl.is_active:
             self._stop_streaming()
+            return
+        if self.transport == endpoint.TRANSPORT_MATRIX:
+            self.app.show_notification(
+                "Matrix chat isn't available in this build yet. "
+                "Switch Chat transport to OpenAI API in Settings.",
+                type="warning")
             return
         self._ensure_session()
         if self._welcome_frame is not None:

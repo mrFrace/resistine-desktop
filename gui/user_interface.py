@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 from gui.notifications import ToastNotification
 from utils.logger import logger
-from utils.svg_loader import load_svg_as_ctk_image
+from utils import branding
 from utils.functions import get_resource_path
 
 
@@ -635,72 +635,26 @@ class AppUI(customtkinter.CTk):
         self.grid_columnconfigure(0, minsize=250)
         self.navigation_frame.grid_columnconfigure(0, weight=1)
 
-        # Logo
-        # Try SVG first
+        # Logo: Phoenix mark + product name
         logo_image = None
-        
-        # Path to SVG in resources/icons
-        svg_path = get_resource_path(os.path.join("resources", "icons", "ResistineLogo.svg"))
-        
-        # Fallback path to PNG in root
-        png_path = get_resource_path(os.path.join("resources", "icons", "ResistineLogoWhiteText.png"))
-
-        max_width = 226  # sidebar(250) - button padx*2(12*2)
-        # Assuming a standard aspect ratio if we can't determine it easily from SVG without loading
-        # For the SVG, let's assume a reasonable height or let the loader handle it if we pass a size.
-        # But we need a size for CTkImage. 
-        # Let's try to load the SVG with a fixed width and calculate height based on a standard logo ratio?
-        # Or just use the loader.
-        
-        if os.path.exists(svg_path):
+        mark_path = get_resource_path(
+            os.path.join("resources", "icons", branding.LOGO_MARK))
+        if os.path.exists(mark_path):
             try:
-                # We don't know the aspect ratio of the SVG readily without parsing it.
-                # However, we can just pick a reasonable height or ask the loader to respect the viewbox?
-                # Our loader takes a size tuple.
-                # Let's guess a ratio or try to read it.
-                # Actually, standard logo is usually wider. Let's try 226x50 approx?
-                # Better: load it with cairosvg and get dimensions? 
-                # Our loader returns a CTkImage. CTkImage needs a size.
-                # If we pass None to size in our loader, it uses the image size.
-                # So let's try loading it without size first to get the aspect ratio, then resize?
-                # Or just hardcode a reasonable size for the sidebar.
-                target_width = 226
-                # approximate height for typical logo
-                target_height = 55 
-                
-                logo_image = load_svg_as_ctk_image(svg_path, size=(target_width, target_height))
-            except Exception as e:
-                logger.error(f"Error loading SVG logo: {e}")
-
-        # If SVG failed or didn't exist, try PNG
-        if not logo_image and os.path.exists(png_path):
-            try:
-                logo_img = Image.open(png_path)
-                aspect_ratio = logo_img.height / logo_img.width if logo_img.width else 1
-                logo_height = int(max_width * aspect_ratio)
-                logo_img = logo_img.resize(
-                    (max_width, logo_height), Image.Resampling.LANCZOS
-                )
-
+                mark = Image.open(mark_path)
                 logo_image = customtkinter.CTkImage(
-                    light_image=logo_img,
-                    dark_image=logo_img,
-                    size=(max_width, logo_height),
-                )
+                    light_image=mark, dark_image=mark, size=(40, 40))
             except Exception as e:
-                logger.error(f"Error loading PNG logo: {e}")
+                logger.error(f"Error loading logo: {e}")
 
         self.navigation_frame_label = customtkinter.CTkLabel(
             self.navigation_frame,
-            text="" if logo_image else "Resistine",
+            text=f"  {branding.APP_NAME}",
             image=logo_image,
             compound="left",
-            font=(
-                customtkinter.CTkFont(size=18, weight="bold")
-                if not logo_image
-                else None
-            ),
-            text_color=sidebar_text_color if not logo_image else None,
+            anchor="w",
+            font=customtkinter.CTkFont(family="Inter", size=20, weight="bold"),
+            text_color=sidebar_text_color,
         )
         self.navigation_frame_label.grid(
             row=0, column=0, padx=12, pady=(20, 8), sticky="ew"

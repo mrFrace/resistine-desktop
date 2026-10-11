@@ -40,9 +40,9 @@ def prompt_move_to_applications() -> str:
     from utils.functions import move_to_applications
 
     choice = _osascript_dialog(
-        title="Resistine",
+        title="Phoenix",
         message=(
-            "Resistine is running from the installer disk image.\n\n"
+            "Phoenix is running from the installer disk image.\n\n"
             "To use all features (background services, auto-updates), "
             "it must be in your Applications folder.\n\n"
             "Move it now?"
@@ -58,7 +58,7 @@ def prompt_move_to_applications() -> str:
             return "moved"
         # Move failed — tell the user to do it manually
         _osascript_dialog(
-            title="Resistine",
+            title="Phoenix",
             message=(
                 "Could not move automatically.\n\n"
                 "Please drag Resistine.app to your Applications "
