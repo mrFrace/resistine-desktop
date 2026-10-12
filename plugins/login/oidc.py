@@ -24,7 +24,6 @@ import html
 import http.server
 import platform
 import secrets
-import subprocess
 import threading
 import time
 import urllib.parse
@@ -46,7 +45,6 @@ _AUTH_NS = "auth"      # per-session, wiped on logout
 _OIDC_NS = "oidc"      # per-install (client registration, device id)
 _TIMEOUT = 15
 _LOGIN_TIMEOUT = 300   # seconds the browser flow may take
-_DEVICE_SALT = b"phoenix-desktop-device-v1"
 
 
 class OIDCError(Exception):
@@ -148,48 +146,21 @@ def get_client_id(meta: dict, http: Optional[requests.Session] = None) -> str:
 # Device identity (one Matrix device per install)
 # --------------------------------------------------------------------------
 
-def _hardware_id() -> Optional[str]:
-    system = platform.system()
-    try:
-        if system == "Linux":
-            for path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
-                try:
-                    with open(path, encoding="utf-8") as f:
-                        value = f.read().strip()
-                    if value:
-                        return value
-                except OSError:
-                    pass
-        elif system == "Darwin":
-            out = subprocess.run(  # nosec B603 B607 - fixed argv
-                ["ioreg", "-rd1", "-c", "IOPlatformExpertDevice"],
-                capture_output=True, text=True, timeout=5).stdout
-            for line in out.splitlines():
-                if "IOPlatformUUID" in line:
-                    return line.split("=", 1)[1].strip().strip('"')
-        elif system == "Windows":
-            import winreg
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SOFTWARE\Microsoft\Cryptography") as k:
-                return winreg.QueryValueEx(k, "MachineGuid")[0]
-    except Exception as e:  # noqa: BLE001
-        logger.debug(f"[OIDC] hardware id unavailable: {e}")
-    return None
-
-
 def get_device_id() -> str:
-    """Stable Matrix device ID for this install: ``PHX_`` + 16 base32 chars.
+    """Matrix device ID for this install: ``PHX_`` + 16 random base32 chars.
 
-    Derived from a hash of the hardware ID (never sent raw), so a reinstall
-    on the same machine resumes the same device. Random if no ID is readable.
+    Random, generated once and kept in the config dir next to matrix-store.
+    It used to be a hash of the hardware ID, which made a reinstall or a
+    wiped config sign in as the SAME device with NEW encryption keys. Other
+    clients then fail on that device: messages to it could not be decrypted
+    (seen live 2026-10-12 with PHX_NBZK6DHPKKUEAQLA). A fresh install now
+    gets a fresh device; the old one is a stale session to remove in
+    Element → Sessions.
     """
     cached = settings.get(_OIDC_NS, "device_id")
     if cached:
         return cached
-    hw = _hardware_id()
-    seed = hw.encode() if hw else secrets.token_bytes(32)
-    digest = hashlib.sha256(_DEVICE_SALT + seed).digest()
-    device_id = "PHX_" + base64.b32encode(digest).decode().rstrip("=")[:16]
+    device_id = "PHX_" + base64.b32encode(secrets.token_bytes(10)).decode().rstrip("=")[:16]
     settings.set(_OIDC_NS, "device_id", device_id)
     return device_id
 

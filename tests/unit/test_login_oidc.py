@@ -83,22 +83,17 @@ def _token_body(access="AT", refresh="RT", expires_in=300):
 
 
 class TestDeviceId:
-    def test_format_and_stable(self, isolated_settings, monkeypatch):
-        monkeypatch.setattr(oidc, "_hardware_id", lambda: "machine-1")
+    def test_format_and_stable(self, isolated_settings):
         a = oidc.get_device_id()
         assert a.startswith("PHX_") and len(a) == 20
         assert a[4:].isalnum() and a[4:].isupper()
-        isolated_settings.delete("oidc", "device_id")
-        assert oidc.get_device_id() == a  # same hardware -> same device
+        assert oidc.get_device_id() == a  # persisted for this install
 
-    def test_hardware_id_not_sent_raw(self, isolated_settings, monkeypatch):
-        monkeypatch.setattr(oidc, "_hardware_id", lambda: "machine-1")
-        assert "machine-1" not in oidc.get_device_id()
-
-    def test_random_fallback_is_persisted(self, isolated_settings, monkeypatch):
-        monkeypatch.setattr(oidc, "_hardware_id", lambda: None)
+    def test_a_wiped_config_gets_a_NEW_device(self, isolated_settings):
+        """Reusing the old ID with a new key store is what broke decryption."""
         a = oidc.get_device_id()
-        assert oidc.get_device_id() == a
+        isolated_settings.delete("oidc", "device_id")
+        assert oidc.get_device_id() != a
 
 
 class TestClientRegistration:
