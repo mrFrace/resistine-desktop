@@ -22,14 +22,13 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
-    QMenu,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
     QWidget,
 )
 
 from gui import theme
+from gui.page_kit import SlideStack
 from plugins.antivirus import clamav
 from plugins.base_plugin import BasePlugin
 from utils import settings
@@ -383,7 +382,7 @@ class Plugin(BasePlugin):
         self._destroyed = False
         self._current_view = "main"
 
-        self._view_stack = QStackedWidget()
+        self._view_stack = SlideStack(fit_height=False)
         self._main_view = qt_ui.build_main_view(self).widget
         self._view_stack.addWidget(self._main_view)
         # Settings view: built eagerly but only shown on gear click.
@@ -479,7 +478,7 @@ class Plugin(BasePlugin):
     def _show_settings_view(self):
         if self._current_view == "settings":
             return
-        self._view_stack.setCurrentWidget(self._settings_view)
+        self._view_stack.push(self._settings_view)
         self._current_view = "settings"
         self.app.after(20, self._refresh_whitelist)
         self.app.after(40, self._refresh_exclusions)
@@ -490,7 +489,7 @@ class Plugin(BasePlugin):
     def _show_main_view(self):
         if self._current_view == "main":
             return
-        self._view_stack.setCurrentWidget(self._main_view)
+        self._view_stack.back(self._main_view)
         self._current_view = "main"
 
     # ── Realtime status handling ─────────────────────────────
@@ -1008,7 +1007,7 @@ class Plugin(BasePlugin):
 
     def _set_scan_buttons_state(self, state: str):
         enabled = state == "normal"
-        for key in ("scan", "scan_computer"):
+        for key in ("scan", "scan_computer", "scan_files", "scan_folder"):
             btn = self._action_buttons.get(key)
             if btn is not None:
                 try:
@@ -1193,7 +1192,10 @@ class Plugin(BasePlugin):
     def _on_action(self, action_key: str):
         logger.info(f"Antivirus: action triggered — {action_key}")
         actions = {
-            "scan": self._start_scan,
+            "scan": self._show_scan_choices,
+            "scan_files": lambda: self._choose_and_scan("files"),
+            "scan_folder": lambda: self._choose_and_scan("folder"),
+            "scan_back": self._hide_scan_choices,
             "scan_computer": self._start_computer_scan,
             "update_sigs": self._start_sig_update,
             "whitelist_add": self._add_whitelist_entry,
@@ -1204,39 +1206,42 @@ class Plugin(BasePlugin):
 
     # ── File / Directory Scan ─────────────────────────────────
 
-    def _pick_scan_targets(self) -> list[str]:
-        """Pick files or a folder to scan via Qt dialogs.
+    def _show_scan_choices(self):
+        """Slide the action rows over to the files / folder choice."""
+        stack = getattr(self, "_scan_actions", None)
+        if stack is not None and not self._scanning:
+            stack.push(self._scan_actions_choices)
 
-        A small menu on the Scan… button makes the folder option explicit —
-        the old flow only reached the folder dialog after CANCELLING the
-        file dialog, which nobody discovers.
-        """
-        menu = QMenu(self.app)
-        act_files = menu.addAction("Scan Files…")
-        act_folder = menu.addAction("Scan Folder…")
-        btn = getattr(self, "_action_buttons", {}).get("scan")
-        if btn is not None:
-            pos = btn.mapToGlobal(btn.rect().bottomLeft())
-        else:  # fallback: at the cursor
-            from PyQt6.QtGui import QCursor
-            pos = QCursor.pos()
-        chosen = menu.exec(pos)
-        if chosen is act_files:
-            files, _ = QFileDialog.getOpenFileNames(
-                None,  # no parent: movable panel, not a fixed macOS sheet
-                "Select Files to Scan")
-            return list(files)
-        if chosen is act_folder:
+    def _hide_scan_choices(self):
+        stack = getattr(self, "_scan_actions", None)
+        if stack is not None:
+            try:
+                stack.back(self._scan_actions_main)
+            except RuntimeError:  # screen rebuilt
+                pass
+
+    def _choose_and_scan(self, kind: str):
+        # Slide back first so the main rows are in place once the picker
+        # closes (whether or not something was chosen).
+        self._hide_scan_choices()
+        self._start_scan(kind)
+
+    def _pick_scan_targets(self, kind: str = "files") -> list[str]:
+        """Pick files (``kind="files"``) or a folder to scan."""
+        if kind == "folder":
             directory = QFileDialog.getExistingDirectory(
                 None,  # no parent: movable panel, not a fixed macOS sheet
                 "Select Folder to Scan")
             return [directory] if directory else []
-        return []
+        files, _ = QFileDialog.getOpenFileNames(
+            None,  # no parent: movable panel, not a fixed macOS sheet
+            "Select Files to Scan")
+        return list(files)
 
-    def _start_scan(self):
+    def _start_scan(self, kind: str = "files"):
         if self._scanning:
             return
-        paths = self._pick_scan_targets()
+        paths = self._pick_scan_targets(kind)
         if not paths:
             return
         targets = []

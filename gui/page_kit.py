@@ -8,7 +8,8 @@ No nested cards. A screen is a left-aligned column with even margins:
 * label/value rows split by hairlines (:class:`KVList`) and settings rows
   (:class:`SettingRow`) inside a :class:`RowList`;
 * actions as :class:`MenuRow` — flat rows styled like the sidebar items
-  (icon tile, title, hint, chevron) that highlight on hover.
+  (icon tile, title, hint, chevron) that highlight on hover; a row that
+  opens more choices swaps its list in place via :class:`SlideStack`.
 
 Icons are Lucide line icons in ``resources/icons/ui`` (:func:`line_icon`).
 The QSS for the object names used here lives in ``gui/theme.py``.
@@ -22,14 +23,26 @@ from __future__ import annotations
 
 import os
 
-from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import (
+    QByteArray,
+    QEasingCurve,
+    QParallelAnimationGroup,
+    QPoint,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    pyqtSignal,
+)
 from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -94,6 +107,21 @@ def hairline() -> QFrame:
     d.setObjectName("Divider")
     d.setFixedHeight(1)
     return d
+
+
+def back_link(text: str, on_click) -> QWidget:
+    """A "‹ Parent" link above a sub-view's header."""
+    row = QWidget()
+    row.setObjectName("Transparent")
+    h = QHBoxLayout(row)
+    h.setContentsMargins(0, 0, 0, 6)
+    btn = QPushButton(f"‹  {text}")
+    btn.setObjectName("Link")
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.clicked.connect(on_click)
+    h.addWidget(btn)
+    h.addStretch(1)
+    return row
 
 
 def muted(text: str, wrap: bool = True) -> QLabel:
@@ -283,7 +311,9 @@ class MenuRow(QFrame):
         self.setObjectName("MenuRow")
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # Tab focus only: a clicked row must not keep the focus highlight
+        # (it read as a second "hovered" row).
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
         self._icon_name = icon
@@ -397,3 +427,110 @@ class SettingRow(QWidget):
     def set_hint(self, text: str) -> None:
         self.hint.setText(text)
         self.hint.setVisible(bool(text))
+
+
+def menu_list(*rows: QWidget) -> QWidget:
+    """A plain vertical stack of rows (one page of a :class:`SlideStack`)."""
+    page = QWidget()
+    page.setObjectName("Transparent")
+    lay = QVBoxLayout(page)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(0)
+    for row in rows:
+        lay.addWidget(row)
+    lay.addStretch(1)
+    return page
+
+
+class SlideStack(QStackedWidget):
+    """Pages that swap with a short slide + fade: going deeper
+    (:meth:`push`) moves the current page out to the left and the new one in
+    from the right; :meth:`back` reverses it.
+
+    With ``fit_height`` (default) the stack is as tall as its current page —
+    for a few menu rows inside a page. Pass ``fit_height=False`` when the
+    pages are whole scrolling screens (a sub-view such as settings)."""
+
+    DURATION_MS = 220
+    SHIFT = 0.25  # fraction of the width a page travels while fading
+
+    def __init__(self, fit_height: bool = True):
+        super().__init__()
+        self.setObjectName("Transparent")
+        self._anim: QParallelAnimationGroup | None = None
+        self._fit = fit_height
+        if fit_height:
+            self.currentChanged.connect(lambda _i: self._fit_height())
+
+    # QStackedWidget reserves the tallest page's minimum height (word-wrapped
+    # hints at minimum width), leaving a gap under short pages. Pin the
+    # height to the current page at the current width instead.
+    def _fit_height(self) -> None:
+        page = self.currentWidget()
+        if page is None:
+            return
+        h = (page.heightForWidth(self.width()) if page.hasHeightForWidth()
+             else -1)
+        if h <= 0:
+            h = page.sizeHint().height()
+        if h != self.height() or self.minimumHeight() != h:
+            self.setFixedHeight(h)
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        if self._fit:
+            self._fit_height()
+
+    def push(self, page: QWidget) -> None:
+        self._slide_to(page, forward=True)
+
+    def back(self, page: QWidget | None = None) -> None:
+        self._slide_to(page if page is not None else self.widget(0),
+                       forward=False)
+
+    def _slide_to(self, page: QWidget, forward: bool) -> None:
+        if self._anim is not None:
+            self._anim.stop()
+            self._finish()
+        old = self.currentWidget()
+        if page is old or old is None:
+            self.setCurrentWidget(page)
+            return
+        shift = int(self.width() * self.SHIFT) * (1 if forward else -1)
+        page.setGeometry(old.geometry())
+        page.move(shift, 0)
+        page.show()
+        page.raise_()
+        group = QParallelAnimationGroup(self)
+        for widget, start, end, fade in ((old, QPoint(0, 0),
+                                          QPoint(-shift, 0), (1.0, 0.0)),
+                                         (page, QPoint(shift, 0),
+                                          QPoint(0, 0), (0.0, 1.0))):
+            effect = QGraphicsOpacityEffect(widget)
+            widget.setGraphicsEffect(effect)
+            for target, prop, a, b in ((widget, b"pos", start, end),
+                                       (effect, b"opacity", *fade)):
+                anim = QPropertyAnimation(target, prop, group)
+                anim.setDuration(self.DURATION_MS)
+                anim.setStartValue(a)
+                anim.setEndValue(b)
+                anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                group.addAnimation(anim)
+        self._anim_pages = (old, page)
+        group.finished.connect(self._finish)
+        self._anim = group
+        group.start()
+
+    def _finish(self) -> None:
+        old, page = getattr(self, "_anim_pages", (None, None))
+        self._anim = None
+        self._anim_pages = (None, None)
+        if page is None:
+            return
+        for widget in (old, page):
+            try:
+                widget.setGraphicsEffect(None)
+                widget.move(0, 0)
+            except RuntimeError:  # page deleted mid-animation
+                pass
+        self.setCurrentWidget(page)

@@ -30,7 +30,10 @@ from gui.page_kit import (
     PageHeader,
     RowList,
     SettingRow,
+    SlideStack,
+    back_link,
     icon_button,
+    menu_list,
 )
 from gui.page_kit import muted as _muted
 from gui.toggle import ToggleSwitch
@@ -93,19 +96,38 @@ def set_status_pill(header: PageHeader, kind: str, text: str) -> None:
 
 
 def build_scan_card(plugin, page: Page) -> None:
+    """Action rows. "Scan files or a folder…" slides in a second list
+    (files / folder / back) in place of a popup menu."""
     page.section("Actions")
-    for key, icon, title, hint in (
-        ("scan", "folder-search", "Scan files or a folder…",
-         "Pick what to check"),
-        ("scan_computer", "monitor", "Scan computer",
-         "Full scan of your home folder"),
-        ("update_sigs", "refresh-cw", "Update signatures",
-         "Download the latest malware definitions"),
-    ):
-        row = MenuRow(icon, title, hint)
-        row.clicked.connect(lambda k=key: plugin._on_action(k))
-        page.add(row)
-        plugin._action_buttons[key] = row
+
+    def row(key, icon, title, hint, chevron=True):
+        r = MenuRow(icon, title, hint, chevron=chevron)
+        r.clicked.connect(lambda k=key: plugin._on_action(k))
+        plugin._action_buttons[key] = r
+        return r
+
+    main = menu_list(
+        row("scan", "folder-search", "Scan files or a folder…",
+            "Pick what to check"),
+        row("scan_computer", "monitor", "Scan computer",
+            "Full scan of your home folder"),
+        row("update_sigs", "refresh-cw", "Update signatures",
+            "Download the latest malware definitions"),
+    )
+    choices = menu_list(
+        row("scan_files", "file-text", "Scan files…",
+            "Choose one or more files"),
+        row("scan_folder", "folder-search", "Scan folder…",
+            "Choose a folder; everything inside is checked"),
+        row("scan_back", "chevron-left", "Back", "Other actions",
+            chevron=False),
+    )
+    plugin._scan_actions = SlideStack()
+    plugin._scan_actions.addWidget(main)
+    plugin._scan_actions.addWidget(choices)
+    plugin._scan_actions_main = main
+    plugin._scan_actions_choices = choices
+    page.add(plugin._scan_actions)
 
 
 def build_scan_activity(plugin, page: Page) -> None:
@@ -184,13 +206,7 @@ def build_main_view(plugin) -> Page:
 
 
 def build_settings_header(plugin, page: Page) -> None:
-    back = QPushButton("‹  Antivirus")
-    back.setObjectName("Link")
-    back.setCursor(Qt.CursorShape.PointingHandCursor)
-    back.clicked.connect(plugin._show_main_view)
-    page.add(back).setSizePolicy(back.sizePolicy().horizontalPolicy().Maximum,
-                                 back.sizePolicy().verticalPolicy())
-    page.spacing(6)
+    page.add(back_link("Antivirus", plugin._show_main_view))
     page.add(PageHeader("Settings", "Signature updates, exclusions and "
                         "forwarding for the antivirus"))
 

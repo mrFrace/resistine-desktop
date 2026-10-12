@@ -28,17 +28,22 @@ import threading
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QComboBox,
-    QDialogButtonBox,
     QFileDialog,
-    QLabel,
-    QPlainTextEdit,
-    QPushButton,
-    QVBoxLayout,
+    QWidget,
 )
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from gui.page_kit import KVList, MenuRow, Page, PageHeader, RowList, SettingRow
+from gui.page_kit import (
+    KVList,
+    MenuRow,
+    Page,
+    PageHeader,
+    RowList,
+    SettingRow,
+    SlideStack,
+    back_link,
+)
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
@@ -48,9 +53,6 @@ _PLATFORM = platform.system()
 IS_MACOS = _PLATFORM == "Darwin"
 IS_WINDOWS = _PLATFORM == "Windows"
 IS_LINUX = _PLATFORM == "Linux"
-
-# Consolas is more compact and better hinted on Windows than Courier New
-_MONO_FONT = "Consolas" if IS_WINDOWS else "Courier New"
 
 # --- Platform Specific Imports (guarded so the module imports on any OS) ---
 # Only the current platform's backend is loaded at top level; the import is
@@ -687,7 +689,7 @@ class Plugin(BasePlugin):
         if selected_conf_file:
             page.add(MenuRow(
                 "file-text", "View config", f"{selected_conf_file}.conf",
-                lambda: self._show_config_dialog(selected_conf_file)))
+                lambda: self._show_config_view(selected_conf_file)))
             if len(configs) > 1 and not self.config_manager.is_resistine_config(
                 selected_conf_file
             ):
@@ -698,7 +700,13 @@ class Plugin(BasePlugin):
                     danger=True))
         page.stretch()
 
-        self.main_container = page.widget
+        # The page sits in a slide stack so "View config" can slide in as a
+        # sub-view (and the poll's live-screen check still matches).
+        self._views = SlideStack(fit_height=False)
+        self._views.addWidget(page.widget)
+        self._main_view = page.widget
+        self._config_view = None
+        self.main_container = self._views
 
         # Start the re-arming status poll.
         self._start_polling()
@@ -1009,12 +1017,28 @@ class Plugin(BasePlugin):
         self.update_plugin(self.id)
 
     # ===================================================================
-    #  View config dialog
+    #  View config (sub-view)
     # ===================================================================
-    def _show_config_dialog(self, tunnel_name):
-        """Open a modal dialog showing the config file with a copy button."""
-        from PyQt6.QtWidgets import QDialog
+    _SECRET_KEYS = ("PrivateKey", "PresharedKey")
 
+    @staticmethod
+    def _parse_conf(content: str) -> list[tuple[str, list[tuple[str, str]]]]:
+        """[(section, [(key, value), ...]), ...] from a WireGuard .conf."""
+        sections: list[tuple[str, list[tuple[str, str]]]] = []
+        for raw in content.splitlines():
+            line = raw.strip()
+            if not line or line.startswith(("#", ";")):
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                sections.append((line[1:-1].strip(), []))
+            elif "=" in line and sections:
+                key, value = line.split("=", 1)
+                sections[-1][1].append((key.strip(), value.strip()))
+        return sections
+
+    def _show_config_view(self, tunnel_name):
+        """Slide in the config file as label/value rows (keys hidden until
+        asked for), with a copy action — in place of a popup."""
         try:
             conf_file_path = _conf_path(tunnel_name)
         except ValueError as e:
@@ -1024,58 +1048,82 @@ class Plugin(BasePlugin):
         if not os.path.exists(conf_file_path):
             self.app.show_notification("Config file not found", type="error")
             return
-
         with open(conf_file_path, "r", encoding="utf-8") as f:
             content = f.read()
 
-        dialog = QDialog(self.app)
-        dialog.setWindowTitle(f"{tunnel_name}.conf")
-        dialog.resize(520, 440)
-        dialog.setModal(True)
-        lay = QVBoxLayout(dialog)
-        lay.setContentsMargins(20, 15, 20, 20)
-        lay.setSpacing(8)
+        views = getattr(self, "_views", None)
+        if views is None:
+            return
+        old = self._config_view
+        if old is not None:
+            views.removeWidget(old)
+            old.deleteLater()
+        self._config_view = self._build_config_view(tunnel_name, content)
+        views.addWidget(self._config_view)
+        views.push(self._config_view)
 
-        title_label = QLabel(f"{tunnel_name}.conf")
-        title_label.setStyleSheet("font-size: 14px; font-weight: 700;")
-        lay.addWidget(title_label)
+    def _hide_config_view(self):
+        views = getattr(self, "_views", None)
+        if views is not None:
+            views.back(self._main_view)
 
-        textbox = QPlainTextEdit()
-        textbox.setReadOnly(True)
-        textbox.setPlainText(content)
-        textbox.setStyleSheet(
-            f'font-family: "{_MONO_FONT}", monospace; font-size: 12px;'
-        )
-        lay.addWidget(textbox, 1)
+    def _build_config_view(self, tunnel_name: str, content: str) -> QWidget:
+        page = Page()
+        page.add(back_link("VPN", self._hide_config_view))
+        page.add(PageHeader(f"{tunnel_name}.conf",
+                            "WireGuard configuration on this device"))
 
-        copy_btn = QPushButton("Copy to Clipboard")
-        copy_btn.setMinimumHeight(36)
+        hidden = "•" * 16
+        secret_rows: list[tuple[KVList, str, str]] = []
+        for section, pairs in self._parse_conf(content):
+            page.section(section)
+            kv = KVList()
+            for key, value in pairs:
+                secret = key in self._SECRET_KEYS
+                kv.add(key, hidden if secret else value)
+                if secret:
+                    secret_rows.append((kv, key, value))
+            page.add(kv)
 
-        def _reset_copy_label():
-            # Fires 2s later; the dialog (and this button) may be closed by
-            # then, leaving a deleted C++ object — setText would raise.
+        page.section("Actions")
+        if secret_rows:
+            show = ToggleSwitch()
+
+            def _reveal(on):
+                for kv, key, value in secret_rows:
+                    kv.set_value(key, value if on else hidden)
+
+            show.toggled.connect(_reveal)
+            rows = RowList()
+            rows.add_row(SettingRow(
+                "Show private keys",
+                "Private and preshared keys are hidden by default", show))
+            page.add(rows)
+            page.spacing(6)
+            self._config_reveal = show
+
+        copy_hint = "The whole file, including private keys"
+        copy = MenuRow("copy", "Copy to clipboard", copy_hint, chevron=False)
+
+        def _reset_hint():
+            # Fires 2s later; the view may have been rebuilt by then.
             try:
-                copy_btn.setText("Copy to Clipboard")
+                copy.set_hint(copy_hint)
             except RuntimeError:
                 pass
 
-        def copy_to_clipboard():
+        def _copy():
             clip = QGuiApplication.clipboard()
             if clip is not None:
                 clip.setText(content)
-            copy_btn.setText("Copied!")
-            self.app.after(2000, _reset_copy_label)
+            copy.set_hint("Copied")
+            self.app.after(2000, _reset_hint)
 
-        copy_btn.clicked.connect(copy_to_clipboard)
-        lay.addWidget(copy_btn)
-
-        # Esc / close support
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        bb.rejected.connect(dialog.reject)
-        bb.accepted.connect(dialog.accept)
-        lay.addWidget(bb)
-
-        dialog.exec()
+        copy.clicked.connect(_copy)
+        page.add(copy)
+        self._config_copy = copy
+        page.stretch()
+        return page.widget
 
     # ===================================================================
     #  Status polling (re-arming app.after; worker thread does the blocking work)

@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QStackedWidget,
     QWidget,
 )
 
@@ -99,13 +98,23 @@ class TestCheckStatus:
 class TestOnAction:
     def test_routes_known_actions(self, plugin):
         for action_key, method in (
-            ("scan", "_start_scan"),
+            ("scan", "_show_scan_choices"),
+            ("scan_back", "_hide_scan_choices"),
             ("update_sigs", "_start_sig_update"),
             ("whitelist_add", "_add_whitelist_entry"),
         ):
             with patch.object(plugin, method) as mock_handler:
                 plugin._on_action(action_key)
                 mock_handler.assert_called_once()
+
+    @pytest.mark.parametrize("key, kind", [("scan_files", "files"),
+                                           ("scan_folder", "folder")])
+    def test_scan_choice_slides_back_then_scans(self, plugin, key, kind):
+        with patch.object(plugin, "_hide_scan_choices") as hide, \
+             patch.object(plugin, "_start_scan") as start:
+            plugin._on_action(key)
+        hide.assert_called_once()
+        start.assert_called_once_with(kind)
 
     def test_unknown_action_no_crash(self, plugin):
         # Should silently ignore unknown actions
@@ -580,7 +589,8 @@ class TestSetScanButtonsState:
 @pytest.mark.unit
 class TestViewSwitching:
     def test_view_swap_switches_stacked_page(self, plugin):
-        plugin._view_stack = QStackedWidget()
+        from gui.page_kit import SlideStack
+        plugin._view_stack = SlideStack(fit_height=False)
         plugin._main_view = QWidget()
         plugin._settings_view = QWidget()
         plugin._view_stack.addWidget(plugin._main_view)
@@ -591,6 +601,7 @@ class TestViewSwitching:
 
         plugin._show_settings_view()
         assert plugin._current_view == "settings"
+        plugin._view_stack._anim.setCurrentTime(SlideStack.DURATION_MS)
         assert plugin._view_stack.currentWidget() is plugin._settings_view
         # Settings lists + SIEM switch are refreshed (deferred via app.after).
         scheduled = [c.args[1] for c in plugin.app.after.call_args_list]
@@ -605,6 +616,7 @@ class TestViewSwitching:
 
         plugin._show_main_view()
         assert plugin._current_view == "main"
+        plugin._view_stack._anim.setCurrentTime(SlideStack.DURATION_MS)
         assert plugin._view_stack.currentWidget() is plugin._main_view
 
 
@@ -664,3 +676,54 @@ class TestListRows:
                 "extensions": [".iso", ".vmdk"], "max_size_mb": 0}
             plugin._refresh_exclusions()
         assert self._texts(lay) == [".iso", ".vmdk"]
+
+
+
+@pytest.mark.unit
+class TestScanChoices:
+    def test_pick_files_and_folder_dialogs(self, plugin):
+        with patch("plugins.antivirus.main.QFileDialog") as dlg:
+            dlg.getOpenFileNames.return_value = (["/a", "/b"], "")
+            dlg.getExistingDirectory.return_value = "/dir"
+            assert plugin._pick_scan_targets("files") == ["/a", "/b"]
+            assert plugin._pick_scan_targets("folder") == ["/dir"]
+            dlg.getExistingDirectory.return_value = ""
+            assert plugin._pick_scan_targets("folder") == []
+
+    def test_start_scan_passes_kind(self, plugin):
+        plugin._scanning = False
+        with patch.object(plugin, "_pick_scan_targets",
+                          return_value=[]) as pick:
+            plugin._start_scan("folder")
+        pick.assert_called_once_with("folder")
+
+    def test_choice_rows_built_and_slide(self, plugin):
+        from gui.page_kit import Page
+        from plugins.antivirus import qt_ui
+        plugin._action_buttons = {}
+        page = Page()
+        qt_ui.build_scan_card(plugin, page)
+        stack = plugin._scan_actions
+        assert {"scan", "scan_computer", "update_sigs", "scan_files",
+                "scan_folder", "scan_back"} <= set(plugin._action_buttons)
+        assert stack.currentWidget() is plugin._scan_actions_main
+        plugin._scanning = False
+        plugin._show_scan_choices()
+        stack._anim.setCurrentTime(stack.DURATION_MS)  # run to the end
+        assert stack.currentWidget() is plugin._scan_actions_choices
+        plugin._hide_scan_choices()
+        stack._anim.setCurrentTime(stack.DURATION_MS)
+        assert stack.currentWidget() is plugin._scan_actions_main
+
+    def test_no_choices_while_scanning(self, plugin):
+        plugin._scan_actions = MagicMock()
+        plugin._scanning = True
+        plugin._show_scan_choices()
+        plugin._scan_actions.push.assert_not_called()
+
+    def test_scan_buttons_state_covers_choice_rows(self, plugin):
+        for key in ("scan_files", "scan_folder"):
+            plugin._action_buttons[key] = QPushButton(key)
+        plugin._set_scan_buttons_state("disabled")
+        assert not plugin._action_buttons["scan_files"].isEnabled()
+        assert not plugin._action_buttons["scan_folder"].isEnabled()
