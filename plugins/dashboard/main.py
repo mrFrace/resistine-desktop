@@ -37,9 +37,10 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.page_kit import (
-    Page, PageHeader, RowList, SlideStack, back_link, icon_button, muted)
+    Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon, muted)
 from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from plugins.base_plugin import BasePlugin
+from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture
 from utils import chat_config
 from utils.functions import get_resource_path
@@ -187,7 +188,9 @@ class _Panel(QFrame):
         tile.setStyleSheet(
             f"background-color: {theme.color('sidebar_active_bg')};"
             "border-radius: 10px;")
-        if os.path.isfile(icon_path):
+        if icon_path.startswith("lucide:"):  # a Lucide line icon from resources/icons/ui
+            tile.setPixmap(line_icon(icon_path[7:], theme.color("sidebar_active_text"), 22))
+        elif os.path.isfile(icon_path):
             pm = BasePlugin._tint(
                 QPixmap(icon_path).scaled(
                     44, 44, Qt.AspectRatioMode.KeepAspectRatio,
@@ -292,7 +295,7 @@ class _Panel(QFrame):
         self._grid.addWidget(v, i, 1)
 
 
-DEFAULT_ORDER = ["posture", "endpoint", "ai", "system"]
+DEFAULT_ORDER = ["posture", "alerts", "endpoint", "ai", "system"]
 _GAP = 16
 
 
@@ -511,6 +514,9 @@ class Plugin(BasePlugin):
                 "Security posture",
                 os.path.join(_PLUGINS_DIR, "antivirus", "antivirus_dark.png"),
                 self._show_posture_detail, key="posture"),
+            "alerts": _Panel(
+                "Recent alerts", "lucide:activity",
+                self._open_alerts, key="alerts"),
             "endpoint": _Panel(
                 "Endpoint",
                 os.path.join(_PLUGINS_DIR, "wazuh", "add_user_dark.png"),
@@ -522,8 +528,10 @@ class Plugin(BasePlugin):
             "system": _Panel(
                 "System", os.path.join(_DIR, "home_dark.png"), key="system"),
         }
+        self._data["alerts"] = self._alerts_data()
         for key, panel in self._panels.items():
             panel.set_data(self._data[key])
+        self._subscribe_alerts()
         order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
         self._grid = _PanelGrid(self._panels, order, self._save_order)
         self._reset_layout.setVisible(order != DEFAULT_ORDER)
@@ -550,6 +558,11 @@ class Plugin(BasePlugin):
     def destroy(self):
         if self._timer is not None:
             self._timer.stop()
+        try:
+            from plugins.chat import siem_alerts
+            siem_alerts.unsubscribe(self._alert_arrived)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- data -------------------------------------------------------------
     def _ensure_timer(self):
@@ -596,6 +609,7 @@ class Plugin(BasePlugin):
 
     def _apply(self, data: dict):
         self._busy = False
+        data["alerts"] = self._alerts_data()  # local store: cheap, read on the UI thread
         view = data.pop("_posture_view", None)
         if view is not None:
             self._posture_view = view
@@ -614,6 +628,56 @@ class Plugin(BasePlugin):
                 self._grid.schedule()  # heights changed: re-pack the columns
             except RuntimeError:
                 self._grid = None
+
+    # ---- recent alerts (SIEM alerts from siemgent over Matrix) --------------
+    @staticmethod
+    def _alerts_data() -> dict:
+        try:
+            from plugins.chat import siem_alerts
+            st = siem_alerts.store()
+            return recent_alerts.panel_data(st.all(), st.unread)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Dashboard alerts unavailable: {e}")
+            return {"badge": ("info", "Unavailable"), "rows": {"Alerts": "Alerts are unavailable."}}
+
+    def _subscribe_alerts(self) -> None:
+        try:
+            from plugins.chat import siem_alerts
+            siem_alerts.subscribe(self._alert_arrived)  # idempotent
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _alert_arrived(self, _alert: dict) -> None:
+        # Matrix thread: repaint on the Qt thread.
+        try:
+            self.app.after(0, self._repaint_alerts)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _repaint_alerts(self) -> None:
+        self._data["alerts"] = self._alerts_data()
+        panel = self._panels.get("alerts")
+        if panel is None:
+            return
+        try:
+            panel.set_data(self._data["alerts"])
+            if self._grid is not None:
+                self._grid.schedule()
+        except RuntimeError:  # panel deleted by a rebuild
+            pass
+
+    def _open_alerts(self) -> None:
+        self.app.select_frame_by_name("frame_Chat")
+        chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)
+        show = getattr(chat, "_show_alerts", None)
+        if show is not None:
+            def go():
+                try:
+                    show()
+                except Exception as e:  # noqa: BLE001 (chat screen not ready)
+                    logger.debug(f"Dashboard: could not open SIEM alerts: {e}")
+                self._repaint_alerts()  # opening marks them read
+            QTimer.singleShot(0, go)
 
     def _save_order(self, order: list) -> None:
         from utils import settings as app_settings

@@ -361,7 +361,7 @@ class TestScreen:
     def test_protected_glow_and_panels(self, built, dashboard_plugin):
         screen = built(True)  # keep a ref: the panels die with their page
         dashboard_plugin.app.set_protection_status.assert_called_with("ok")
-        assert set(dashboard_plugin._panels) == {"posture", "endpoint", "ai", "system"}
+        assert set(dashboard_plugin._panels) == {"posture", "alerts", "endpoint", "ai", "system"}
         # Cached data is painted immediately on rebuild.
         assert _grid_texts(dashboard_plugin._panels["system"]) == [["Device", "box"]]
         assert _grid_texts(dashboard_plugin._panels["ai"]) == [["Loading…", ""]]
@@ -404,7 +404,7 @@ class TestScreen:
 @pytest.mark.unit
 class TestPanelLayout:
     def test_order_keeps_known_panels_and_appends_new(self):
-        assert dash.panel_order(["system", "bogus", "ai", "ai"]) == ["system", "ai", "posture", "endpoint"]
+        assert dash.panel_order(["system", "bogus", "ai", "ai"]) == ["system", "ai", "posture", "alerts", "endpoint"]
         assert dash.panel_order(None) == dash.DEFAULT_ORDER
         assert dash.panel_order("junk") == dash.DEFAULT_ORDER
 
@@ -415,9 +415,9 @@ class TestPanelLayout:
         assert dash.masonry_columns([100, 100], 1) == [0, 0]
 
     @pytest.mark.parametrize("key,target,after,expect", [
-        ("system", "posture", False, ["system", "posture", "endpoint", "ai"]),
-        ("posture", "ai", True, ["endpoint", "ai", "posture", "system"]),
-        ("posture", None, False, ["endpoint", "ai", "system", "posture"]),
+        ("system", "posture", False, ["system", "posture", "alerts", "endpoint", "ai"]),
+        ("posture", "ai", True, ["alerts", "endpoint", "ai", "posture", "system"]),
+        ("posture", None, False, ["alerts", "endpoint", "ai", "system", "posture"]),
         ("ai", "ai", False, dash.DEFAULT_ORDER),
         ("nope", "ai", False, dash.DEFAULT_ORDER),
     ])
@@ -442,7 +442,7 @@ class TestPanelLayout:
         drop = QDropEvent(QPointF(target.center().x(), target.top() + 5), Qt.DropAction.MoveAction,
                           mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         grid.dropEvent(drop)
-        assert saved == [["system", "posture", "endpoint", "ai"]]
+        assert saved == [["system", "posture", "alerts", "endpoint", "ai"]]
         grid.hide()
 
     def test_saved_order_is_used_and_reset_shows(self, qapp, isolated_settings, dashboard_plugin, monkeypatch):
@@ -450,7 +450,7 @@ class TestPanelLayout:
         monkeypatch.setattr(dash.Plugin, "_agent_installed", staticmethod(lambda: True))
         isolated_settings.set("dashboard", "panel_order", ["system", "ai"])
         screen = dashboard_plugin.create_main_screen()
-        assert dashboard_plugin._grid._order == ["system", "ai", "posture", "endpoint"]
+        assert dashboard_plugin._grid._order == ["system", "ai", "posture", "alerts", "endpoint"]
         assert not dashboard_plugin._reset_layout.isHidden()
         dashboard_plugin._save_order(list(dash.DEFAULT_ORDER))
         assert isolated_settings.get("dashboard", "panel_order") == dash.DEFAULT_ORDER
