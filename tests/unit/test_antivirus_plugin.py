@@ -606,3 +606,61 @@ class TestViewSwitching:
         plugin._show_main_view()
         assert plugin._current_view == "main"
         assert plugin._view_stack.currentWidget() is plugin._main_view
+
+
+@pytest.mark.unit
+class TestListRows:
+    """Quarantine / whitelist / exclusion rows render (flat page rows)."""
+
+    def _box(self):
+        from PyQt6.QtWidgets import QVBoxLayout
+        box = QWidget()
+        return box, QVBoxLayout(box)
+
+    @staticmethod
+    def _texts(layout):
+        from PyQt6.QtWidgets import QAbstractButton
+        out = []
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            out += [lb.text() for lb in w.findChildren(QLabel)] or [w.text()]
+            out += [b.text() for b in w.findChildren(QAbstractButton) if b.text()]
+        return out
+
+    def test_quarantine_rows(self, plugin):
+        box, lay = self._box()
+        plugin._quarantine_layout = lay
+        with patch("plugins.antivirus.main.clamav") as cl:
+            cl.list_quarantined.return_value = ["/q/eicar.com.quarantined"]
+            plugin._refresh_quarantine()
+        assert self._texts(lay) == ["eicar.com", "Restore", "Delete"]
+
+    def test_quarantine_empty(self, plugin):
+        box, lay = self._box()
+        plugin._quarantine_layout = lay
+        with patch("plugins.antivirus.main.clamav") as cl:
+            cl.list_quarantined.return_value = []
+            plugin._refresh_quarantine()
+        assert self._texts(lay) == ["No threats quarantined"]
+
+    def test_whitelist_row_remove(self, plugin):
+        from PyQt6.QtWidgets import QPushButton as Btn
+        box, lay = self._box()
+        plugin._whitelist_layout = lay
+        with patch("plugins.antivirus.main.clamav") as cl:
+            cl.get_whitelist.return_value = ["/home/me/vms"]
+            plugin._refresh_whitelist()
+            row = lay.itemAt(0).widget()
+            assert row.findChild(QLabel).text() == "vms"
+            cl.get_whitelist.return_value = []
+            row.findChild(Btn).click()
+            cl.remove_from_whitelist.assert_called_once_with("/home/me/vms")
+
+    def test_exclusion_rows(self, plugin):
+        box, lay = self._box()
+        plugin._exclusions_layout = lay
+        with patch("plugins.antivirus.main.clamav") as cl:
+            cl.get_scan_exclusions.return_value = {
+                "extensions": [".iso", ".vmdk"], "max_size_mb": 0}
+            plugin._refresh_exclusions()
+        assert self._texts(lay) == [".iso", ".vmdk"]

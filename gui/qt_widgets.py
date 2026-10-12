@@ -82,6 +82,20 @@ class StatusBadge(QLabel):
         self.style().polish(self)
 
 
+def set_pill(label: QLabel, status: str, text: str) -> None:
+    """Style ``label`` as a status pill (ok/info/warning/error) showing
+    ``text``. Colours are set inline rather than via the ``badge`` property,
+    so a live label can change state without a re-polish."""
+    bg, fg = theme.badge_colors(status)
+    label.setText(text)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    label.setStyleSheet(
+        f"background-color: {bg}; color: {fg}; border-radius: 9px; "
+        f"padding: 3px 10px; font-weight: 600; font-size: 12px;")
+    label.adjustSize()
+
+
 class Card(QFrame):
     """A bordered, rounded surface used for cards and panels."""
 

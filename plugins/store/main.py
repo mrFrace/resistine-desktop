@@ -1,17 +1,16 @@
 # @file plugins/store/main.py
-"""Store plugin (PyQt6) — faithful port of the CTk layout.
+"""Store plugin (PyQt6).
 
-Top spacer, a centered "Store" title panel (a card whose title is large/bold,
-constrained to ~50% width and centered), then a reflowing grid of plugin cards
-(icon + title + status badge + description) with injected store action buttons:
-Info + Install (downloadable / uninstalled) or Uninstall (installed +
-uninstall_enabled) with an inline Confirm/Cancel step; "Installed"/"Core" states
-have no action button.
+Flat page layout (gui/page_kit.py): a "Store" header, then one row per plugin
+in a hairline-separated list (icon tile, name + status pill, description) with
+the store actions on the right: Info + Install (downloadable / uninstalled) or
+Uninstall (installed + uninstall_enabled) with an inline Confirm/Cancel step;
+"Installed"/"Core" states have no install/uninstall action.
 
 The full plugin list depends on a NETWORK fetch (get_available_plugins). That
 fetch runs on a worker thread and is marshalled back via app.after(0, ...) — the
-build never blocks on it. Installed/local cards render immediately and remote-only
-ones fold in when they arrive, exactly like the original.
+build never blocks on it. Installed/local rows render immediately and remote-only
+ones fold in when they arrive.
 
 Author: Peres J., P3 and the Resistine Team
 Copyright (c) Resistine 2025
@@ -26,8 +25,6 @@ import threading
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QSizePolicy,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -36,7 +33,8 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import CardGrid, StatusBadge, heading, muted, scroll_page
+from gui.page_kit import Page, PageHeader, RowList
+from gui.qt_widgets import set_pill
 from plugins.base_plugin import BasePlugin
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -45,82 +43,73 @@ _DIR = os.path.dirname(os.path.realpath(__file__))
 HIDDEN_FROM_STORE = {"001", "004", "009", "010", "100"}  # Dashboard, Store, Help, Settings, Calculator
 HIDDEN_NAMES = {"template"}  # Also hide by name for remote-only plugins
 
-
-# Store action button colours (light, dark) lifted from the CTk original.
-def _btn_style(light_bg, dark_bg, light_hover, dark_hover) -> str:
-    bg = dark_bg if theme.is_dark() else light_bg
-    hover = dark_hover if theme.is_dark() else light_hover
-    return (
-        f"QPushButton {{ background-color: {bg}; color: white; border: none; "
-        f"border-radius: 8px; padding: 7px 12px; font-size: 12px; "
-        f"font-weight: 600; }} "
-        f"QPushButton:hover {{ background-color: {hover}; }}"
-    )
+# Plugin status -> status pill colour. Store-only states (Uninstalled,
+# Available, …) read as neutral info.
+_PILL_KIND = {"ok": "ok", "info": "info", "warning": "warning",
+              "error": "error", "critical": "error"}
 
 
-# Evaluated per call (not at import) so buttons restyle on theme toggle.
-def _info_style() -> str:
-    return _btn_style("#3B8ED0", "#1F6AA5", "#367EBB", "#144870")
+def _action(text: str, kind: str = "link") -> QPushButton:
+    """A small, unfilled row action: "link" (accent text), "danger" (red
+    text) or "secondary" (outlined)."""
+    btn = QPushButton(text)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    if kind == "secondary":
+        btn.setObjectName("Secondary")
+        btn.setStyleSheet("padding: 5px 14px; font-size: 12px;")
+    else:
+        btn.setObjectName("Link")
+        if kind == "danger":
+            btn.setStyleSheet(f"color: {theme.badge_colors('error')[1]};")
+    return btn
 
 
-def _install_style() -> str:
-    return _btn_style("#2ECC71", "#27AE60", "#27AE60", "#219150")
-
-
-def _uninstall_style() -> str:
-    return _btn_style("#FF4444", "#C73636", "#C73636", "#9E2A2A")
-
-
-def _cancel_style() -> str:
-    return _btn_style("#808080", "#606060", "#707070", "#505050")
-
-
-class _StoreCard(QFrame):
-    """Mirror of the Dashboard card (icon 48 + title + StatusBadge + description),
-    with the store action buttons added at the bottom."""
+class _StoreRow(QWidget):
+    """One plugin: icon tile, name + status pill, description, and the store
+    action buttons (injected) on the right."""
 
     def __init__(self, plugin, inject_buttons):
         super().__init__()
-        self.setObjectName("Card")
-        # Cards stretch to fill their grid cell (same behaviour as the
-        # Dashboard grid) instead of fixed-size tiles with dead gutters.
-        self.setMinimumSize(230, 230)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding,
-                           QSizePolicy.Policy.Expanding)
+        self.setObjectName("Transparent")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 12, 0, 12)
+        h.setSpacing(14)
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 16, 16, 16)
-        outer.setSpacing(8)
+        tile = QLabel()
+        tile.setObjectName("MenuTile")
+        tile.setFixedSize(40, 40)
+        tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pm = BasePlugin._tint(plugin.get_icon_pixmap(44),
+                              theme.color("sidebar_active_text"))
+        pm.setDevicePixelRatio(2.0)  # 22 px logical, crisp on HiDPI
+        tile.setPixmap(pm)
+        h.addWidget(tile, 0, Qt.AlignmentFlag.AlignTop)
 
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        icon = QLabel()
-        icon.setPixmap(plugin.get_icon_pixmap(48))
-        icon.setFixedSize(48, 48)
-        header.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
-
-        title_col = QVBoxLayout()
-        title_col.setSpacing(4)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(10)
         title = QLabel(plugin.get_name())
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
-        title_col.addWidget(title)
-        badge_row = QHBoxLayout()
-        badge_row.addWidget(StatusBadge(plugin.get_status()))
-        badge_row.addStretch(1)
-        title_col.addLayout(badge_row)
-        header.addLayout(title_col, 1)
-        outer.addLayout(header)
-
+        title.setObjectName("RowTitle")
+        name_row.addWidget(title)
+        status = plugin.get_status()
+        if status:
+            pill = QLabel()
+            set_pill(pill, _PILL_KIND.get(str(status).lower(), "info"),
+                     str(status).title())
+            name_row.addWidget(pill)
+        name_row.addStretch(1)
+        text.addLayout(name_row)
         desc = QLabel(plugin.get_description())
+        desc.setObjectName("Hint")
         desc.setWordWrap(True)
-        desc.setStyleSheet(f"color: {theme.color('text_secondary')};")
-        outer.addWidget(desc)
-        outer.addStretch(1)
+        text.addWidget(desc)
+        h.addLayout(text, 1)
 
         # Injected store action buttons (Info + Install/Uninstall/...).
         self.button_row = QHBoxLayout()
-        self.button_row.setSpacing(8)
-        outer.addLayout(self.button_row)
+        self.button_row.setSpacing(4)
+        h.addLayout(self.button_row)
         inject_buttons(self, plugin)
 
     def clear_buttons(self) -> None:
@@ -165,52 +154,32 @@ class Plugin(BasePlugin):
     #  Screen
     # ===================================================================
     def create_main_screen(self):
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(20, 0, 20, 20)
-        col.setSpacing(0)
+        page = Page()
+        header = PageHeader(
+            "Store", "Browse and install plugins to extend Phoenix.")
+        self.title_label = header.title
+        page.add(header)
+        page.section("Plugins")
 
-        # 1. Generous top padding — the header is a prominent centred band.
-        col.addSpacing(40)
-
-        # 2. Centred page header: title + muted subtitle + divider. No inline
-        #    colours or fonts — H1/Muted inherit the app-wide font family and
-        #    theme colours from the global QSS, so the title uses the exact
-        #    same heading style as the rest of the app and recolours on every
-        #    light/dark toggle.
-        self.title_label = heading("Store")  # QLabel#H1 (24px/700)
-        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col.addWidget(self.title_label)
-        col.addSpacing(4)
-        subtitle = muted("Browse and install plugins to extend Phoenix.")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col.addWidget(subtitle)
-        col.addSpacing(40)
-        divider = QFrame()
-        divider.setObjectName("Divider")
-        divider.setFixedHeight(1)
-        col.addWidget(divider)
-        col.addSpacing(20)
-
-        # 3. Responsive grid of plugin cards. Build with whatever remote data we
-        #    already have (cached from a prior visit, or empty). The remote list
-        #    is a network fetch, so we NEVER block the build on it — render local
-        #    plugins now and fold remote-only ones in when they arrive.
+        # Build with whatever remote data we already have (cached from a
+        # prior visit, or empty). The remote list is a network fetch, so we
+        # NEVER block the build on it — render local plugins now and fold
+        # remote-only ones in when they arrive.
         available_remote = getattr(self, "_remote_cache", None)
         plugins = self._build_plugin_list(available_remote or [])
         self._remote_done = available_remote is not None
         self._store_plugins = plugins
 
-        self._grid_host = CardGrid()
-        self._flow = self._grid_host  # FlowLayout-compatible surface
+        self._list = RowList()
         self.plugin_cards = {}
         for p in plugins:
             self._add_card(p)
-        col.addWidget(self._grid_host, 1)
+        page.add(self._list)
+        page.stretch()
 
-        self.main_frame = scroll_page(inner)
+        self.main_frame = page.widget
 
-        # 4. On the first visit, fetch the remote plugin list in the background.
+        # On the first visit, fetch the remote plugin list in the background.
         if available_remote is None:
             self._fetch_remote_async()
             self.app.after(2500, self._mark_remote_done)
@@ -224,18 +193,17 @@ class Plugin(BasePlugin):
         self._remote_done = True
 
     def _add_card(self, plugin) -> None:
-        card = _StoreCard(plugin, self._inject_store_buttons)
-        self._flow.addWidget(card)
-        self.plugin_cards[plugin.id] = card
+        row = _StoreRow(plugin, self._inject_store_buttons)
+        self._list.add_row(row)
+        self.plugin_cards[plugin.id] = row
 
     def on_theme_changed(self) -> None:
-        """Re-tint card icons, desc colours and button styles on theme toggle.
+        """Re-tint row icons and colours on theme toggle.
 
-        Cards bake theme colours in at build time (icon tint, secondary text,
-        button QSS), so the cached screen must be rebuilt — otherwise dark
-        mode shows the light-mode near-black icons (and vice versa).
+        Rows bake theme colours in at build time (icon tint, pill and action
+        colours), so the cached screen must be rebuilt.
         """
-        if getattr(self, "_flow", None):
+        if getattr(self, "_list", None):
             self._rebuild_grid()
 
     # ===================================================================
@@ -315,7 +283,7 @@ class Plugin(BasePlugin):
             return  # don't cache failures; next visit retries
         self._remote_cache = remote
 
-        if not getattr(self, "_flow", None):
+        if not getattr(self, "_list", None):
             return  # screen torn down while fetching
 
         try:
@@ -331,68 +299,52 @@ class Plugin(BasePlugin):
         self._rebuild_grid()
 
     def _rebuild_grid(self):
-        """Tear down and re-add every card from self._store_plugins."""
-        if not getattr(self, "_flow", None):
+        """Tear down and re-add every row from self._store_plugins."""
+        if not getattr(self, "_list", None):
             return
-        for cid, card in list(self.plugin_cards.items()):
-            card.setParent(None)
-            card.deleteLater()
+        try:
+            self._list.clear()
+        except RuntimeError:  # list deleted with its page
+            self._list = None
+            return
         self.plugin_cards = {}
-        # Drop any stale items left in the flow layout.
-        while self._flow.count():
-            item = self._flow.takeAt(0)
-            w = item.widget() if item else None
-            if w is not None:
-                w.setParent(None)
-                w.deleteLater()
         for p in self._store_plugins:
             self._add_card(p)
-        self._grid_host.updateGeometry()
 
     # ===================================================================
     #  Store action buttons (Info + Install/Uninstall + inline confirm)
     # ===================================================================
-    def _inject_store_buttons(self, card: _StoreCard, p):
+    def _inject_store_buttons(self, card: _StoreRow, p):
         is_remote = isinstance(p, RemotePluginWrapper)
         is_uninstalled = getattr(p, "status", None) == "Uninstalled"
 
         def show_normal_buttons():
             card.clear_buttons()
 
-            info = QPushButton("Info")
-            info.setCursor(Qt.CursorShape.PointingHandCursor)
-            info.setStyleSheet(_info_style())
+            info = _action("Info")
             info.clicked.connect(
                 lambda: self.show_remote_info(p) if is_remote
                 else self._show_local_info(p))
-            card.button_row.addWidget(info, 1)
+            card.button_row.addWidget(info)
 
             if is_remote or is_uninstalled:
-                install = QPushButton("Install")
-                install.setCursor(Qt.CursorShape.PointingHandCursor)
-                install.setStyleSheet(_install_style())
+                install = _action("Install", "secondary")
                 install.clicked.connect(lambda: self.handle_install(p))
-                card.button_row.addWidget(install, 1)
+                card.button_row.addWidget(install)
             elif getattr(p, "uninstall_enabled", True):
-                uninstall = QPushButton("Uninstall")
-                uninstall.setCursor(Qt.CursorShape.PointingHandCursor)
-                uninstall.setStyleSheet(_uninstall_style())
+                uninstall = _action("Uninstall", "danger")
                 uninstall.clicked.connect(show_confirm_buttons)
-                card.button_row.addWidget(uninstall, 1)
+                card.button_row.addWidget(uninstall)
 
         def show_confirm_buttons():
             card.clear_buttons()
-            cancel = QPushButton("Cancel")
-            cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-            cancel.setStyleSheet(_cancel_style())
+            cancel = _action("Cancel")
             cancel.clicked.connect(show_normal_buttons)
-            card.button_row.addWidget(cancel, 1)
+            card.button_row.addWidget(cancel)
 
-            confirm = QPushButton("Confirm")
-            confirm.setCursor(Qt.CursorShape.PointingHandCursor)
-            confirm.setStyleSheet(_uninstall_style())
+            confirm = _action("Confirm uninstall", "danger")
             confirm.clicked.connect(confirm_uninstall)
-            card.button_row.addWidget(confirm, 1)
+            card.button_row.addWidget(confirm)
 
         def confirm_uninstall():
             try:
@@ -432,7 +384,7 @@ class Plugin(BasePlugin):
         show_normal_buttons()
 
     def _replace_card(self, old_plugin_id, new_plugin):
-        """Swap one card in-place for a fresh one (e.g. after install/uninstall)."""
+        """Swap one row for a fresh one (e.g. after install/uninstall)."""
         for i, p in enumerate(getattr(self, "_store_plugins", [])):
             if p.id == old_plugin_id:
                 self._store_plugins[i] = new_plugin
@@ -501,7 +453,7 @@ class Plugin(BasePlugin):
 
 
 class RemotePluginWrapper:
-    """Make a remote plugin dict look like a BasePlugin for the Store card."""
+    """Make a remote plugin dict look like a BasePlugin for the Store row."""
 
     status_map = BasePlugin.status_map
 
@@ -534,7 +486,7 @@ class RemotePluginWrapper:
                 else os.path.join(_DIR, "store_light.png"))
         if path and os.path.isfile(path):
             # Tint like BasePlugin.get_icon_pixmap() does — without it the
-            # raw glyph renders black on dark cards (invisible).
+            # raw glyph renders black on the dark background (invisible).
             return BasePlugin._tint(QPixmap(path).scaled(
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,

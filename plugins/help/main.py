@@ -1,9 +1,10 @@
 ## @file main.py
 ## @namespace plugins.help
-"""Help plugin (PyQt6) — faithful port of the CTk MarkdownViewer.
+"""Help plugin (PyQt6): a markdown viewer for the bundled docs.
 
-Reproduces the viewer's navigation bar (Back / Home / file dropdown), divider,
-and markdown content area, with page history and in-document link navigation.
+Flat page layout (gui/page_kit.py): a "Help" header whose controls are the
+viewer's navigation (Back / Home / topic dropdown), a hairline, then the
+markdown content, with page history and in-document link navigation.
 
 Author: Petr and the Resistine Team
 Copyright (c) Resistine 2025
@@ -14,18 +15,17 @@ import os
 import sys
 import webbrowser
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import QUrl
 from PyQt6.QtGui import QTextCursor, QTextFormat
 from PyQt6.QtWidgets import (
     QComboBox,
-    QFrame,
     QHBoxLayout,
-    QPushButton,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
 
+from gui.page_kit import PAGE_MAX_WIDTH, PageHeader, hairline, icon_button
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
@@ -116,63 +116,66 @@ class Plugin(BasePlugin):
     #  UI
     # ===================================================================
     def create_main_screen(self):
+        # Not a scroll_page: the browser scrolls the document itself, so the
+        # header and navigation stay put.
         page = QWidget()
-        wrap = QVBoxLayout(page)
-        wrap.setContentsMargins(20, 16, 20, 20)
-
-        card = QFrame()
-        card.setObjectName("Surface")
-        outer = QVBoxLayout(card)
-        outer.setContentsMargins(16, 14, 16, 16)
+        outer = QHBoxLayout(page)
+        outer.setContentsMargins(48, 36, 48, 32)
         outer.setSpacing(0)
+        column = QWidget()
+        column.setObjectName("Transparent")
+        column.setMaximumWidth(PAGE_MAX_WIDTH)
+        col = QVBoxLayout(column)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        outer.addWidget(column, 1)
+        outer.addStretch(0)  # left-align the column on wide windows
 
-        # --- Navigation bar ---
-        nav = QHBoxLayout()
-        nav.setSpacing(6)
-
-        self.back_button = QPushButton("←  Back")
-        self.back_button.setObjectName("Secondary")
-        self.back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        header = PageHeader("Help", self._subtitle())
+        self.back_button = icon_button("chevron-left", "Back")
         self.back_button.setEnabled(False)
         self.back_button.clicked.connect(self.go_back)
-        nav.addWidget(self.back_button)
+        header.add_control(self.back_button)
 
-        self.home_button = QPushButton("⌂  Home")
-        self.home_button.setObjectName("Secondary")
-        self.home_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.home_button = icon_button("house", "Home")
         self.home_button.clicked.connect(self.go_home)
-        nav.addWidget(self.home_button)
+        header.add_control(self.home_button)
 
-        nav.addSpacing(6)
         self.help_files = self.get_help_files()
         self.file_dropdown = QComboBox()
         self.file_dropdown.setMinimumWidth(180)
+        self.file_dropdown.setToolTip("Help topic")
         self.file_dropdown.addItems(self.help_files)
         self.file_dropdown.activated.connect(
             lambda _i: self.navigate_to_file(self.file_dropdown.currentText()))
-        nav.addWidget(self.file_dropdown)
-        nav.addStretch(1)
-        outer.addLayout(nav)
+        header.add_control(self.file_dropdown)
+        col.addWidget(header)
 
-        # --- Divider ---
-        outer.addSpacing(12)
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setObjectName("Divider")
-        outer.addWidget(div)
-        outer.addSpacing(12)
+        col.addSpacing(20)
+        col.addWidget(hairline())
+        col.addSpacing(8)
 
         # --- Content ---
         self.browser = QTextBrowser()
         self.browser.setOpenLinks(False)
         self.browser.anchorClicked.connect(self._on_anchor_clicked)
-        outer.addWidget(self.browser, 1)
-
-        wrap.addWidget(card)
+        col.addWidget(self.browser, 1)
 
         # Load the home file (docs/Help.md), like the original.
         self.load_file(os.path.join(self.docs_dir, "Help.md"))
         return page
+
+    @staticmethod
+    def _subtitle() -> str:
+        text = "Guides, release notes and licences"
+        try:
+            from utils.updates.version import get_current_version
+            version = get_current_version()
+        except Exception:
+            version = ""
+        if version and version != "0.0.0":
+            text += f" · Phoenix {version}"
+        return text
 
     # ===================================================================
     #  File listing / navigation

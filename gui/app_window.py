@@ -21,11 +21,20 @@ from __future__ import annotations
 import os
 import threading
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPropertyAnimation,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -213,10 +222,13 @@ class AppWindow(QMainWindow):
         layout.addWidget(self.sidebar)
 
     def _logo_widget(self) -> QWidget:
-        # The square Phoenix app mark (same art as the login screen).
+        # The square Phoenix app mark (same art as the login screen). It
+        # doubles as the protection indicator: see set_protection_status().
         label = QLabel()
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setToolTip("Phoenix")
+        self._logo = label
+        self._logo_anim = None
         size = 44
         path = resource("resources", "icons", "PhoenixMark.png")
         pm = QPixmap(path) if os.path.isfile(path) else QPixmap()
@@ -227,11 +239,57 @@ class AppWindow(QMainWindow):
                            Qt.TransformationMode.SmoothTransformation)
             pm.setDevicePixelRatio(ratio)
             label.setPixmap(pm)
-            return label
-        label.setText("P")
-        label.setStyleSheet(
-            f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
+        else:
+            label.setText("P")
+            label.setStyleSheet(
+                f"font-size: 24px; font-weight: 800; color: {theme.color('accent')};")
+        self._apply_logo_glow()
         return label
+
+    # Glow colour per protection state; None (unknown) = no glow.
+    _GLOW = {"ok": "#2CC985", "error": "#FF4040"}
+
+    def set_protection_status(self, state: str | None) -> None:
+        """Make the sidebar logo glow green ("ok") or red ("error")."""
+        if state == getattr(self, "_protection", None):
+            return
+        self._protection = state
+        self._apply_logo_glow()
+
+    def _apply_logo_glow(self) -> None:
+        label = getattr(self, "_logo", None)
+        if label is None:
+            return
+        if self._logo_anim is not None:
+            self._logo_anim.stop()
+            self._logo_anim = None
+        state = getattr(self, "_protection", None)
+        colour = self._GLOW.get(state)
+        try:
+            if colour is None:
+                label.setGraphicsEffect(None)
+                label.setToolTip("Phoenix")
+                return
+            glow = QGraphicsDropShadowEffect(label)
+            glow.setOffset(0, 0)
+            glow.setColor(QColor(colour))
+            glow.setBlurRadius(22)
+            label.setGraphicsEffect(glow)
+            label.setToolTip("Phoenix — protected" if state == "ok"
+                             else "Phoenix — not protected")
+            if state == "error":
+                # Unprotected: a slow breathing pulse to draw the eye.
+                anim = QPropertyAnimation(glow, b"blurRadius", label)
+                anim.setDuration(2400)
+                anim.setStartValue(10.0)
+                anim.setKeyValueAt(0.5, 30.0)
+                anim.setEndValue(10.0)
+                anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+                anim.setLoopCount(-1)
+                anim.start()
+                self._logo_anim = anim
+        except RuntimeError:  # logo deleted by a shell rebuild
+            self._logo = None
 
     # ===================================================================
     #  Navigation
@@ -357,7 +415,7 @@ class AppWindow(QMainWindow):
         # use the PALETTE — which otherwise follows the macOS system
         # appearance. With system-dark + app-light that leaked as black
         # bands/strips in light mode wherever QSS doesn't reach.
-        from PyQt6.QtGui import QColor, QPalette
+        from PyQt6.QtGui import QPalette
         pal = QPalette()
         window = QColor(theme.color("window_bg"))
         base = QColor(theme.color("card_bg"))

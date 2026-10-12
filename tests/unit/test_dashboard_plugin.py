@@ -353,26 +353,31 @@ class TestScreen:
         yield build
         dashboard_plugin.destroy()
 
-    def _banner(self, screen):
-        from PyQt6.QtWidgets import QLabel
-        return next(lb for lb in screen.findChildren(QLabel)
-                    if lb.property("protection"))
-
-    def test_protected_banner_and_panels(self, built, dashboard_plugin):
-        screen = built(True)
-        banner = self._banner(screen)
-        assert banner.property("protection") == "ok"
-        assert "Protected" in banner.text()
+    def test_protected_glow_and_panels(self, built, dashboard_plugin):
+        screen = built(True)  # keep a ref: the panels die with their page
+        dashboard_plugin.app.set_protection_status.assert_called_with("ok")
         assert set(dashboard_plugin._panels) == {"endpoint", "ai", "system"}
         # Cached data is painted immediately on rebuild.
         assert _grid_texts(dashboard_plugin._panels["system"]) == [["Device", "box"]]
         assert _grid_texts(dashboard_plugin._panels["ai"]) == [["Loading…", ""]]
+        del screen
 
-    def test_not_protected_banner(self, built):
-        screen = built(False)  # keep a ref: the label dies with its page
-        banner = self._banner(screen)
-        assert banner.property("protection") == "warn"
-        assert "Not Protected" in banner.text()
+    def test_not_protected_glow(self, built, dashboard_plugin):
+        built(False)
+        dashboard_plugin.app.set_protection_status.assert_called_with("error")
+
+    def test_no_protection_banner(self, built):
+        from PyQt6.QtWidgets import QLabel
+        screen = built(True)
+        assert not any("Protected" in lb.text()
+                       for lb in screen.findChildren(QLabel))
+
+    @pytest.mark.parametrize("kind, state", [
+        ("ok", "ok"), ("error", "error"), ("warning", "error"), ("info", None)])
+    def test_apply_maps_endpoint_badge_to_glow(self, dashboard_plugin, kind, state):
+        dashboard_plugin._panels = {}
+        dashboard_plugin._apply({"endpoint": {"badge": (kind, "x"), "rows": {}}})
+        dashboard_plugin.app.set_protection_status.assert_called_with(state)
 
     def test_timer_started_and_destroy_stops_it(self, built, dashboard_plugin):
         built(True)

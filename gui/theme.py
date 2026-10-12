@@ -32,10 +32,6 @@ PALETTE: dict[str, tuple[str, str]] = {
     "sidebar_hover_bg": ("#EDF3FA", "#112645"),
     "input_bg": ("#FFFFFF", "#0D2340"),
     "track": ("#DDE5EF", "#1B3558"),
-    "protect_ok_bg": ("#DCFCE7", "#0A2F1A"),
-    "protect_ok_text": ("#15803D", "#4ADE80"),
-    "protect_warn_bg": ("#FEF3C7", "#2D1F05"),
-    "protect_warn_text": ("#B45309", "#FBBF24"),
     "bubble_user_bg": ("#1E6FD9", "#1E6FD9"),
     "bubble_user_text": ("#FFFFFF", "#FFFFFF"),
     "bubble_ai_bg": ("#FFFFFF", "#0D2340"),
@@ -101,8 +97,6 @@ def build_qss() -> str:
             f"font-size: 11px; }}"
         )
     badge_qss = "\n".join(badge_rules)
-    ok_bg, ok_fg = c("protect_ok_bg"), c("protect_ok_text")
-    warn_bg, warn_fg = c("protect_warn_bg"), c("protect_warn_text")
 
     return f"""
 * {{
@@ -112,8 +106,8 @@ def build_qss() -> str:
 }}
 QWidget {{ background-color: {c('window_bg')}; color: {c('text_primary')}; }}
 /* Labels are transparent by default — the QWidget rule above otherwise
-   cascades a window-coloured rectangle behind every label's text. Badge and
-   protection labels re-set a background via their attribute selectors, which
+   cascades a window-coloured rectangle behind every label's text. Badge
+   labels re-set a background via their attribute selectors, which
    are more specific and so win over this rule. */
 QLabel {{ background: transparent; }}
 /* Plain container widgets opt out of the window-bg fill (which would otherwise
@@ -155,14 +149,26 @@ QLabel#H2 {{ font-size: 18px; font-weight: 700; }}
 QLabel#Muted {{ color: {c('text_secondary')}; }}
 QLabel#CardTitle {{ font-size: 16px; font-weight: 700; }}
 
-QLabel[protection="ok"] {{
-    background-color: {ok_bg}; color: {ok_fg};
-    border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700;
+/* Flat page kit (gui/page_kit.py) */
+QLabel#Section {{
+    color: {c('text_secondary')}; font-size: 11px; font-weight: 700;
+    letter-spacing: 1px;
 }}
-QLabel[protection="warn"] {{
-    background-color: {warn_bg}; color: {warn_fg};
-    border-radius: 12px; padding: 14px; font-size: 15px; font-weight: 700;
+QLabel#Key {{ color: {c('text_secondary')}; }}
+QLabel#Val {{ font-weight: 600; }}
+QLabel#RowTitle {{ font-size: 14px; font-weight: 600; }}
+QLabel#Hint {{ color: {c('text_secondary')}; font-size: 12px; }}
+#MenuRow {{ background: transparent; border: none; border-radius: 12px; }}
+#MenuRow:hover, #MenuRow:focus {{ background-color: {c('sidebar_hover_bg')}; }}
+QLabel#RowTitle[danger="true"] {{ color: {badge_colors('error')[1]}; }}
+QLabel#RowTitle:disabled {{ color: {c('text_secondary')}; }}
+QLabel#MenuTile {{
+    background-color: {c('sidebar_active_bg')}; border-radius: 10px;
 }}
+QPushButton#IconButton {{
+    background: transparent; border: none; border-radius: 10px; padding: 0;
+}}
+QPushButton#IconButton:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 
 {badge_qss}
 

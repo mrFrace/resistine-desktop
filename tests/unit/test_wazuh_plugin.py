@@ -167,7 +167,7 @@ class TestToggleAgent:
     def test_start_requires_vpn(self, wazuh_plugin, qapp, platform_name):
         """On Linux/Windows, starting the agent without VPN shows an error and
         flips the toggle back off without re-firing the toggled handler."""
-        from plugins.vpn.qt_toggle import ToggleSwitch
+        from gui.toggle import ToggleSwitch
 
         toggle = ToggleSwitch()
         toggle.setChecked(True)  # user just flipped it on
@@ -188,7 +188,7 @@ class TestToggleAgent:
 
     def test_darwin_start_skips_vpn_gate(self, wazuh_plugin, qapp):
         """macOS has no VPN gate: start proceeds (toggle disabled while busy)."""
-        from plugins.vpn.qt_toggle import ToggleSwitch
+        from gui.toggle import ToggleSwitch
 
         toggle = ToggleSwitch()
         wazuh_plugin._agent_toggle = toggle

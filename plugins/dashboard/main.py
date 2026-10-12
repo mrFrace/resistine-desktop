@@ -2,11 +2,12 @@
 ## @namespace dashboard_plugin
 """Dashboard plugin UI (PyQt6): an at-a-glance view of this device.
 
-A branded header (the Phoenix mark links to https://phoenix.exposed), the
-protection banner, then three panels: the Endpoint agent, the AI assistant,
+A branded header (the Phoenix mark links to https://phoenix.exposed), then
+three panels: the Endpoint agent, the AI assistant,
 and system facts. Data is gathered off the UI thread and refreshed on a
 timer; the last result is cached on the plugin so a rebuild (any plugin's
-status change rebuilds this screen) paints immediately.
+status change rebuilds this screen) paints immediately. Protection status
+is shown by the glow on the sidebar logo (green/red), driven from here.
 
 Author: P3, Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
@@ -326,19 +327,12 @@ class Plugin(BasePlugin):
         v.addLayout(head)
         v.addSpacing(16)
 
-        # Protection = the Endpoint (Wazuh) agent is installed on this
-        # machine. The VPN only protects traffic and has its own status.
-        banner = QLabel()
-        banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        banner.setMinimumHeight(44)
-        if self._agent_installed():
-            banner.setText("✓  Protected")
-            banner.setProperty("protection", "ok")
-        else:
-            banner.setText("⚠  Not Protected — install the Endpoint agent")
-            banner.setProperty("protection", "warn")
-        v.addWidget(banner)
-        v.addSpacing(16)
+        # Protection = the Endpoint (Wazuh) agent is installed and healthy;
+        # shown as the sidebar logo's glow. The VPN only protects traffic
+        # and has its own status. Refined by the endpoint probe in _apply().
+        self._set_protection(
+            self._data["endpoint"]["badge"][0] if self._data.get("endpoint")
+            else ("ok" if self._agent_installed() else "error"))
 
         self._panels = {
             "endpoint": _Panel(
@@ -414,11 +408,23 @@ class Plugin(BasePlugin):
     def _apply(self, data: dict):
         self._busy = False
         self._data.update(data)
+        badge = (self._data.get("endpoint") or {}).get("badge")
+        if badge:
+            self._set_protection(badge[0])
         for panel_key, panel in self._panels.items():
             try:
                 panel.set_data(self._data[panel_key])
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+
+    def _set_protection(self, kind: str) -> None:
+        # Endpoint badge kind -> logo glow: ok = green, info (unsupported
+        # platform) = none, anything else (stopped / not installed /
+        # disconnected) = red.
+        state = {"ok": "ok", "info": None}.get(kind, "error")
+        setter = getattr(self.app, "set_protection_status", None)
+        if setter is not None:
+            setter(state)
 
     @staticmethod
     def _agent_installed() -> bool:

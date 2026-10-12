@@ -17,6 +17,7 @@ import random
 import threading
 import time
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -25,12 +26,10 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 
 from gui import theme
-from gui.qt_widgets import scroll_page
 from plugins.antivirus import clamav
 from plugins.base_plugin import BasePlugin
 from utils import settings
@@ -384,52 +383,14 @@ class Plugin(BasePlugin):
         self._destroyed = False
         self._current_view = "main"
 
-        # Centered ~750px column (mirrors the CTk column-weighted layout).
         self._view_stack = QStackedWidget()
-
-        # --- Main view ---
-        main_inner = QWidget()
-        main_col = QVBoxLayout(main_inner)
-        main_col.setContentsMargins(0, 0, 0, 0)
-        main_col.setSpacing(8)
-        qt_ui.build_status_banner(self, main_col)
-        qt_ui.build_scan_card(self, main_col)
-        qt_ui.build_scan_activity(self, main_col)
-        qt_ui.build_quarantine_card(self, main_col)
-        qt_ui.build_db_info_card(self, main_col)
-        # No trailing stretch: the Signature Database card (added with stretch 1)
-        # absorbs the remaining height so it sits flush with the bottom.
-        self._main_view = scroll_page(main_inner)
+        self._main_view = qt_ui.build_main_view(self).widget
         self._view_stack.addWidget(self._main_view)
-
-        # --- Settings view (built eagerly but only shown on gear click) ---
-        settings_inner = QWidget()
-        settings_col = QVBoxLayout(settings_inner)
-        settings_col.setContentsMargins(0, 0, 0, 0)
-        settings_col.setSpacing(8)
-        qt_ui.build_settings_view(self, settings_col)
-        self._settings_view = scroll_page(settings_inner)
+        # Settings view: built eagerly but only shown on gear click.
+        self._settings_view = qt_ui.build_settings_view(self).widget
         self._view_stack.addWidget(self._settings_view)
-
         self._view_stack.setCurrentWidget(self._main_view)
-
-        # Capped content column: compresses freely at small windows (20px
-        # edge margins, NO minimum floor — the old 420px floor clipped cards
-        # at narrow sizes), but stops growing at 700px and centers on wide
-        # windows.
-        container = QWidget()
-        h = QHBoxLayout(container)
-        # CTk-style: centered (pulled off the sidebar) once the window is
-        # wide enough for the 700px cap to engage — leftover space splits
-        # equally between the side stretches. Below the cap the 50:1 weights
-        # collapse the gutters to ~nothing, so a squished window shows the
-        # same ~20px margin on BOTH sides (matching the Endpoint page).
-        h.setContentsMargins(20, 10, 20, 10)
-        h.addStretch(1)
-        self._view_stack.setMaximumWidth(700)
-        h.addWidget(self._view_stack, 50)
-        h.addStretch(1)
-        self.main_container = container
+        self.main_container = self._view_stack
 
         # Populate live data after build (non-blocking, marshalled).
         self.app.after(100, self._refresh_db_info)
@@ -616,13 +577,8 @@ class Plugin(BasePlugin):
         else:
             cfg = self._get_runtime_banner_cfg(runtime_state, status)
 
-        from plugins.antivirus.qt_ui import _banner_qss, banner_title_color
-        self._banner_frame.setStyleSheet(_banner_qss(cfg["kind"]))
-        self._banner_label.setStyleSheet(
-            f"color: {banner_title_color(cfg['kind'])}; font-size: 28px; "
-            f"font-weight: 700; background: transparent;"
-        )
-        self._banner_label.setText(cfg["title"])
+        from plugins.antivirus.qt_ui import set_status_pill
+        set_status_pill(self._banner_frame, cfg["kind"], cfg["title"])
         self._banner_subtitle.setText(cfg["subtitle"])
 
         show_progress = setup_state in ("seeding_db", "installing")
@@ -1039,6 +995,7 @@ class Plugin(BasePlugin):
         self._scan_log_buffer.append(text)
         try:
             self._scan_log.appendPlainText(text)
+            self._scan_log.show()
         except Exception:
             pass
 
@@ -1066,6 +1023,7 @@ class Plugin(BasePlugin):
         if self._scan_log_buffer:
             try:
                 self._scan_log.setPlainText("\n".join(self._scan_log_buffer))
+                self._scan_log.show()
             except Exception:
                 pass
 
@@ -1666,11 +1624,19 @@ class Plugin(BasePlugin):
         row = QWidget()
         row.setObjectName("Transparent")
         h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(4)
+        h.setContentsMargins(0, 6, 0, 6)
+        h.setSpacing(8)
         lbl = QLabel(text)
+        lbl.setObjectName("Val")
         h.addWidget(lbl, 1)
         return row, h
+
+    @staticmethod
+    def _remove_button(on_click) -> QPushButton:
+        from gui.page_kit import icon_button
+        btn = icon_button("x", "Remove", 16)
+        btn.clicked.connect(on_click)
+        return btn
 
     # ── Whitelist ──────────────────────────────────────────────
 
@@ -1701,12 +1667,8 @@ class Plugin(BasePlugin):
             return
         for entry in entries:
             row, h = self._list_row(os.path.basename(entry) or entry)
-            rm = QPushButton("✕")
-            rm.setObjectName("Secondary")
-            rm.setFixedSize(24, 24)
-            rm.clicked.connect(
-                lambda _=False, p=entry: self._remove_whitelist(p))
-            h.addWidget(rm)
+            h.addWidget(self._remove_button(
+                lambda _=False, p=entry: self._remove_whitelist(p)))
             layout.addWidget(row)
 
     def _remove_whitelist(self, path: str):
@@ -1775,12 +1737,8 @@ class Plugin(BasePlugin):
         else:
             for ext in excl["extensions"]:
                 row, h = self._list_row(ext)
-                rm = QPushButton("✕")
-                rm.setObjectName("Secondary")
-                rm.setFixedSize(24, 24)
-                rm.clicked.connect(
-                    lambda _=False, e=ext: self._remove_excluded_extension(e))
-                h.addWidget(rm)
+                h.addWidget(self._remove_button(
+                    lambda _=False, e=ext: self._remove_excluded_extension(e)))
                 layout.addWidget(row)
 
         size_entry = getattr(self, "_size_entry", None)
@@ -1892,18 +1850,16 @@ class Plugin(BasePlugin):
             name = os.path.basename(qpath).replace(".quarantined", "")
             row, h = self._list_row(name)
             restore = QPushButton("Restore")
-            restore.setObjectName("Secondary")
-            restore.setStyleSheet(
-                "QPushButton { background-color: transparent; border: none; "
-                "color: #2563EB; font-size: 11px; }")
+            restore.setObjectName("Link")
+            restore.setCursor(Qt.CursorShape.PointingHandCursor)
             restore.clicked.connect(
                 lambda _=False, p=qpath: self._restore_quarantined(p))
             h.addWidget(restore)
             delete = QPushButton("Delete")
-            delete.setObjectName("Danger")
+            delete.setObjectName("Link")
+            delete.setCursor(Qt.CursorShape.PointingHandCursor)
             delete.setStyleSheet(
-                "QPushButton { background-color: transparent; border: none; "
-                "color: #DC2626; font-size: 11px; }")
+                f"color: {theme.badge_colors('error')[1]};")
             delete.clicked.connect(
                 lambda _=False, p=qpath: self._delete_quarantined(p))
             h.addWidget(delete)

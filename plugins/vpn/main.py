@@ -2,13 +2,12 @@
 ## @package vpn_plugin
 ## @namespace vpn_plugin
 ## @class vpn_plugin::Plugin
-"""VPN plugin (PyQt6) — faithful port of the CustomTkinter VPN screen.
+"""VPN plugin (PyQt6).
 
-Reproduces the original CTk dashboard 1:1: a status card with a sliding
-toggle, a configuration selector (shown only when more than one config
-exists) with a Delete button, CLIENT / SERVER detail panels, PUBLIC KEYS
-and ALLOWED IPs panels, and the Import / View Config action buttons — all
-inside a centered ~750 px content column. The platform connect/disconnect
+A flat page (gui/page_kit.py): a header with the status pill and the
+connect toggle, CONNECTION and KEYS & ROUTES label/value rows, and a
+CONFIGURATION section with the config selector (shown only when more than
+one config exists) and Import / View / Delete action rows. The platform connect/disconnect
 backends are called, not rewritten; status is refreshed by a re-arming
 ``app.after(5000, ...)`` poll that runs the blocking status check on a
 worker thread.
@@ -26,28 +25,21 @@ import platform
 import subprocess
 import threading
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialogButtonBox,
     QFileDialog,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
     QLabel,
     QPlainTextEdit,
     QPushButton,
-    QSizePolicy,
-    QSpacerItem,
     QVBoxLayout,
-    QWidget,
 )
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from gui import theme
-from gui.qt_widgets import ResponsiveStack, scroll_page
+from gui.page_kit import KVList, MenuRow, Page, PageHeader, RowList, SettingRow
+from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from utils.logger import logger
 
@@ -293,11 +285,6 @@ except Exception as e:
     logger.warning(f"VPN status initialization failed: {e}")
 
 
-# --- Theme colour helpers (mirror the original (light, dark) pairs) ---
-def _pick(light: str, dark: str) -> str:
-    return dark if theme.is_dark() else light
-
-
 # --- Main Plugin Class ---
 
 
@@ -382,7 +369,7 @@ class Plugin(BasePlugin):
         return "Warning"
 
     def on_theme_changed(self):
-        """Rebuild the VPN screen on theme toggle to re-evaluate the _pick() colours."""
+        """Rebuild the VPN screen on theme toggle (icons bake in theme colours)."""
         if getattr(self, "app", None):
             self.app.update_plugin(self.id)
 
@@ -580,7 +567,7 @@ class Plugin(BasePlugin):
         return self.display_toggle_screen()
 
     def display_toggle_screen(self):
-        """Display the VPN dashboard (faithful Qt port of the CTk screen)."""
+        """Build the VPN page: status header + toggle, details, config actions."""
         global my_vpn_status, active_client_name
 
         selected_conf_file = self.get_selected_conf_file_name()
@@ -599,10 +586,10 @@ class Plugin(BasePlugin):
         is_connected = my_vpn_status == "Running"
         self._last_polled_state = my_vpn_status
 
-        # ── Status copy + colours (mirror the original (light, dark) pairs) ──
+        # ── Status copy + pill colour ──
         if extension_disabled:
             status_text = "Extension Disabled"
-            status_color = _pick("#C5221F", "#FF4040")
+            status_kind = "error"
             try:
                 mac_major = int(platform.mac_ver()[0].split(".")[0] or "0")
             except Exception:
@@ -617,82 +604,26 @@ class Plugin(BasePlugin):
                     "Enable in System Settings › Privacy & Security › scroll to "
                     "Security › click Allow"
                 )
-            card_bg = _pick("#FDEDEC", "#3A1A1A")
             is_enabled = False
         elif not selected_conf_file:
             status_text = "No Configuration"
-            status_color = _pick("#666666", "#999999")
+            status_kind = "info"
             sub_text = "Please log in or import a VPN configuration to get started"
-            card_bg = _pick("#F5F5F5", "#1A1A1A")
             is_enabled = False
         else:
             status_text = "Connected" if is_connected else "Disconnected"
-            status_color = (
-                _pick("#1B7A3E", "#2CC985")
-                if is_connected
-                else _pick("#C5221F", "#FF4040")
-            )
+            status_kind = "ok" if is_connected else "error"
             sub_text = (
                 "All traffic is encrypted and routed securely"
                 if is_connected
                 else "Your internet traffic is not protected"
             )
-            card_bg = (
-                _pick("#E8F5E9", "#1A2E1F")
-                if is_connected
-                else _pick("#FDEDEC", "#2E1A1A")
-            )
             is_enabled = True
 
-        # ── Content column (two equal columns, centered ~750 px) ──────────
-        content = QWidget()
-        grid = QGridLayout(content)
-        grid.setContentsMargins(0, 10, 0, 20)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(12)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+        # ── Flat page: header, CONNECTION, KEYS & ROUTES, CONFIGURATION ──
+        page = Page()
 
-        # Collected by _section_header for the equal-padding pass below.
-        self._panel_spacers = []
-        self._panel_grids = []
-
-        row = 0
-
-        # ── 1. STATUS CARD (spans both columns) ───────────────────────────
-        status_card = QFrame()
-        status_card.setObjectName("Surface")
-        status_card.setStyleSheet(
-            f"#Surface {{ background-color: {card_bg}; border: none; "
-            f"border-radius: 12px; }}"
-        )
-        # Cap the banner height so leftover page height doesn't inflate it
-        # into a sparse slab with the subtitle marooned at the bottom.
-        status_card.setMaximumHeight(110)
-        sc_lay = QHBoxLayout(status_card)
-        sc_lay.setContentsMargins(22, 16, 22, 16)
-        sc_lay.setSpacing(12)
-
-        text_col = QVBoxLayout()
-        text_col.setSpacing(4)
-        title_lbl = QLabel(status_text)
-        title_lbl.setStyleSheet(
-            f"color: {status_color}; font-size: 28px; font-weight: 700; "
-            f"background: transparent;"
-        )
-        text_col.addWidget(title_lbl)
-        sub_lbl = QLabel(sub_text)
-        sub_lbl.setWordWrap(True)
-        sub_lbl.setMaximumWidth(360)
-        sub_lbl.setStyleSheet(
-            f"color: {_pick('#555555', '#AAAAAA')}; font-size: 12px; "
-            f"background: transparent;"
-        )
-        text_col.addWidget(sub_lbl)
-        sc_lay.addLayout(text_col, 1)
-
-        from plugins.vpn.qt_toggle import ToggleSwitch
-
+        header = PageHeader("VPN", sub_text, (status_kind, status_text))
         self.vpn_toggle_switch = ToggleSwitch()
         self.vpn_toggle_switch.setEnabled(is_enabled)
         if is_connected and is_enabled:
@@ -700,32 +631,36 @@ class Plugin(BasePlugin):
         else:
             self.vpn_toggle_switch.deselect()
         self.vpn_toggle_switch.clicked.connect(self._on_toggle_clicked)
-        sc_lay.addWidget(
-            self.vpn_toggle_switch, 0, Qt.AlignmentFlag.AlignVCenter
-        )
+        header.add_control(self.vpn_toggle_switch)
+        page.add(header)
 
-        grid.addWidget(status_card, row, 0, 1, 2)
-        row += 1
+        # Details (only when a config is available).
+        if selected_conf_file:
+            data = self.get_configuration_values(selected_conf_file)
+            sys_info = self.get_system_info(selected_conf_file)
 
-        # ── 2. CONFIG SELECTOR (spans both columns; only when >1 config) ──
+            page.section("Connection")
+            page.add(KVList([
+                ("IP address", data.get("client_ip_address", "N/A")),
+                ("DNS", sys_info.get("DNS", "N/A")),
+                ("System", sys_info.get("System", "N/A")),
+                ("Endpoint", sys_info.get("Server IP", "N/A")),
+                ("Protocol", "WireGuard"),
+            ]))
+
+            page.section("Keys & routes")
+            page.add(KVList([
+                ("Client key", sys_info.get("Client Public Key", "N/A")),
+                ("Server key", data.get("public_key", "N/A")),
+                ("Allowed IPs", data.get("allowed_ips", "N/A")),
+            ]))
+
+        page.section("Configuration")
         try:
             configs = self.config_manager.list_configs()
         except Exception:
             configs = []
         if len(configs) > 1:
-            sel_card = QFrame()
-            sel_card.setObjectName("Surface")
-            sel_lay = QHBoxLayout(sel_card)
-            sel_lay.setContentsMargins(16, 12, 12, 12)
-            sel_lay.setSpacing(8)
-
-            cfg_lbl = QLabel("CONFIGURATION")
-            cfg_lbl.setStyleSheet(
-                f"color: {_pick('#888888', '#777777')}; font-size: 12px; "
-                f"font-weight: 700; background: transparent;"
-            )
-            sel_lay.addWidget(cfg_lbl)
-
             config_display_names = [c["display_name"] for c in configs]
             active_display = (
                 self.config_manager.get_display_name(selected_conf_file)
@@ -738,256 +673,37 @@ class Plugin(BasePlugin):
             if idx >= 0:
                 self.config_selector.setCurrentIndex(idx)
             self.config_selector.activated.connect(self._on_config_activated)
-            sel_lay.addWidget(self.config_selector, 1)
+            self.config_selector.setMinimumWidth(200)
+            rows = RowList()
+            rows.add_row(SettingRow(
+                "Active configuration", "Used when you connect",
+                self.config_selector))
+            page.add(rows)
+            page.spacing(6)
 
-            if selected_conf_file and not self.config_manager.is_resistine_config(
+        page.add(MenuRow(
+            "upload", "Import configuration…", "Load a WireGuard .conf file",
+            self.import_config))
+        if selected_conf_file:
+            page.add(MenuRow(
+                "file-text", "View config", f"{selected_conf_file}.conf",
+                lambda: self._show_config_dialog(selected_conf_file)))
+            if len(configs) > 1 and not self.config_manager.is_resistine_config(
                 selected_conf_file
             ):
-                del_btn = QPushButton("Delete")
-                del_btn.setObjectName("Danger")
-                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                del_btn.clicked.connect(
-                    lambda: self._delete_config(selected_conf_file)
-                )
-                sel_lay.addWidget(del_btn)
+                page.add(MenuRow(
+                    "trash", "Delete configuration",
+                    f"Remove {selected_conf_file} from this device",
+                    lambda: self._delete_config(selected_conf_file),
+                    danger=True))
+        page.stretch()
 
-            grid.addWidget(sel_card, row, 0, 1, 2)
-            row += 1
-
-        # ── 3. DETAIL PANELS (only when a config is available) ────────────
-        if selected_conf_file:
-            data = self.get_configuration_values(selected_conf_file)
-            sys_info = self.get_system_info(selected_conf_file)
-
-            # Left — CLIENT panel (column 0)
-            client_panel, client_grid = self._panel()
-            cr = self._section_header(client_panel, client_grid, 0, "CLIENT")
-            cr = self._info_row(
-                client_grid, cr, "IP Address",
-                data.get("client_ip_address", "N/A"), mono=True,
-            )
-            cr = self._info_row(
-                client_grid, cr, "DNS", sys_info.get("DNS", "N/A"), mono=True,
-            )
-            cr = self._info_row(
-                client_grid, cr, "System", sys_info.get("System", "N/A"),
-            )
-            cr = self._info_row(
-                client_grid, cr, "Status", sys_info.get("Status", "N/A"),
-            )
-            # Right — SERVER / PEER panel
-            server_panel, server_grid = self._panel()
-            sr = self._section_header(server_panel, server_grid, 0, "SERVER / PEER")
-            sr = self._info_row(
-                server_grid, sr, "IP Address",
-                sys_info.get("Server IP", "N/A"), mono=True,
-            )
-            sr = self._info_row(server_grid, sr, "Protocol", "WireGuard")
-            sr = self._info_row(
-                server_grid, sr, "Config Name", sys_info.get("Config Name", "N/A"),
-            )
-            client_grid.setRowStretch(cr, 1)
-            server_grid.setRowStretch(sr, 1)
-            # Side-by-side on a wide window; stacked vertically when narrow so
-            # neither panel compresses its rows into clipped text
-            # ("10.11.128." / "Config Nam").
-            grid.addWidget(
-                ResponsiveStack(client_panel, server_panel, stretches=(1, 1)),
-                row, 0, 1, 2)
-            row += 1
-
-            # ── PUBLIC KEYS (spans both columns) ──────────────────────────
-            keys_panel, keys_grid = self._panel()
-            kr = self._section_header(keys_panel, keys_grid, 0, "PUBLIC KEYS")
-            kr = self._info_row(
-                keys_grid, kr, "Client",
-                sys_info.get("Client Public Key", "N/A"), mono=True, wrap=True,
-            )
-            kr = self._info_row(
-                keys_grid, kr, "Server",
-                data.get("public_key", "N/A"), mono=True, wrap=True,
-            )
-            keys_grid.setRowStretch(kr, 1)
-            grid.addWidget(keys_panel, row, 0, 1, 2)
-            row += 1
-
-            # ── ALLOWED IPs (spans both columns) ──────────────────────────
-            allowed_panel, allowed_grid = self._panel()
-            ar = self._section_header(allowed_panel, allowed_grid, 0, "ALLOWED IPs")
-            ar = self._info_row(
-                allowed_grid, ar, "Routes",
-                data.get("allowed_ips", "N/A"), mono=True, wrap=True,
-            )
-            allowed_grid.setRowStretch(ar, 1)
-            grid.addWidget(allowed_panel, row, 0, 1, 2)
-            row += 1
-
-        # ── 4. ACTION BUTTONS (spans both columns) ────────────────────────
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(8)
-
-        import_btn = QPushButton("Import Configuration")
-        import_btn.setObjectName("SurfaceBtn")
-        import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        import_btn.setMinimumHeight(38)
-        import_btn.clicked.connect(self.import_config)
-        buttons_row.addWidget(import_btn, 1)
-
-        if selected_conf_file:
-            view_btn = QPushButton("View Config")
-            view_btn.setObjectName("SurfaceBtn")
-            view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            view_btn.setMinimumHeight(38)
-            view_btn.clicked.connect(
-                lambda: self._show_config_dialog(selected_conf_file)
-            )
-            buttons_row.addWidget(view_btn, 1)
-
-        grid.addLayout(buttons_row, row, 0, 1, 2)
-        row += 1
-
-        # Keep the layout top-aligned: a trailing stretch row swallows any
-        # leftover viewport height so the panels stay at their natural
-        # (compact) heights instead of being inflated to fill the page —
-        # tall windows were stretching huge gaps into every panel.
-        grid.setRowStretch(row, 1)
-
-        # ── Capped content column ─────────────────────────────────────────
-        # Compresses freely at small windows (same 20px edge margins as the
-        # Endpoint page, no minimum floor), but stops growing at 700px and
-        # centers on wide windows instead of stretching edge-to-edge.
-        centered = QWidget()
-        outer = QHBoxLayout(centered)
-        # CTk-style: centered (pulled off the sidebar) once the window is
-        # wide enough for the 700px cap to engage — leftover space splits
-        # equally between the side stretches. Below the cap the 50:1 weights
-        # collapse the gutters to ~nothing, so a squished window shows the
-        # same ~20px margin on BOTH sides (matching the Endpoint page).
-        outer.setContentsMargins(20, 10, 20, 10)
-        outer.addStretch(1)
-        content.setMaximumWidth(700)
-        outer.addWidget(content, 50)
-        outer.addStretch(1)
-
-        self.main_container = scroll_page(centered)
-
-        # Equalise the panels' title→content padding so the bottom buttons stay
-        # flush — recomputed whenever the viewport is resized.
-        self._vpn_content = content
-        self._vpn_outer_grid = grid
-        self._vpn_scroll = self.main_container
-        _orig_resize = self.main_container.resizeEvent
-        self._rebalance_padding() # unconditional cuz revisiting from theme change doesn't resize
-        def _on_resize(event, _o=_orig_resize):
-            _o(event)
-            self._rebalance_padding() # rebalance on a resize too or it WILL misalign itself
-
-        self.main_container.resizeEvent = _on_resize
-        self.app.after(0, self._rebalance_padding)
+        self.main_container = page.widget
 
         # Start the re-arming status poll.
         self._start_polling()
 
         return self.main_container
-
-    def _rebalance_padding(self):
-        """Keep a small, EQUAL title→content padding in every panel.
-
-        Previously this computed large spacer heights so the bottom buttons
-        sat flush with the viewport — which read as huge dead gaps between
-        each panel's title and its rows. Content now sits directly under the
-        titles (matching the original CTk layout); leftover height simply
-        stays below the last row of panels.
-        """
-        spacers = getattr(self, "_panel_spacers", None)
-        grids = getattr(self, "_panel_grids", [])
-        if not spacers:
-            return
-        fixed = QSizePolicy.Policy.Fixed
-        mini = QSizePolicy.Policy.Minimum
-        try:
-            for sp in spacers:
-                sp.changeSize(0, 8, mini, fixed)
-            for g in grids:
-                g.invalidate()
-            self._vpn_outer_grid.invalidate()
-        except (RuntimeError, AttributeError):
-            return
-
-    # ---- Panel / row builders (mirror _section_header / _info_row) -------
-    def _panel(self) -> tuple[QFrame, QGridLayout]:
-        panel = QFrame()
-        panel.setObjectName("Surface")
-        g = QGridLayout(panel)
-        g.setContentsMargins(0, 0, 0, 8)
-        g.setHorizontalSpacing(6)
-        g.setVerticalSpacing(10)
-        g.setColumnStretch(0, 0)
-        g.setColumnStretch(1, 1)
-        return panel, g
-
-    def _section_header(self, panel, g: QGridLayout, row: int, title: str) -> int:
-        hdr = QLabel(title)
-        hdr.setStyleSheet(
-            f"color: {_pick('#3A7EBF', '#3A7EBF')}; font-size: 12px; "
-            f"font-weight: 700; background: transparent;"
-        )
-        g.addWidget(hdr, row, 0, 1, 2)
-        g.setContentsMargins(14, 14, 14, 8)
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setObjectName("Divider")
-        g.addWidget(div, row + 1, 0, 1, 2)
-        # Spacer between the title/divider and the content rows. Its height is
-        # assigned later by _rebalance_padding() to an EQUAL value across every
-        # panel (so all title→content paddings match) chosen so the bottom
-        # buttons sit flush with the bottom of the screen. Equal *row stretch*
-        # can't do this — it yields equal total panel heights, hence unequal
-        # padding — so we compute and set fixed spacer heights instead.
-        spacer = QSpacerItem(
-            0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
-        g.addItem(spacer, row + 2, 0, 1, 2)
-        self._panel_spacers.append(spacer)
-        self._panel_grids.append(g)
-        return row + 3
-
-    def _info_row(
-        self, g: QGridLayout, row: int, label: str, value: str,
-        mono: bool = False, wrap: bool = False,
-    ) -> int:
-        lbl = QLabel(label)
-        lbl.setStyleSheet(
-            f"color: {_pick('#888888', '#777777')}; font-size: 13px; "
-            f"background: transparent;"
-        )
-        lbl.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        g.addWidget(lbl, row, 0)
-
-        val = QLabel(str(value))
-        # One family + one weight for every value (mono is intentionally
-        # ignored): the Courier-vs-UI-font mix read as inconsistent sizing
-        # and boldness across rows.
-        _ = mono
-        val.setStyleSheet(
-            f"color: {_pick('#111111', '#EEEEEE')}; font-size: 13px; "
-            f"font-weight: 700; background: transparent;"
-        )
-        # Always allow wrapping: a non-wrapping QLabel is CLIPPED (no
-        # ellipsis) when the two side-by-side panels compress its column on
-        # a narrow window — IPs rendered as "10.11.128." and labels as
-        # "Config Nam". Wrapped values shrink gracefully instead. Keep the
-        # value vertically CENTERED against its label even when it wraps to
-        # multiple lines (Public Keys / Routes rows looked misaligned with
-        # the label at the bottom and the value at the top).
-        val.setWordWrap(True)
-        val.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        g.addWidget(val, row, 1)
-        return row + 1
 
     # ===================================================================
     #  Toggle / connect / disconnect (blocking work on a worker thread)

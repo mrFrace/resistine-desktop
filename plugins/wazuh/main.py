@@ -3,11 +3,12 @@
 Faithful PyQt6 port of the original CustomTkinter "Endpoint" screen. Installs
 and manages the SIEM (Wazuh) agent from the Phoenix Desktop sidebar.
 
-The screen is state-driven from a single bordered "Surface" card:
+The screen is a flat page (gui/page_kit.py), state-driven:
 
-  * not installed  -> install card (state-machine on macOS, one-click elsewhere)
-  * needs re-enroll -> re-enrollment card
-  * installed      -> running/stopped status card with the Agent Service toggle
+  * not installed  -> install action (state-machine on macOS, one-click elsewhere)
+  * needs re-enroll -> reinstall action
+  * installed      -> status pill + Agent Service toggle in the header, agent
+                      details, and a Reconnect action when not connected
 
 Backend platform functions are called, never reimplemented. All blocking
 subprocess work runs on worker threads and is marshalled back onto the GUI
@@ -24,20 +25,10 @@ import os
 import platform
 import threading
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import (
-    QGridLayout,
-    QFrame,
-    QHBoxLayout,
-    QLabel,
-    QProgressBar,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
+from PyQt6.QtWidgets import QProgressBar, QWidget
 
-from gui import theme
-from gui.qt_widgets import scroll_page
+from gui.page_kit import KVList, MenuRow, Page, PageHeader, muted
+from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.wazuh.config import WAZUH_MANAGER
 from utils import settings
@@ -109,19 +100,7 @@ except Exception as e:  # pragma: no cover - defensive
     _platform_supported = False
 
 
-# Colours (light, dark) mirroring the original CTk constants.
-_COLOR_MUTED = ("#666666", "#aaaaaa")
-_COLOR_ERROR = ("#C5221F", "#FF474C")
-_COLOR_OK = ("#1E8E3E", "#2CC985")
-_COLOR_ACCENT = ("#3a7ebf", "#5b9bd5")
-_COLOR_WARN = ("#B45309", "#FBBF24")
-
 _POLL_INTERVAL_MS = 10_000
-
-
-def _c(pair) -> str:
-    """Resolve a (light, dark) colour pair for the active mode."""
-    return pair[1] if theme.is_dark() else pair[0]
 
 
 def _safe(fn, default=None):
@@ -255,53 +234,32 @@ class Plugin(BasePlugin):
         return self.main_container
 
     def _unsupported_screen(self) -> QWidget:
-        inner = QWidget()
-        col = QVBoxLayout(inner)
-        col.setContentsMargins(20, 40, 20, 20)
-        col.setSpacing(5)
-
-        title = QLabel("Unsupported Platform")
-        title.setStyleSheet("font-size: 20px; font-weight: 700;")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        col.addWidget(title)
-
-        msg = QLabel(
-            f"SIEM agent management is not yet available on {_PLATFORM}.")
-        msg.setStyleSheet(f"font-size: 14px; color: {_c(_COLOR_MUTED)};")
-        msg.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        col.addWidget(msg)
-        col.addStretch(1)
-        return scroll_page(inner)
+        page = Page()
+        page.add(PageHeader(
+            "Endpoint",
+            f"SIEM agent management is not yet available on {_PLATFORM}.",
+            ("info", "Unsupported")))
+        page.stretch()
+        return page.widget
 
     def _agent_screen(self) -> QWidget:
         installed = _safe(is_agent_installed, False)
         logger.info(f"SIEM _agent_screen: is_agent_installed={installed}")
         reenroll = installed and _safe(needs_reenrollment, False)
 
-        inner = QWidget()
-        page = QVBoxLayout(inner)
-        page.setContentsMargins(20, 10, 20, 10)
-        page.setSpacing(0)
-
-        # Single bordered, rounded "Surface" card (CTkFrame analogue).
-        card = QFrame()
-        card.setObjectName("Surface")
-        body = QVBoxLayout(card)
-        body.setContentsMargins(20, 16, 20, 20)
-        body.setSpacing(0)
-        self._card_body = body
+        page = Page()
+        self._header = PageHeader("Endpoint")
+        self._status_label = self._header.pill
+        page.add(self._header)
 
         if reenroll:
-            self._build_reenroll_section(body)
+            self._build_reenroll_section(page)
         elif installed:
-            self._build_status_section(body)
+            self._build_status_section(page)
         else:
-            self._build_install_section(body)
+            self._build_install_section(page)
 
-        page.addWidget(card)
-        page.addStretch(1)
-
-        scr = scroll_page(inner)
+        page.stretch()
 
         if installed and not reenroll:
             self._start_status_polling()
@@ -310,144 +268,94 @@ class Plugin(BasePlugin):
             threading.Thread(
                 target=self._deferred_restore, daemon=True).start()
 
-        return scr
+        return page.widget
 
     # ── UI helpers ─────────────────────────────────────────────────────
 
-    def _add_separator(self, body: QVBoxLayout) -> None:
-        body.addSpacing(4)
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setObjectName("Divider")
-        body.addWidget(div)
-        body.addSpacing(4)
+    def _add_progress_label(self, page: Page, text: str = "") -> None:
+        self._progress_label = muted(text)
+        self._progress_label.setContentsMargins(0, 8, 0, 0)
+        self._progress_label.setVisible(bool(text))  # shown by _set_progress
+        page.add(self._progress_label)
 
-    def _title(self, body: QVBoxLayout, text: str) -> None:
-        lbl = QLabel(text)
-        lbl.setStyleSheet("font-size: 18px; font-weight: 700;")
-        body.addSpacing(4)
-        body.addWidget(lbl, 0, Qt.AlignmentFlag.AlignLeft)
+    def _add_busy_bar(self, page: Page) -> QProgressBar:
+        bar = QProgressBar()
+        bar.setRange(0, 0)  # indeterminate
+        bar.setTextVisible(False)
+        bar.setFixedHeight(4)
+        page.spacing(10)
+        page.add(bar)
+        return bar
 
-    def _paragraph(self, body: QVBoxLayout, text: str, color) -> None:
-        lbl = QLabel(text)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet(f"font-size: 13px; color: {_c(color)};")
-        body.addWidget(lbl)
+    def _add_detail_rows(self, page: Page, details: dict,
+                         title: str = "Agent") -> KVList:
+        page.section(title)
+        kv = KVList(details.items())
+        page.add(kv)
+        return kv
 
-    def _add_detail_rows(self, body: QVBoxLayout, details: dict) -> None:
-        # One QGridLayout, not stacked QHBoxLayouts: word-wrapped QLabels
-        # inside nested box layouts break Qt's height-for-width propagation,
-        # which painted the rows on top of each other. A grid computes each
-        # row's height from the wrapped value correctly.
-        g = QGridLayout()
-        g.setContentsMargins(0, 8, 0, 0)
-        g.setHorizontalSpacing(12)
-        g.setVerticalSpacing(10)
-        g.setColumnStretch(1, 1)
-        for r, (label, value) in enumerate(details.items()):
-            lk = QLabel(label)
-            lk.setStyleSheet(f"font-size: 13px; color: {_c(_COLOR_MUTED)};")
-            g.addWidget(lk, r, 0,
-                        Qt.AlignmentFlag.AlignLeft
-                        | Qt.AlignmentFlag.AlignVCenter)
-            lv = QLabel(str(value))
-            lv.setStyleSheet("font-size: 13px; font-weight: 700;")
-            lv.setWordWrap(True)  # wrap instead of clipping when narrow
-            lv.setAlignment(Qt.AlignmentFlag.AlignRight
-                            | Qt.AlignmentFlag.AlignVCenter)
-            g.addWidget(lv, r, 1)
-        body.addLayout(g)
+    def _agent_details(self) -> dict:
+        return {
+            "Agent name": _safe(get_agent_name, "—"),
+            "Group": _safe(get_agent_group, "—"),
+            "Manager": WAZUH_MANAGER,
+        }
 
-    # ── Card: Re-enrollment required (account change) ──────────────────
+    def _action(self, page: Page, icon: str, title: str, hint: str,
+                handler, section: str = "Actions") -> MenuRow:
+        page.section(section)
+        row = MenuRow(icon, title, hint, on_click=handler)
+        page.add(row)
+        return row
 
-    def _build_reenroll_section(self, body: QVBoxLayout) -> None:
+    # ── Re-enrollment required (account change) ────────────────────────
+
+    def _build_reenroll_section(self, page: Page) -> None:
         enrolled = settings.get("wazuh", "enrolled_email", "unknown")
         current = settings.get("auth", "email", "unknown")
 
-        self._title(body, "Re-enrollment Required")
-        body.addSpacing(2)
-        self._paragraph(
-            body,
-            f"This agent was enrolled under a different account ({enrolled}).\n"
-            f"Reinstall to register it under the current account ({current}).",
-            _COLOR_ERROR,
-        )
-        body.addSpacing(8)
-        self._add_separator(body)
-        body.addSpacing(8)
+        self._header.set_status("error", "Re-enrollment required")
+        self._header.set_subtitle(
+            f"This agent was enrolled under a different account ({enrolled}). "
+            f"Reinstall to register it under the current account ({current}).")
+        self._install_btn = self._action(
+            page, "rotate-ccw", "Reinstall agent",
+            "Re-registers this device under your account",
+            self._start_reinstall)
+        self._add_progress_label(page)
 
-        self._progress_label = QLabel("")
-        self._progress_label.setStyleSheet(
-            f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
-        body.addWidget(self._progress_label)
-        body.addSpacing(4)
+    # ── Not installed ──────────────────────────────────────────────────
 
-        self._install_btn = QPushButton("Reinstall Agent")
-        self._install_btn.setMinimumHeight(40)
-        self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._install_btn.clicked.connect(self._start_reinstall)
-        body.addWidget(self._install_btn)
-
-    # ── Card: Not installed ────────────────────────────────────────────
-
-    def _build_install_section(self, body: QVBoxLayout) -> None:
+    def _build_install_section(self, page: Page) -> None:
         if _PLATFORM == "Darwin":
-            return self._build_install_section_darwin(body)
-        return self._build_install_section_direct(body)
+            return self._build_install_section_darwin(page)
+        return self._build_install_section_direct(page)
 
-    def _build_install_section_direct(self, body: QVBoxLayout) -> None:
-        """Simple install card for Windows/Linux — requires VPN, one click."""
-        self._title(body, "Security Agent")
-        body.addSpacing(2)
-        self._paragraph(
-            body,
-            "The SIEM agent collects security telemetry from this machine "
-            "and reports to the Phoenix SIEM dashboard.",
-            _COLOR_MUTED,
-        )
-        body.addSpacing(8)
-        self._add_separator(body)
-
-        self._add_detail_rows(body, {
-            "Agent Name": _safe(get_agent_name, "—"),
-            "Agent Group": _safe(get_agent_group, "—"),
-            "Manager": WAZUH_MANAGER,
-        })
+    def _build_install_section_direct(self, page: Page) -> None:
+        """Install screen for Windows/Linux — requires VPN, one click."""
+        self._header.set_status("warning", "Not installed")
+        self._header.set_subtitle(
+            "The endpoint agent collects security telemetry from this "
+            "machine and reports to the Phoenix SIEM dashboard.")
 
         vpn_ok = _safe(is_vpn_connected, True)
-        if not vpn_ok:
-            body.addSpacing(8)
-            warn = QLabel("Connect VPN to install the SIEM agent")
-            warn.setWordWrap(True)
-            warn.setStyleSheet(
-                f"font-size: 13px; font-weight: 700; color: {_c(_COLOR_ERROR)};")
-            body.addWidget(warn)
-
-        body.addSpacing(8)
-        self._progress_label = QLabel("")
-        self._progress_label.setStyleSheet(
-            f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
-        body.addWidget(self._progress_label)
-        body.addSpacing(4)
-
+        self._install_btn = self._action(
+            page, "download", "Install agent",
+            "Download and install the agent (needs admin rights)"
+            if vpn_ok else "Connect the VPN to install the agent",
+            self._start_installation)
+        self._install_btn.setEnabled(bool(vpn_ok))
+        self._add_progress_label(page)
         # Indeterminate progress bar, hidden until install starts — the direct
         # install runs several download/MSI/elevation phases with only the text
         # label as feedback, which can look frozen on a slow machine.
-        self._install_bar = QProgressBar()
-        self._install_bar.setRange(0, 0)  # indeterminate
-        body.addWidget(self._install_bar)
+        self._install_bar = self._add_busy_bar(page)
         self._install_bar.hide()
-        body.addSpacing(4)
 
-        self._install_btn = QPushButton("Install Agent")
-        self._install_btn.setMinimumHeight(40)
-        self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._install_btn.clicked.connect(self._start_installation)
-        self._install_btn.setEnabled(bool(vpn_ok))
-        body.addWidget(self._install_btn)
+        self._add_detail_rows(page, self._agent_details())
 
-    def _build_install_section_darwin(self, body: QVBoxLayout) -> None:
-        """State-machine install card for macOS — download + install phases."""
+    def _build_install_section_darwin(self, page: Page) -> None:
+        """State-machine install screen for macOS — download + install."""
         from plugins.wazuh.agent.installer_service import (
             STATE_DOWNLOAD_FAILED,
             STATE_DOWNLOADED,
@@ -461,9 +369,7 @@ class Plugin(BasePlugin):
 
         state = _safe(get_install_state, STATE_NOT_STARTED)
         logged_in = settings.get("auth", "logged_in", False)
-
-        self._title(body, "Security Agent")
-        body.addSpacing(2)
+        header = self._header
 
         # Without login the download normally never starts, but a user who
         # imported a VPN config manually (or removed the Login plugin) still
@@ -473,33 +379,22 @@ class Plugin(BasePlugin):
                        or not self._login_plugin_installed())
 
         if state == STATE_NOT_STARTED and not logged_in and not can_attempt:
-            self._paragraph(
-                body, "Log in to enable endpoint protection.", _COLOR_MUTED)
-            body.addSpacing(8)
+            header.set_status("warning", "Not installed")
+            header.set_subtitle("Log in to enable endpoint protection.")
 
         elif state == STATE_NOT_STARTED and not logged_in:
-            self._paragraph(
-                body,
+            header.set_status("warning", "Not installed")
+            header.set_subtitle(
                 "You're not signed in, but a VPN configuration is available "
-                "— you can install the security agent now.",
-                _COLOR_MUTED,
-            )
-            body.addSpacing(8)
-            install_btn = QPushButton("Download && Install Agent")
-            install_btn.setMinimumHeight(40)
-            install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            install_btn.clicked.connect(self._force_download_start)
-            body.addWidget(install_btn)
-            body.addSpacing(8)
+                "— you can install the security agent now.")
+            self._action(page, "download", "Download & install agent",
+                         "Fetches the agent package, then installs it",
+                         self._force_download_start)
 
         elif state in (STATE_NOT_STARTED, STATE_DOWNLOADING):
-            self._paragraph(
-                body, "Downloading security agent...", _COLOR_ACCENT)
-            body.addSpacing(8)
-            bar = QProgressBar()
-            bar.setRange(0, 0)  # indeterminate
-            body.addWidget(bar)
-            body.addSpacing(8)
+            header.set_status("info", "Downloading…")
+            header.set_subtitle("Downloading security agent...")
+            self._add_busy_bar(page)
 
         elif state == STATE_DOWNLOAD_FAILED:
             reason = _safe(get_failure_reason, "")
@@ -508,56 +403,29 @@ class Plugin(BasePlugin):
                 "network_timeout": "Download timed out. Please try again.",
                 "signature_invalid": "Package signature invalid. Will retry with a fresh download.",
             }
-            msg = _REASON_MSG.get(reason, f"Download failed ({reason}).")
-            self._paragraph(body, msg, _COLOR_ERROR)
-            body.addSpacing(8)
-            retry_btn = QPushButton("Retry")
-            retry_btn.setMinimumHeight(36)
-            retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            retry_btn.clicked.connect(self._retry_download)
-            body.addWidget(retry_btn)
+            header.set_status("error", "Download failed")
+            header.set_subtitle(
+                _REASON_MSG.get(reason, f"Download failed ({reason})."))
+            self._action(page, "refresh-cw", "Retry download", "",
+                         self._retry_download)
 
         elif state == STATE_DOWNLOADED:
-            self._paragraph(
-                body,
-                "We're about to install a system security component "
-                "that monitors your device for threats.",
-                _COLOR_MUTED,
-            )
-            self._paragraph(
-                body,
-                "This requires your password to allow the installation.",
-                _COLOR_MUTED,
-            )
-            body.addSpacing(8)
-            self._add_separator(body)
-            self._add_detail_rows(body, {
-                "Agent Name": _safe(get_agent_name, "—"),
-                "Agent Group": _safe(get_agent_group, "—"),
-                "Manager": WAZUH_MANAGER,
-            })
-            body.addSpacing(8)
-            self._progress_label = QLabel("")
-            self._progress_label.setStyleSheet(
-                f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
-            body.addWidget(self._progress_label)
-            body.addSpacing(4)
-            self._install_btn = QPushButton("Install Security")
-            self._install_btn.setMinimumHeight(40)
-            self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._install_btn.clicked.connect(self._start_installation)
-            body.addWidget(self._install_btn)
+            header.set_status("warning", "Ready to install")
+            header.set_subtitle(
+                "We're about to install a system security component that "
+                "monitors your device for threats.")
+            self._install_btn = self._action(
+                page, "shield-check", "Install security",
+                "Requires your password to allow the installation",
+                self._start_installation)
+            self._add_progress_label(page)
+            self._add_detail_rows(page, self._agent_details())
 
         elif state == STATE_INSTALLING:
-            self._progress_label = QLabel("Installing...")
-            self._progress_label.setStyleSheet(
-                f"font-size: 13px; color: {_c(_COLOR_ACCENT)};")
-            body.addWidget(self._progress_label)
-            body.addSpacing(8)
-            bar = QProgressBar()
-            bar.setRange(0, 0)
-            body.addWidget(bar)
-            body.addSpacing(8)
+            header.set_status("info", "Installing…")
+            header.set_subtitle("Installing the security agent.")
+            self._add_progress_label(page, "Installing...")
+            self._add_busy_bar(page)
             self._poll_install()
 
         elif state == STATE_INSTALL_FAILED:
@@ -586,28 +454,26 @@ class Plugin(BasePlugin):
                 )
             else:
                 msg = _REASON_MSG.get(reason, f"Installation failed ({reason}).")
-            self._paragraph(body, msg, _COLOR_ERROR)
-            body.addSpacing(8)
+            header.set_status(
+                "warning" if reason == "user_canceled" else "error",
+                "Cancelled" if reason == "user_canceled" else "Install failed")
+            header.set_subtitle(msg)
             if reason != "user_canceled":
-                retry_btn = QPushButton("Retry")
-                retry_btn.setMinimumHeight(36)
-                retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                retry_btn.clicked.connect(self._retry_install)
-                body.addWidget(retry_btn)
+                self._action(page, "refresh-cw", "Retry", "",
+                             self._retry_install)
             else:
-                self._install_btn = QPushButton("Install Security")
-                self._install_btn.setMinimumHeight(40)
-                self._install_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                self._install_btn.clicked.connect(self._start_installation)
-                body.addWidget(self._install_btn)
+                self._install_btn = self._action(
+                    page, "shield-check", "Install security",
+                    "Requires your password to allow the installation",
+                    self._start_installation)
 
-    # ── Card: Installed (status + controls) ────────────────────────────
+    # ── Installed (status + controls) ──────────────────────────────────
 
-    def _build_status_section(self, body: QVBoxLayout) -> None:
+    def _build_status_section(self, page: Page) -> None:
         state = _safe(get_agent_status, "Stopped")
         self._cached_state = state
         is_running = state == "Running"
-        # Live manager-connection status \u2014 distinct from "process running".
+        # Live manager-connection status — distinct from "process running".
         # Resolution: wazuh-agentd.state file → unprivileged socket probe
         # (the state file is root-owned on macOS/Linux GUI sessions, which
         # used to read as "Unknown" on perfectly healthy agents) →
@@ -618,112 +484,58 @@ class Plugin(BasePlugin):
         not_connected = is_running and connection == "disconnected"
 
         if not is_running:
-            status_color, status_text = _COLOR_ERROR, "Stopped"
+            kind, status_text = "error", "Stopped"
+            subtitle = "The agent service is stopped — this device is not monitored"
         elif not_connected:
-            status_color, status_text = _COLOR_ERROR, "Not Connected"
+            kind, status_text = "error", "Not connected"
+            subtitle = "The agent is running but can't reach the SIEM manager"
         elif connection == "connected":
-            status_color, status_text = _COLOR_OK, "Connected"
+            kind, status_text = "ok", "Connected"
+            subtitle = "This device reports to the Phoenix SIEM"
         elif connection == "pending":
-            status_color, status_text = _COLOR_WARN, "Connecting…"
+            kind, status_text = "warning", "Connecting…"
+            subtitle = "The agent is connecting to the SIEM manager"
         else:
-            status_color, status_text = _COLOR_OK, "Running"
-
-        # Header: indicator dot + "SIEM Agent" + Running/Stopped label.
-        body.addSpacing(4)
-        header = QHBoxLayout()
-        dot = QLabel("●")
-        dot.setStyleSheet(
-            f"font-size: 16px; color: {_c(status_color)};")
-        header.addWidget(dot, 0, Qt.AlignmentFlag.AlignLeft)
-        header.addSpacing(8)
-        name = QLabel("SIEM Agent")
-        name.setStyleSheet("font-size: 18px; font-weight: 700;")
-        header.addWidget(name, 0, Qt.AlignmentFlag.AlignLeft)
-        header.addStretch(1)
-        self._status_label = QLabel(status_text)
-        self._status_label.setStyleSheet(
-            f"font-size: 14px; font-weight: 700; color: {_c(status_color)};")
-        header.addWidget(self._status_label, 0, Qt.AlignmentFlag.AlignRight)
-        body.addLayout(header)
+            kind, status_text = "ok", "Running"
+            subtitle = "The agent service is running"
+        self._header.set_status(kind, status_text)
+        self._header.set_subtitle(subtitle)
 
         # Agent Service toggle — the same sliding switch the VPN page uses.
-        from plugins.vpn.qt_toggle import ToggleSwitch
-
-        body.addSpacing(4)
-        toggle_row = QHBoxLayout()
-        toggle_label = QLabel("Agent Service")
-        toggle_label.setStyleSheet("font-size: 14px;")
-        toggle_row.addWidget(toggle_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        toggle_row.addStretch(1)
         self._agent_toggle = ToggleSwitch()
+        self._agent_toggle.setToolTip("Agent service")
+        self._agent_toggle.setAccessibleName("Agent service")
         self._agent_toggle.setChecked(is_running)
         self._agent_toggle.toggled.connect(self._toggle_agent)
-        toggle_row.addWidget(
-            self._agent_toggle, 0, Qt.AlignmentFlag.AlignVCenter)
-        body.addLayout(toggle_row)
-        body.addSpacing(8)
+        self._header.add_control(self._agent_toggle)
 
-        self._add_separator(body)
-
-        self._add_detail_rows(body, {
+        self._add_detail_rows(page, {
             "Status": state,
             # "Unknown" reads as a fault to users; a quiet dash is honest
             # ("we can't read it") without implying something is wrong.
             "Connection": ("—" if connection == "unknown"
                            else connection.capitalize()),
-            "Agent Name": _safe(get_agent_name, "—"),
-            "Agent Group": _safe(get_agent_group, "—"),
-            "Manager": WAZUH_MANAGER,
+            **self._agent_details(),
             "Platform": f"{_PLATFORM} {platform.release()}",
         })
 
-        # Recovery affordance — bottom of the card, and ONLY when the
-        # connection is not confirmed healthy. A connected agent shows no
-        # Reconnect at all. Running-but-not-connected (e.g. the key was
-        # invalidated server-side after a reinstall) gets an explanation +
-        # button; the button re-registers under a fresh identity — the
-        # actual fix, since a plain toggle restarts the daemon with the
-        # same dead key. Recovery is user-initiated (one admin prompt),
-        # never a surprise background dialog.
+        # Recovery affordance — ONLY when the connection is not confirmed
+        # healthy. A connected agent shows no Reconnect at all.
+        # Running-but-not-connected (e.g. the key was invalidated server-side
+        # after a reinstall) gets an explanation + action; it re-registers
+        # under a fresh identity — the actual fix, since a plain toggle
+        # restarts the daemon with the same dead key. Recovery is
+        # user-initiated (one admin prompt), never a surprise background
+        # dialog.
         if is_running and connection != "connected":
-            body.addSpacing(12)
-            self._add_separator(body)
-            if not_connected:
-                warn = QLabel(
-                    "Agent is running but not connected to the SIEM "
-                    "manager. If the old agent was removed on the server, "
-                    "reconnect to re-register under a new identity.")
-                warn.setStyleSheet(
-                    f"font-size: 13px; color: {_c(_COLOR_ERROR)};")
-            else:
-                warn = QLabel(
-                    "Connection can't be confirmed. If the dashboard "
-                    "shows this device offline, reconnect to re-register "
-                    "the agent.")
-                warn.setStyleSheet(
-                    f"font-size: 13px; color: {_c(_COLOR_MUTED)};")
-            warn.setWordWrap(True)
-
-            self._reconnect_btn = QPushButton("Reconnect")
-            self._reconnect_btn.setMinimumHeight(32)
-            self._reconnect_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            accent = _c(_COLOR_ACCENT)
-            self._reconnect_btn.setStyleSheet(
-                f"QPushButton {{ background: transparent; color: {accent}; "
-                f"border: 1px solid {accent}; border-radius: 8px; "
-                f"padding: 4px 18px; font-size: 13px; font-weight: 600; }}"
-                f"QPushButton:hover {{ background-color: {accent}; "
-                f"color: #ffffff; }}"
-                f"QPushButton:disabled {{ color: {_c(_COLOR_MUTED)}; "
-                f"border-color: {_c(_COLOR_MUTED)}; }}")
-            self._reconnect_btn.clicked.connect(self._reconnect_agent)
-
-            recover_row = QHBoxLayout()
-            recover_row.setSpacing(16)
-            recover_row.addWidget(warn, 1, Qt.AlignmentFlag.AlignVCenter)
-            recover_row.addWidget(
-                self._reconnect_btn, 0, Qt.AlignmentFlag.AlignVCenter)
-            body.addLayout(recover_row)
+            hint = ("If the old agent was removed on the server, reconnect "
+                    "to re-register under a new identity."
+                    if not_connected else
+                    "Connection can't be confirmed. If the dashboard shows "
+                    "this device offline, reconnect to re-register the agent.")
+            self._reconnect_btn = self._action(
+                page, "refresh-cw", "Reconnect", hint,
+                self._reconnect_agent, section="Troubleshooting")
         else:
             self._reconnect_btn = None
 
@@ -1066,6 +878,7 @@ class Plugin(BasePlugin):
         if lbl is not None and not self._destroyed:
             try:
                 lbl.setText(text)
+                lbl.setVisible(bool(text))
             except RuntimeError:
                 pass
 
