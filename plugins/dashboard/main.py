@@ -35,9 +35,11 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
-from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
+from gui.page_kit import (
+    Page, PageHeader, RowList, SlideStack, back_link, icon_button, muted)
+from gui.qt_widgets import CardGrid, StatusBadge, scroll_page, set_pill
 from plugins.base_plugin import BasePlugin
-from plugins.dashboard import posture
+from plugins.dashboard import mitigations, posture
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -281,6 +283,9 @@ class Plugin(BasePlugin):
                                 posture.state(), posture.local_names(include_agent=False)),
                             "endpoint": None, "ai": None, "system": None}
         self._panels: dict = {}
+        self._views: SlideStack | None = None
+        self._detail = None          # (page widget, RowList, PageHeader) while open
+        self._posture_view = None    # (state, names) of the last refresh
         self._timer: QTimer | None = None
         self._busy = False
 
@@ -342,7 +347,8 @@ class Plugin(BasePlugin):
         self._panels = {
             "posture": _Panel(
                 "Security posture",
-                os.path.join(_PLUGINS_DIR, "antivirus", "antivirus_dark.png")),
+                os.path.join(_PLUGINS_DIR, "antivirus", "antivirus_dark.png"),
+                self._show_posture_detail),
             "endpoint": _Panel(
                 "Endpoint",
                 os.path.join(_PLUGINS_DIR, "wazuh", "add_user_dark.png"),
@@ -363,7 +369,10 @@ class Plugin(BasePlugin):
 
         self._ensure_timer()
         self.refresh()
-        return scroll_page(inner)
+        self._views = SlideStack(fit_height=False)
+        self._views.addWidget(scroll_page(inner))
+        self._detail = None
+        return self._views
 
     def on_theme_changed(self) -> None:
         # Panels bake theme colours in at build time.
@@ -398,7 +407,12 @@ class Plugin(BasePlugin):
         def work():
             data = {}
             try:
-                data["posture"] = posture.panel_data(posture.fetch(), posture.local_names())
+                st, names = posture.fetch(), posture.local_names()
+                mine, _ = posture.split_cards(st["cards"], names)
+                states = mitigations.check(mine, True) if mine else []
+                data["posture"] = posture.panel_data(
+                    st, names, todo=mitigations.summary(states) if states else None)
+                data["_posture_view"] = (st, names)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard posture probe failed: {e}")
             for key, fn in (("endpoint", _endpoint_info),
@@ -419,6 +433,10 @@ class Plugin(BasePlugin):
 
     def _apply(self, data: dict):
         self._busy = False
+        view = data.pop("_posture_view", None)
+        if view is not None:
+            self._posture_view = view
+            self._fill_posture_detail()
         self._data.update(data)
         badge = (self._data.get("endpoint") or {}).get("badge")
         if badge:
@@ -428,6 +446,132 @@ class Plugin(BasePlugin):
                 panel.set_data(self._data[panel_key])
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+
+    # ---- security posture detail (slides in over the panels) ---------------
+    _PILLS = {
+        mitigations.OPEN: ("error", "To fix"),
+        mitigations.FIXED_HERE: ("ok", "Fixed here"),
+        mitigations.UNKNOWN: ("info", "Can't check here"),
+        mitigations.SERVER: ("info", "Next scan"),
+        None: ("info", "Checking…"),
+    }
+
+    def _show_posture_detail(self) -> None:
+        if self._views is None:
+            return
+        page = Page()
+        page.add(back_link("Dashboard", self._hide_posture_detail))
+        header = PageHeader("Security posture")
+        again = icon_button("refresh-cw", "Check again")
+        again.clicked.connect(self._recheck_mitigations)
+        header.add_control(again)
+        page.add(header)
+        rows = RowList()
+        page.spacing(18)
+        page.add(rows)
+        page.spacing(14)
+        page.add(muted(
+            "Fixed here means the vulnerable version is no longer installed on this "
+            "machine. The daily scan confirms it and the item disappears. Phoenix never "
+            "changes your system on its own: update packages with your system's "
+            "software updater."))
+        page.stretch()
+        self._views.addWidget(page.widget)
+        self._detail = (page.widget, rows, header)
+        self._fill_posture_detail()
+        self._views.push(page.widget)
+
+    def _hide_posture_detail(self) -> None:
+        if self._views is None or self._detail is None:
+            return
+        page = self._detail[0]
+        self._detail = None
+        self._views.back()
+        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
+                          if self._views is not None else None)
+
+    def _recheck_mitigations(self) -> None:
+        if self._posture_view is None:
+            return
+        st, names = self._posture_view
+
+        def work():
+            mine, _ = posture.split_cards(st["cards"], names)
+            if mine:
+                mitigations.check(mine, True, force=True)
+            self.app.after(0, self._fill_posture_detail)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _fill_posture_detail(self) -> None:
+        if self._detail is None:
+            return
+        _, rows, header = self._detail
+        try:
+            rows.clear()
+        except RuntimeError:  # page deleted by a rebuild
+            self._detail = None
+            return
+        st, names = self._posture_view or (posture.state(), posture.local_names(include_agent=False))
+        mine, others = posture.split_cards(st.get("cards") or [], names)
+        if mine is None and not others:
+            header.set_subtitle("No posture yet. It appears after the first daily scan.")
+            header.set_status(None)
+            return
+        if mine is not None:
+            header.set_subtitle(
+                f"This machine: {mine.get('hostname')} · grade {mine.get('grade')} · "
+                f"{mine.get('score')}/100 · computed {str(mine.get('computed_at', ''))[:16].replace('T', ' ')}")
+            header.set_status(*posture.panel_data(st, names)["badge"])
+            items = mitigations.cached(mine, True)
+            self._add_section(rows, "THIS MACHINE", items, "Nothing to fix on this machine.")
+        else:
+            header.set_subtitle("No posture for this machine yet.")
+            header.set_status("info", "No data for this machine")
+        for card in others:
+            self._add_section(rows, f"{str(card.get('hostname') or card.get('agent_id')).upper()} · "
+                                    f"GRADE {card.get('grade')}",
+                              mitigations.cached(card, False), "Nothing to fix.")
+
+    def _add_section(self, rows, title: str, items: list, empty: str) -> None:
+        heading = QLabel(title)
+        heading.setObjectName("Section")
+        heading.setTextFormat(Qt.TextFormat.PlainText)
+        heading.setContentsMargins(0, 16, 0, 4)
+        rows.add_row(heading)
+        if not items:
+            rows.add_row(muted(empty))
+            return
+        for item, state in items:
+            rows.add_row(self._item_row(item, state))
+
+    def _item_row(self, item: dict, state) -> QWidget:
+        row = QWidget()
+        row.setObjectName("Transparent")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(4, 10, 4, 10)
+        h.setSpacing(14)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        title = QLabel(item["title"] or item["kind"])
+        title.setObjectName("RowTitle")
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        text.addWidget(title)
+        hint = QLabel(mitigations.detail_line(item))
+        hint.setObjectName("Hint")
+        hint.setTextFormat(Qt.TextFormat.PlainText)
+        hint.setWordWrap(True)
+        hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        text.addWidget(hint)
+        h.addLayout(text, 1)
+        if state != mitigations.REMOTE:
+            kind, label = self._PILLS.get(state, self._PILLS[None])
+            if state == mitigations.OPEN and item["severity"] not in ("critical", "high"):
+                kind = "warning"
+            pill = QLabel()
+            set_pill(pill, kind, label)
+            h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
 
     def _set_protection(self, kind: str) -> None:
         # Endpoint badge kind -> logo glow: ok = green, info (unsupported

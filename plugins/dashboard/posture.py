@@ -139,8 +139,19 @@ def _n(value) -> str:
     return f"{int(value or 0):,}"
 
 
-def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None) -> Optional[dict]:
-    """The Security posture panel's badge and rows (None: still loading)."""
+def split_cards(cards: list, names: Iterable[str]) -> tuple:
+    """(this machine's card or None, the other cards)."""
+    names = {n.lower() for n in names}
+    mine = next((c for c in cards if str(c.get("hostname", "")).lower() in names), None)
+    return mine, [c for c in cards if c is not mine]
+
+
+def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
+               todo: Optional[str] = None) -> Optional[dict]:
+    """The Security posture panel's badge and rows (None: still loading).
+
+    ``todo``: this machine's mitigation summary (mitigations.summary); when
+    absent the server's plain recommendations are shown."""
     now = now or datetime.now()
     status, cards = st.get("status"), st.get("cards") or []
     if status == "signed_out":
@@ -157,9 +168,7 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None) -
         return {"badge": ("info", "No data"),
                 "rows": {"Posture": "No posture has been computed for your machines yet."}}
 
-    names = {n.lower() for n in names}
-    mine = next((c for c in cards if str(c.get("hostname", "")).lower() in names), None)
-    others = [c for c in cards if c is not mine]
+    mine, others = split_cards(cards, names)
     rows: dict = {}
     if mine is None:
         badge = ("info", "No data for this machine")
@@ -182,7 +191,9 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None) -
                 f"{_n(al.get('critical'))} critical · {_n(al.get('high'))} high")
         rows["Updated"] = _age_text(when, now)
         recs = [str(r) for r in (mine.get("recommendations") or []) if r][:3]
-        if recs:
+        if todo:
+            rows["To do"] = todo
+        elif recs:
             rows["To do"] = "\n".join(recs)
     if others:
         rows["Other machines"] = "\n".join(
