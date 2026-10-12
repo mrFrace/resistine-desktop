@@ -55,6 +55,16 @@ def _set_auth(granted: bool, err):
         logger.debug("macOS notification authorization denied by user")
 
 
+def _in_app_bundle() -> bool:
+    """True when the process has a bundle identifier (runs from a .app)."""
+    try:
+        from Foundation import NSBundle
+
+        return bool(NSBundle.mainBundle().bundleIdentifier())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def init():
     """Request macOS notification authorization (call once at startup).
 
@@ -66,6 +76,12 @@ def init():
     if _initialized:
         return
     _initialized = True
+    if not _in_app_bundle():
+        # Run from source (python main.py): currentNotificationCenter raises
+        # an NSException that Python cannot catch and the process aborts.
+        # send() falls back to osascript.
+        logger.info("Not running from an app bundle; notifications use osascript")
+        return
     try:
         from UserNotifications import UNUserNotificationCenter
 
