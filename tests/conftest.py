@@ -260,6 +260,25 @@ def allow_subprocess():
 
 
 # ---------------------------------------------------------------------------
+# Settings safety net: no test writes the developer's real config.
+#
+# Like the subprocess guard: code under test that saves a setting (e.g. the
+# antivirus plugin recording the last scan for the Dashboard) used to write
+# ~/.config/phoenix of whoever ran the suite. Every test now starts with
+# settings redirected to its own temp dir; `tmp_config_dir` /
+# `isolated_settings` still give a test the path explicitly.
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _isolate_settings_dir(request, tmp_path_factory, monkeypatch):
+    if request.node.get_closest_marker("real_config_dir"):
+        yield  # tests of get_config_dir itself mock platform/env instead
+        return
+    config_dir = tmp_path_factory.mktemp("phoenix_config")
+    monkeypatch.setattr("utils.settings.get_config_dir", lambda: str(config_dir))
+    yield
+
+
+# ---------------------------------------------------------------------------
 # Isolated config directory — each test gets its own temp dir
 # ---------------------------------------------------------------------------
 @pytest.fixture()

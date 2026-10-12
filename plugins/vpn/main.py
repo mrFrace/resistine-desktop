@@ -718,9 +718,16 @@ class Plugin(BasePlugin):
     # ===================================================================
     def _on_toggle_clicked(self):
         """Switch clicked: dispatch connect/disconnect off the GUI thread."""
+        self.request_toggle(self.vpn_toggle_switch.get())
+
+    def is_toggle_busy(self) -> bool:
+        return self._toggle_busy
+
+    def request_toggle(self, switch_value) -> None:
+        """Connect (truthy) or disconnect, off the GUI thread. The VPN screen's
+        switch and the Dashboard's VPN panel both come through here."""
         if self._toggle_busy:
             return
-        switch_value = self.vpn_toggle_switch.get()
 
         selected_conf_file = self.get_selected_conf_file_name()
         if not selected_conf_file and switch_value and _phoenix_signed_in():

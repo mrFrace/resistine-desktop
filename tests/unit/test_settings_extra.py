@@ -236,6 +236,7 @@ class TestClearNamespaceErrors:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.unit
+@pytest.mark.real_config_dir
 class TestGetConfigDir:
     def test_darwin(self, monkeypatch):
         import utils.settings as s
@@ -347,6 +348,7 @@ class TestMigrateLegacyConfigDir:
         s.migrate_legacy_config_dir()
         assert not new.exists()
 
+    @pytest.mark.real_config_dir
     def test_get_config_dir_has_no_side_effects(self, tmp_path, monkeypatch):
         import utils.settings as s
 

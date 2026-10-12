@@ -39,9 +39,10 @@ from gui import theme
 from gui.page_kit import (
     Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon, muted)
 from gui.qt_widgets import StatusBadge, scroll_page, set_pill
+from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
-from plugins.dashboard import mitigations, posture
+from plugins.dashboard import mitigations, posture, protection
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -138,6 +139,45 @@ def _ai_info(chat_plugin) -> dict:
     return {"badge": badge, "rows": rows}
 
 
+def _plugin(app, name: str):
+    return next((p for p in getattr(app, "plugins", []) if p.get_name() == name), None)
+
+
+def _antivirus_info(app) -> dict:
+    from utils import settings
+    av = _plugin(app, "Antivirus")
+    if av is None:
+        return protection.antivirus_panel(None, None, None, None)
+    from plugins.antivirus import clamav
+    status = getattr(av, "_last_status", None)
+    if status is None:
+        status = clamav.get_realtime_status()
+    db = quarantined = None
+    try:
+        db = clamav.get_db_info()
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Dashboard: antivirus DB info failed: {e}")
+    try:
+        quarantined = len(clamav.list_quarantined())
+    except Exception as e:  # noqa: BLE001
+        logger.debug(f"Dashboard: quarantine list failed: {e}")
+    return protection.antivirus_panel(status, db, settings.get("antivirus", "last_scan"), quarantined)
+
+
+def _vpn_info(app) -> dict:
+    from utils import settings
+    vpn = _plugin(app, "VPN")
+    if vpn is None:
+        return protection.vpn_panel(False, None, None, False)
+    from plugins.vpn import main as vm
+    try:
+        config = vpn.get_selected_conf_file_name()
+    except Exception:  # noqa: BLE001
+        config = None
+    return protection.vpn_panel(True, vm.my_vpn_status, config,
+                                bool(settings.get("auth", "logged_in", False)))
+
+
 def _system_info(app) -> dict:
     from utils import system_info
     rows = system_info.collect()
@@ -206,6 +246,7 @@ class _Panel(QFrame):
         self._head = head
         self.badge = None
         self._badge_at = head.count()
+        self._controls_at = head.count()
         if on_open:
             btn = QPushButton("Open")
             btn.setObjectName("Link")
@@ -224,6 +265,11 @@ class _Panel(QFrame):
         self._grid.setVerticalSpacing(8)
         self._grid.setColumnStretch(1, 1)
         v.addLayout(self._grid)
+
+    def add_header_control(self, widget: QWidget) -> QWidget:
+        """A control (e.g. a switch) in the header, after the status pill."""
+        self._head.insertWidget(self._controls_at + 1, widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        return widget
 
     # ---- drag by the header ------------------------------------------------
     def _in_header(self, pos: QPoint) -> bool:
@@ -295,7 +341,7 @@ class _Panel(QFrame):
         self._grid.addWidget(v, i, 1)
 
 
-DEFAULT_ORDER = ["posture", "alerts", "endpoint", "ai", "system"]
+DEFAULT_ORDER = ["posture", "alerts", "antivirus", "vpn", "endpoint", "ai", "system"]
 _GAP = 16
 
 
@@ -442,6 +488,7 @@ class Plugin(BasePlugin):
                             "endpoint": None, "ai": None, "system": None}
         self._panels: dict = {}
         self._grid: _PanelGrid | None = None
+        self._vpn_switch = None
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
@@ -517,6 +564,12 @@ class Plugin(BasePlugin):
             "alerts": _Panel(
                 "Recent alerts", "lucide:activity",
                 self._open_alerts, key="alerts"),
+            "antivirus": _Panel(
+                "Antivirus", "lucide:shield-check",
+                lambda: self.app.select_frame_by_name("frame_Antivirus"), key="antivirus"),
+            "vpn": _Panel(
+                "VPN", "lucide:globe",
+                lambda: self.app.select_frame_by_name("frame_VPN"), key="vpn"),
             "endpoint": _Panel(
                 "Endpoint",
                 os.path.join(_PLUGINS_DIR, "wazuh", "add_user_dark.png"),
@@ -529,8 +582,12 @@ class Plugin(BasePlugin):
                 "System", os.path.join(_DIR, "home_dark.png"), key="system"),
         }
         self._data["alerts"] = self._alerts_data()
+        self._vpn_switch = self._panels["vpn"].add_header_control(ToggleSwitch())
+        self._vpn_switch.setToolTip("Connect or disconnect the VPN")
+        self._vpn_switch.clicked.connect(self._toggle_vpn)
+        self._sync_vpn_switch()
         for key, panel in self._panels.items():
-            panel.set_data(self._data[key])
+            panel.set_data(self._data.get(key))
         self._subscribe_alerts()
         order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
         self._grid = _PanelGrid(self._panels, order, self._save_order)
@@ -591,7 +648,9 @@ class Plugin(BasePlugin):
                 data["_posture_view"] = (st, names)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard posture probe failed: {e}")
-            for key, fn in (("endpoint", _endpoint_info),
+            for key, fn in (("antivirus", lambda: _antivirus_info(self.app)),
+                            ("vpn", lambda: _vpn_info(self.app)),
+                            ("endpoint", _endpoint_info),
                             ("system", lambda: _system_info(self.app)),
                             ("ai", lambda: _ai_info(chat))):
                 try:
@@ -620,9 +679,10 @@ class Plugin(BasePlugin):
             self._set_protection(badge[0])
         for panel_key, panel in self._panels.items():
             try:
-                panel.set_data(self._data[panel_key])
+                panel.set_data(self._data.get(panel_key))
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+        self._sync_vpn_switch()
         if self._grid is not None:
             try:
                 self._grid.schedule()  # heights changed: re-pack the columns
@@ -678,6 +738,36 @@ class Plugin(BasePlugin):
                     logger.debug(f"Dashboard: could not open SIEM alerts: {e}")
                 self._repaint_alerts()  # opening marks them read
             QTimer.singleShot(0, go)
+
+    # ---- VPN switch ----------------------------------------------------------
+    def _sync_vpn_switch(self) -> None:
+        switch = getattr(self, "_vpn_switch", None)
+        if switch is None:
+            return
+        vpn = _plugin(self.app, "VPN")
+        try:
+            if vpn is None:
+                switch.hide()
+                return
+            from plugins.vpn import main as vm
+            switch.select() if vm.my_vpn_status == "Running" else switch.deselect()
+            switch.setEnabled(not vpn.is_toggle_busy())
+        except RuntimeError:  # rebuilt
+            self._vpn_switch = None
+
+    def _toggle_vpn(self) -> None:
+        vpn = _plugin(self.app, "VPN")
+        switch = getattr(self, "_vpn_switch", None)
+        if vpn is None or switch is None:
+            return
+        switch.setEnabled(False)
+        vpn.request_toggle(switch.get())
+        # The connect/disconnect runs on the VPN plugin's worker; re-read.
+        for ms in (2500, 7000, 15000):
+            QTimer.singleShot(ms, self._refresh_after_toggle)
+
+    def _refresh_after_toggle(self) -> None:
+        self.refresh()
 
     def _save_order(self, order: list) -> None:
         from utils import settings as app_settings

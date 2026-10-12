@@ -76,6 +76,7 @@ class TestIsRunningInIde:
 # get_config_dir
 # ===========================================================================
 @pytest.mark.unit
+@pytest.mark.real_config_dir
 class TestGetConfigDir:
     def test_darwin_returns_library_path(self):
         from utils.settings import get_config_dir

@@ -1477,6 +1477,12 @@ class Plugin(BasePlugin):
             cancel_btn.setEnabled(True)
             cancel_btn.hide()
 
+        if not (result.error and "cancelled" in result.error.lower()):
+            # For the Dashboard's Antivirus panel (counts only, no paths).
+            settings.set("antivirus", "last_scan", {
+                "ts": time.time(), "scanned": int(result.scanned or 0),
+                "infected": int(result.infected or 0), "error": bool(result.error)})
+
         if result.error:
             if "cancelled" in result.error.lower():
                 self._scan_status_label.setText("Scan cancelled")
