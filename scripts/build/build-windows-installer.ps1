@@ -189,11 +189,11 @@ if (-not (Test-Path $issScript)) {
 # ArchitecturesInstallIn64BitMode and ArchitecturesAllowed correctly.
 $targetArch = if ($IsARM64) { "arm64" } else { "x64" }
 Write-Host "Building Windows installer (.exe) with Inno Setup ($targetArch)..."
-& $iscc "/DAppName=Resistine" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
+& $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
 }
 
 Write-Host ""
 Write-Host "Done. Installer output:"
-Write-Host "  $outputDir\Resistine-Setup-${version}.exe"
+Write-Host "  $outputDir\Phoenix-Setup-${version}.exe"

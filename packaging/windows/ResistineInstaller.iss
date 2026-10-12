@@ -175,7 +175,7 @@ begin
   Result := True;
   if not IsAdminInstallMode then
   begin
-    MsgBox('This installer must be run as Administrator.', mbError, MB_OK);
+    SuppressibleMsgBox('This installer must be run as Administrator.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -297,11 +297,6 @@ begin
     FileExists(ExpandConstant('{localappdata}\Programs\Python\Python314\python.exe')) or
     FileExists(ExpandConstant('{pf}\Python313\python.exe')) or
     FileExists(ExpandConstant('{pf}\Python314\python.exe'));
-end;
-
-function IsGtkRuntimeInstalled: Boolean;
-begin
-  Result := FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll');
 end;
 
 function IsWingetAvailable: Boolean;
@@ -722,11 +717,11 @@ begin
 
   if not (OkUser and OkCommon) then
   begin
-    ContinueWithoutBackup := MsgBox(
+    ContinueWithoutBackup := SuppressibleMsgBox(
       'Phoenix could not back up all settings before reinstall.' + #13#10 +
       'You can cancel and back up manually, or continue the reinstall without a complete backup.' + #13#10#13#10 +
       'Continue without backup?',
-      mbError, MB_YESNO);
+      mbError, MB_YESNO, IDNO);
     if ContinueWithoutBackup <> IDYES then
     begin
       Result := False;
@@ -753,10 +748,10 @@ begin
 
   if not (OkUser and OkCommon) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'Phoenix completed installation, but some backed-up settings could not be restored automatically.' + #13#10 +
       'Backup folder: ' + ReinstallBackupRoot,
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
   end;
 
   DeleteDirectoryIfExists(ReinstallBackupRoot);
@@ -768,11 +763,11 @@ var
   Response: Integer;
   ResultCode: Integer;
 begin
-  Response := MsgBox(
+  Response := SuppressibleMsgBox(
     FriendlyName + ' could not be installed automatically.' + #13#10 +
     Reason + #13#10#13#10 +
     'Open the download page now?' + #13#10 + Url,
-    mbError, MB_YESNO);
+    mbError, MB_YESNO, IDNO);
   if Response = IDYES then
     ShellExec('open', Url, '', '', SW_SHOWNORMAL, ewNoWait, ResultCode);
 end;
@@ -926,8 +921,7 @@ begin
     InstallBundledPython;
     InstallBundledWireGuard;
 
-    { Fall back to winget for anything the bundled installers missed,
-      and use winget for GTK (not bundled due to size) }
+    { Fall back to winget if the bundled WireGuard installer failed }
     if not IsWireGuardInstalled then
       RunWingetDependencyInstall(
         'WireGuard Desktop',
@@ -936,18 +930,11 @@ begin
         'https://www.wireguard.com/install/'
       );
 
-    RunWingetDependencyInstall(
-      'GTK Runtime (for Cairo graphics)',
-      'tschoonj.GTKForWindows',
-      'C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll',
-      'https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer'
-    );
-
     if DependencyInstallWarnings <> '' then
-      MsgBox(
+      SuppressibleMsgBox(
         'Phoenix installed successfully, but some optional dependencies still need attention:' + #13#10#13#10 +
         DependencyInstallWarnings,
-        mbInformation, MB_OK);
+        mbInformation, MB_OK, IDOK);
   end;
 end;
 
@@ -976,10 +963,10 @@ begin
   ScriptPath := ExpandConstant('{app}\install_service.bat');
   if not FileExists(ScriptPath) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'Required VPN service setup script was not found:' + #13#10 + ScriptPath + #13#10#13#10 +
       'Phoenix VPN features will not work until this is repaired.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
@@ -989,21 +976,21 @@ begin
     ExpandConstant('{app}'),
     SW_HIDE, ewWaitUntilTerminated, ResultCode) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'The installer could not start required VPN service setup.' + #13#10 +
       'Run install_service.bat as Administrator after setup completes.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
   if ResultCode <> 0 then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'Phoenix installed, but required VPN service setup failed (exit code ' + IntToStr(ResultCode) + ').' + #13#10 +
       'Check: C:\ProgramData\Resistine\vpn_service_install.log' + #13#10 +
       'If service registration succeeded but startup failed, also check: C:\ProgramData\Resistine\vpn_service.log' + #13#10 +
       'Then rerun install_service.bat as Administrator.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -1019,11 +1006,11 @@ begin
   if not IsResistineRunning then
     exit;
 
-  Response := MsgBox(
+  Response := SuppressibleMsgBox(
     'Phoenix is currently running and must be closed before setup can continue.' + #13#10#13#10 +
     'Click Yes to let the installer close it automatically.' + #13#10 +
     'Click No to close it yourself and restart setup later.',
-    mbConfirmation, MB_YESNO);
+    mbConfirmation, MB_YESNO, IDYES);
   if Response <> IDYES then
   begin
     Result := False;
@@ -1033,16 +1020,16 @@ begin
   if TryKillResistineProcess(False) then
     exit;
 
-  Response := MsgBox(
+  Response := SuppressibleMsgBox(
     'Phoenix did not close cleanly.' + #13#10#13#10 +
     'Force close it now?',
-    mbConfirmation, MB_YESNO);
+    mbConfirmation, MB_YESNO, IDYES);
   if (Response = IDYES) and TryKillResistineProcess(True) then
     exit;
 
   if IsResistineRunning then
   begin
-    MsgBox('Please close Phoenix and run the installer again.', mbError, MB_OK);
+    SuppressibleMsgBox('Please close Phoenix and run the installer again.', mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -1060,10 +1047,10 @@ begin
 
   if IsResistineRunning then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'Phoenix is still running and could not be closed automatically.' + #13#10 +
       'Please close it manually and run uninstall again.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     Result := False;
   end;
 end;
@@ -1169,7 +1156,6 @@ procedure BuildPreflightSummaryParts(var ActionText, ChecksText, TasksText: stri
 var
   PythonState: string;
   WireGuardState: string;
-  GtkState: string;
   WingetState: string;
   InternetState: string;
   RunningState: string;
@@ -1184,11 +1170,6 @@ begin
     WireGuardState := 'Installed'
   else
     WireGuardState := 'Missing (bundled installer will run)';
-
-  if IsGtkRuntimeInstalled then
-    GtkState := 'Installed'
-  else
-    GtkState := 'Missing (installer will try winget)';
 
   WingetState := BoolStatus(IsWingetAvailable, 'Available', 'Missing');
   InternetState := BoolStatus(IsInternetReachable, 'Reachable (ICMP heuristic)', 'Not confirmed');
@@ -1213,7 +1194,6 @@ begin
   ChecksText :=
     '- Python: ' + PythonState + #13#10 +
     '- WireGuard Desktop: ' + WireGuardState + #13#10 +
-    '- GTK Runtime: ' + GtkState + #13#10 +
     '- winget: ' + WingetState + #13#10 +
     '- Internet: ' + InternetState + #13#10 +
     '- Phoenix app: ' + RunningState + #13#10 +
@@ -1374,10 +1354,10 @@ begin
   ExePath := ExtractExePathFromCommand(ExistingUninstallCmd);
   if (ExePath = '') or (not FileExists(ExePath)) then
   begin
-    MsgBox(
+    SuppressibleMsgBox(
       'An existing installation was detected, but its uninstaller could not be found.' + #13#10 +
       'Please uninstall Phoenix manually first.',
-      mbError, MB_OK);
+      mbError, MB_OK, IDOK);
     exit;
   end;
 
@@ -1397,11 +1377,11 @@ begin
     Log('Uninstaller exit code: ' + IntToStr(ResultCode));
     Result := (ResultCode = 0);
     if not Result then
-      MsgBox('The existing uninstaller returned a non-zero exit code (' + IntToStr(ResultCode) + ').', mbError, MB_OK);
+      SuppressibleMsgBox('The existing uninstaller returned a non-zero exit code (' + IntToStr(ResultCode) + ').', mbError, MB_OK, IDOK);
   end
   else
   begin
-    MsgBox('Failed to launch the existing uninstaller.', mbError, MB_OK);
+    SuppressibleMsgBox('Failed to launch the existing uninstaller.', mbError, MB_OK, IDOK);
   end;
 end;
 
@@ -1729,7 +1709,7 @@ begin
         '  (' + GetResistineUserDataDir + ' and ' + GetResistineCommonDataDir + ')' + #13#10 + #13#10 +
         'Continue?';
 
-      if MsgBox(ConfirmText, mbConfirmation, MB_YESNO) = IDYES then
+      if SuppressibleMsgBox(ConfirmText, mbConfirmation, MB_YESNO, IDNO) = IDYES then
       begin
         ExistingIsInno := ExistingUninstallerLooksLikeInno;
         if ExistingIsInno then
@@ -1741,7 +1721,7 @@ begin
 
           if not ExistingIsInno then
           begin
-            MsgBox('Uninstall completed and all user data was removed. Setup will now exit.', mbInformation, MB_OK);
+            SuppressibleMsgBox('Uninstall completed and all user data was removed. Setup will now exit.', mbInformation, MB_OK, IDOK);
           end;
 
           CloseAfterMaintenanceUninstall := True;
@@ -1789,17 +1769,6 @@ end;
 function ShouldPerformInstallAction: Boolean;
 begin
   Result := SelectedAction <> maUninstall;
-end;
-
-function NeedGtkRuntimeInstall: Boolean;
-begin
-  Result := ShouldPerformInstallAction and
-    (not FileExists('C:\Program Files\GTK3-Runtime Win64\bin\libcairo-2.dll'));
-end;
-
-function ShouldInstallGtkRuntime: Boolean;
-begin
-  Result := NeedGtkRuntimeInstall;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -1876,7 +1845,7 @@ begin
     '  ' + GetResistineCommonDataDir + #13#10#13#10 +
     'Continue?';
 
-  Response := MsgBox(Summary, mbConfirmation, MB_YESNO);
+  Response := SuppressibleMsgBox(Summary, mbConfirmation, MB_YESNO, IDYES);
   if Response <> IDYES then
   begin
     Result := False;

@@ -53,6 +53,14 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-installer.sh      # PyInstaller .app bundle only
 ```
 
+### Build (Windows, from Linux)
+
+```bash
+./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
+```
+
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+
 ## Architecture
 
 ### Plugin System
