@@ -21,9 +21,10 @@ import time
 import webbrowser
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer
+from PyQt6.QtGui import QDrag, QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -37,7 +38,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.page_kit import (
     Page, PageHeader, RowList, SlideStack, back_link, icon_button, muted)
-from gui.qt_widgets import CardGrid, StatusBadge, scroll_page, set_pill
+from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import mitigations, posture
 from utils import chat_config
@@ -158,11 +159,18 @@ def _system_info(app) -> dict:
 # UI
 # --------------------------------------------------------------------------
 
-class _Panel(QFrame):
-    """Card with an icon tile, title, status pill and key/value rows."""
+_PANEL_MIME = "application/x-phoenix-dashboard-panel"
 
-    def __init__(self, title: str, icon_path: str, on_open=None):
+
+class _Panel(QFrame):
+    """Card with an icon tile, title, status pill and key/value rows. Drag
+    it by its header to move it (the grid re-aligns)."""
+
+    def __init__(self, title: str, icon_path: str, on_open=None, key: str = ""):
         super().__init__()
+        self.key = key
+        self._press: QPoint | None = None
+        self.setMouseTracking(True)  # open-hand cursor over the header
         self.setObjectName("Surface")
         self.setMinimumWidth(260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -214,6 +222,41 @@ class _Panel(QFrame):
         self._grid.setColumnStretch(1, 1)
         v.addLayout(self._grid)
 
+    # ---- drag by the header ------------------------------------------------
+    def _in_header(self, pos: QPoint) -> bool:
+        return pos.y() <= 64
+
+    def mousePressEvent(self, e):  # noqa: N802
+        if e.button() == Qt.MouseButton.LeftButton and self._in_header(e.position().toPoint()):
+            self._press = e.position().toPoint()
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):  # noqa: N802
+        if self._press is None or not (e.buttons() & Qt.MouseButton.LeftButton):
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._in_header(e.position().toPoint())
+                           else Qt.CursorShape.ArrowCursor)
+            return super().mouseMoveEvent(e)
+        if (e.position().toPoint() - self._press).manhattanLength() < QApplication.startDragDistance():
+            return
+        self._press = None
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_PANEL_MIME, self.key.encode())
+        drag.setMimeData(mime)
+        shot = self.grab()
+        drag.setPixmap(shot.scaledToWidth(max(1, shot.width() * 2 // 3),
+                                          Qt.TransformationMode.SmoothTransformation))
+        drag.setHotSpot(QPoint(24, 24))
+        self.setEnabled(False)  # dims it while it is being moved
+        try:
+            drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self.setEnabled(True)
+
+    def mouseReleaseEvent(self, e):  # noqa: N802
+        self._press = None
+        super().mouseReleaseEvent(e)
+
     def set_data(self, data: dict | None) -> None:
         while self._grid.count():
             w = self._grid.takeAt(0).widget()
@@ -249,18 +292,130 @@ class _Panel(QFrame):
         self._grid.addWidget(v, i, 1)
 
 
-class _PanelGrid(CardGrid):
-    """CardGrid with wider cells and panels pinned to the top of their row
-    (panels differ in height; centred they look misaligned)."""
+DEFAULT_ORDER = ["posture", "endpoint", "ai", "system"]
+_GAP = 16
 
-    _CARD_STEP = 340
 
-    def _relayout(self):
-        super()._relayout()
-        for card in self._cards:
-            self._grid.setAlignment(card, Qt.AlignmentFlag.AlignTop)
-        for r in range(self._grid.rowCount()):
-            self._grid.setRowStretch(r, 0)
+def panel_order(saved, keys=DEFAULT_ORDER) -> list:
+    """The saved order, keeping only known panels; new ones go at the end."""
+    saved = [k for k in (saved if isinstance(saved, list) else []) if k in keys]
+    return list(dict.fromkeys(saved)) + [k for k in keys if k not in saved]
+
+
+def masonry_columns(heights: list, n_cols: int) -> list:
+    """Column per panel, in order: each goes into the shortest column so far
+    (ties: leftmost). Gapless however tall the panels are."""
+    totals = [0] * max(1, n_cols)
+    cols = []
+    for h in heights:
+        i = totals.index(min(totals))
+        cols.append(i)
+        totals[i] += h + _GAP
+    return cols
+
+
+def move_panel(order: list, key: str, target: str | None, after: bool) -> list:
+    """Move ``key`` before/after ``target`` (None: to the end)."""
+    if key not in order or key == target:
+        return list(order)
+    rest = [k for k in order if k != key]
+    if target is None or target not in rest:
+        return rest + [key]
+    i = rest.index(target) + (1 if after else 0)
+    return rest[:i] + [key] + rest[i:]
+
+
+class _PanelGrid(QWidget):
+    """Gapless grid: 1-4 columns by width, panels in the user's order, each
+    placed in the shortest column. Accepts panel drops to reorder."""
+
+    # Width per column: a panel needs ~420 px for its title, pill and Open
+    # link and for unbreakable values (hostnames, paths) without clipping.
+    _CARD_STEP = 420
+
+    def __init__(self, panels: dict, order: list, on_reorder):
+        super().__init__()
+        self.setObjectName("Transparent")
+        self.setAcceptDrops(True)
+        self._panels = panels
+        self._order = order
+        self._on_reorder = on_reorder
+        self._placed: tuple | None = None
+        self._row = QHBoxLayout(self)
+        self._row.setContentsMargins(0, 0, 0, 0)
+        self._row.setSpacing(_GAP)
+        self._cols: list = []
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(60)
+        self._debounce.timeout.connect(self.relayout)
+        self.relayout()
+
+    def schedule(self) -> None:
+        self._debounce.start()
+
+    def set_order(self, order: list) -> None:
+        self._order = order
+        self._placed = None
+        self.relayout()
+
+    def resizeEvent(self, e):  # noqa: N802
+        super().resizeEvent(e)
+        self.schedule()
+
+    def _n_cols(self) -> int:
+        return max(1, min(4, len(self._order), max(1, self.width()) // self._CARD_STEP))
+
+    def relayout(self) -> None:
+        n = self._n_cols()
+        col_w = max(1, (self.width() - _GAP * (n - 1)) // n)
+        panels = [self._panels[k] for k in self._order]
+        heights = [p.heightForWidth(col_w) if p.hasHeightForWidth() else p.sizeHint().height()
+                   for p in panels]
+        cols = masonry_columns(heights, n)
+        placed = (n, tuple(self._order), tuple(cols))
+        if placed == self._placed:
+            return
+        self._placed = placed
+        for col in self._cols:
+            for p in panels:
+                col.removeWidget(p)
+        while len(self._cols) < n:
+            col = QVBoxLayout()
+            col.setSpacing(_GAP)
+            col.addStretch(1)
+            self._row.addLayout(col, 1)
+            self._cols.append(col)
+        while len(self._cols) > n:
+            col = self._cols.pop()
+            self._row.removeItem(col)
+            col.deleteLater()
+        for p, c in zip(panels, cols):
+            col = self._cols[c]
+            col.insertWidget(col.count() - 1, p)
+
+    # ---- drops ----------------------------------------------------------------
+    def dragEnterEvent(self, e):  # noqa: N802
+        if e.mimeData().hasFormat(_PANEL_MIME):
+            e.acceptProposedAction()
+
+    def dragMoveEvent(self, e):  # noqa: N802
+        if e.mimeData().hasFormat(_PANEL_MIME):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):  # noqa: N802
+        key = bytes(e.mimeData().data(_PANEL_MIME)).decode()
+        pos = e.position().toPoint()
+        target, after = None, False
+        for k, p in self._panels.items():
+            if p.geometry().contains(pos):
+                target, after = k, pos.y() > p.geometry().center().y()
+                break
+        order = move_panel(self._order, key, target, after)
+        e.acceptProposedAction()
+        if order != self._order:
+            self.set_order(order)
+            self._on_reorder(order)
 
 
 class Plugin(BasePlugin):
@@ -283,6 +438,7 @@ class Plugin(BasePlugin):
                                 posture.state(), posture.local_names(include_agent=False)),
                             "endpoint": None, "ai": None, "system": None}
         self._panels: dict = {}
+        self._grid: _PanelGrid | None = None
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
@@ -329,6 +485,12 @@ class Plugin(BasePlugin):
             sign_in.setCursor(Qt.CursorShape.PointingHandCursor)
             sign_in.clicked.connect(self.app.show_login)
             head.addWidget(sign_in, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._reset_layout = QPushButton("Reset layout")
+        self._reset_layout.setObjectName("Link")
+        self._reset_layout.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._reset_layout.setToolTip("Drag panels by their header to move them")
+        self._reset_layout.clicked.connect(lambda: self._save_order(list(DEFAULT_ORDER)))
+        head.addWidget(self._reset_layout, 0, Qt.AlignmentFlag.AlignVCenter)
         site = QPushButton("phoenix.exposed ↗")
         site.setObjectName("Link")
         site.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -348,23 +510,24 @@ class Plugin(BasePlugin):
             "posture": _Panel(
                 "Security posture",
                 os.path.join(_PLUGINS_DIR, "antivirus", "antivirus_dark.png"),
-                self._show_posture_detail),
+                self._show_posture_detail, key="posture"),
             "endpoint": _Panel(
                 "Endpoint",
                 os.path.join(_PLUGINS_DIR, "wazuh", "add_user_dark.png"),
-                lambda: self.app.select_frame_by_name("frame_Endpoint")),
+                lambda: self.app.select_frame_by_name("frame_Endpoint"), key="endpoint"),
             "ai": _Panel(
                 "AI assistant",
                 os.path.join(_PLUGINS_DIR, "chat", "chat_dark.png"),
-                lambda: self.app.select_frame_by_name("frame_Chat")),
+                lambda: self.app.select_frame_by_name("frame_Chat"), key="ai"),
             "system": _Panel(
-                "System", os.path.join(_DIR, "home_dark.png")),
+                "System", os.path.join(_DIR, "home_dark.png"), key="system"),
         }
         for key, panel in self._panels.items():
             panel.set_data(self._data[key])
-        grid = _PanelGrid()
-        grid.set_cards(list(self._panels.values()))
-        v.addWidget(grid)
+        order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
+        self._grid = _PanelGrid(self._panels, order, self._save_order)
+        self._reset_layout.setVisible(order != DEFAULT_ORDER)
+        v.addWidget(self._grid)
         v.addStretch(1)
 
         self._ensure_timer()
@@ -446,6 +609,21 @@ class Plugin(BasePlugin):
                 panel.set_data(self._data[panel_key])
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+        if self._grid is not None:
+            try:
+                self._grid.schedule()  # heights changed: re-pack the columns
+            except RuntimeError:
+                self._grid = None
+
+    def _save_order(self, order: list) -> None:
+        from utils import settings as app_settings
+        app_settings.set("dashboard", "panel_order", order)
+        try:
+            if self._grid is not None:
+                self._grid.set_order(order)
+            self._reset_layout.setVisible(order != DEFAULT_ORDER)
+        except RuntimeError:  # screen rebuilt meanwhile
+            pass
 
     # ---- security posture detail (slides in over the panels) ---------------
     _PILLS = {

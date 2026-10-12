@@ -395,3 +395,64 @@ class TestScreen:
     def test_destroy_without_timer(self, dashboard_plugin):
         dashboard_plugin.destroy()  # never built: must not raise
         assert dashboard_plugin._timer is None
+
+
+# ===========================================================================
+# Movable panels: gapless masonry grid, drag to reorder
+# ===========================================================================
+
+@pytest.mark.unit
+class TestPanelLayout:
+    def test_order_keeps_known_panels_and_appends_new(self):
+        assert dash.panel_order(["system", "bogus", "ai", "ai"]) == ["system", "ai", "posture", "endpoint"]
+        assert dash.panel_order(None) == dash.DEFAULT_ORDER
+        assert dash.panel_order("junk") == dash.DEFAULT_ORDER
+
+    def test_masonry_fills_the_shortest_column(self):
+        # The screenshot case: posture tall, endpoint/ai short, system tall.
+        assert dash.masonry_columns([360, 260, 220, 330], 3) == [0, 1, 2, 2]
+        assert dash.masonry_columns([100, 100, 100, 100], 2) == [0, 1, 0, 1]
+        assert dash.masonry_columns([100, 100], 1) == [0, 0]
+
+    @pytest.mark.parametrize("key,target,after,expect", [
+        ("system", "posture", False, ["system", "posture", "endpoint", "ai"]),
+        ("posture", "ai", True, ["endpoint", "ai", "posture", "system"]),
+        ("posture", None, False, ["endpoint", "ai", "system", "posture"]),
+        ("ai", "ai", False, dash.DEFAULT_ORDER),
+        ("nope", "ai", False, dash.DEFAULT_ORDER),
+    ])
+    def test_move_panel(self, key, target, after, expect):
+        assert dash.move_panel(dash.DEFAULT_ORDER, key, target, after) == expect
+
+    def test_grid_packs_and_reorders(self, qapp):
+        from PyQt6.QtCore import QMimeData, QPointF, Qt
+        from PyQt6.QtGui import QDropEvent
+
+        panels = {k: dash._Panel(k, "/nonexistent.png", key=k) for k in dash.DEFAULT_ORDER}
+        saved = []
+        grid = dash._PanelGrid(panels, list(dash.DEFAULT_ORDER), saved.append)
+        grid.resize(1300, 900)
+        grid.relayout()
+        assert len(grid._cols) == 3  # 1300 px -> 3 columns
+        grid.show()
+        qapp.processEvents()
+        target = panels["posture"].geometry()
+        mime = QMimeData()
+        mime.setData(dash._PANEL_MIME, b"system")
+        drop = QDropEvent(QPointF(target.center().x(), target.top() + 5), Qt.DropAction.MoveAction,
+                          mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        grid.dropEvent(drop)
+        assert saved == [["system", "posture", "endpoint", "ai"]]
+        grid.hide()
+
+    def test_saved_order_is_used_and_reset_shows(self, qapp, isolated_settings, dashboard_plugin, monkeypatch):
+        monkeypatch.setattr(dash.Plugin, "refresh", lambda self: None)
+        monkeypatch.setattr(dash.Plugin, "_agent_installed", staticmethod(lambda: True))
+        isolated_settings.set("dashboard", "panel_order", ["system", "ai"])
+        screen = dashboard_plugin.create_main_screen()
+        assert dashboard_plugin._grid._order == ["system", "ai", "posture", "endpoint"]
+        assert not dashboard_plugin._reset_layout.isHidden()
+        dashboard_plugin._save_order(list(dash.DEFAULT_ORDER))
+        assert isolated_settings.get("dashboard", "panel_order") == dash.DEFAULT_ORDER
+        assert dashboard_plugin._reset_layout.isHidden() and screen is not None
+        dashboard_plugin.destroy()
