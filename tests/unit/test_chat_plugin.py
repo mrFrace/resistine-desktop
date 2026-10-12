@@ -391,3 +391,41 @@ class TestNewChat:
 
         assert screen._history.get_active_id() == first_id
         assert screen.conversation_history[-1]["content"] == "r1"
+
+
+# ---------------------------------------------------------------------------
+# SIEM alerts view (plugins/chat/siem_alerts.py)
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestSiemAlertsView:
+    @pytest.fixture(autouse=True)
+    def _fresh_store(self, monkeypatch):
+        from plugins.chat import siem_alerts
+        monkeypatch.setattr(siem_alerts, "_store", None)
+        monkeypatch.setattr(siem_alerts, "_listeners", [])
+
+    def _rows(self, p):
+        return [p._messages_lay.itemAt(i).widget() for i in range(p._messages_lay.count())
+                if p._messages_lay.itemAt(i).widget() is not None
+                and p._messages_lay.itemAt(i).widget() is not p._bottom_spacer]
+
+    def test_alerts_view_is_read_only_and_lists_alerts(self, screen):
+        from plugins.chat import siem_alerts
+        siem_alerts.store().add({"event_id": "$1", "body": "Failed login on AnubisAI", "ts": 1.0})
+        screen._show_alerts()
+        assert screen._viewing_alerts
+        assert not screen.chat_entry.isEnabled() and not screen.send_button.isEnabled()
+        assert len(self._rows(screen)) == 1
+        assert siem_alerts.store().unread == 0
+
+    def test_a_new_alert_appears_while_viewing(self, screen):
+        screen._show_alerts()                       # empty -> one placeholder bubble
+        screen._on_alert_arrived({"event_id": "$2", "body": "x", "ts": 2.0})
+        assert len(self._rows(screen)) == 2
+        screen.app.show_notification.assert_called()
+
+    def test_picking_a_chat_leaves_the_alerts_view(self, screen):
+        screen._show_alerts()
+        screen._select_chat(screen._history.get_active_id())
+        assert not screen._viewing_alerts
+        assert screen.chat_entry.isEnabled()

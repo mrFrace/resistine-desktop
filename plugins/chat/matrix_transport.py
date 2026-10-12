@@ -34,6 +34,7 @@ import threading
 import time
 from typing import Iterator, Optional
 
+from plugins.chat import siem_alerts
 from utils import settings
 from utils.logger import logger
 
@@ -46,6 +47,7 @@ _READY_TIMEOUT = 60       # login + first sync + DM ready
 _SEND_TIMEOUT = 30
 _FIRST_REPLY_TIMEOUT = 90  # no reply and the bot isn't typing → give up
 _TURN_TIMEOUT = 15 * 60
+_INVITE_POLL = 120         # seconds between checks for a new SIEM-alerts invite
 
 
 class MatrixTransportError(Exception):
@@ -140,6 +142,10 @@ class MatrixService:
         self._client = None
         self._turn_q: Optional[queue.Queue] = None
         self._stopping = False
+        # SIEM alerts (plugins/chat/siem_alerts.py): DMs from the alerts bot.
+        self.alerts_bot = siem_alerts.alerts_bot()
+        self._alert_rooms: set[str] = set(siem_alerts.alert_rooms())
+        self._full_state_next = False
 
     # -- lifecycle (any thread) -------------------------------------------
 
@@ -252,7 +258,11 @@ class MatrixService:
         await self._ensure_room()
         logger.info(f"[CHAT-MATRIX] ready: {self.user_id} ({self.device_id}) ↔ {self.bot} in {self.room_id}")
         self._ready.set()
-        await sync_task
+        invites_task = asyncio.create_task(self._alert_invites_loop())
+        try:
+            await sync_task
+        finally:
+            invites_task.cancel()
 
     async def _ensure_device_keys_published(self) -> None:
         """Re-upload this device's identity keys if the server lost them.
@@ -290,8 +300,10 @@ class MatrixService:
         client = self._client
         backoff = 1.0
         while not self._stopping:
+            full_state = client.next_batch is None or self._full_state_next
+            self._full_state_next = False
             resp = await client.sync(
-                timeout=30000, full_state=client.next_batch is None,
+                timeout=30000, full_state=full_state,
                 sync_filter=self._sync_filter())
             if isinstance(resp, SyncError):
                 if resp.status_code == "M_UNKNOWN_TOKEN":
@@ -317,7 +329,7 @@ class MatrixService:
                 await client.keys_claim(client.get_users_for_key_claiming())
 
     def _sync_filter(self) -> dict:
-        """Only ever fetch the assistant DM.
+        """Only ever fetch the assistant DM and the SIEM-alert DMs.
 
         The account is the user's own Phoenix account, which has other rooms
         (other people's conversations). The chat transport must not pull, or
@@ -325,7 +337,8 @@ class MatrixService:
         (memberships, encryption) is synced, no messages.
         """
         if self.room_id:
-            return {"room": {"rooms": [self.room_id]}, "presence": {"not_types": ["*"]}}
+            rooms = [self.room_id] + sorted(self._alert_rooms - {self.room_id})
+            return {"room": {"rooms": rooms}, "presence": {"not_types": ["*"]}}
         return {"room": {"timeline": {"limit": 0}, "ephemeral": {"not_types": ["*"]}},
                 "presence": {"not_types": ["*"]}}
 
@@ -392,13 +405,67 @@ class MatrixService:
             raise MatrixTransportError(f"Could not send the message ({resp}).")
         return resp.event_id
 
+    async def _alert_invites_loop(self) -> None:
+        """Accept SIEM-alert DM invites — ONLY those sent by the alerts bot.
+
+        The main sync is filtered to known rooms, which also hides new
+        invites, so they are looked up with a separate one-off sync that
+        carries no messages (timeline limit 0, no room state; an invite's
+        stripped state is always included).
+        """
+        import json
+
+        from nio import JoinResponse
+
+        client = self._client
+        flt = {"room": {"timeline": {"limit": 0}, "state": {"not_types": ["*"]},
+                        "ephemeral": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}},
+               "presence": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}}
+        url = f"{self.homeserver.rstrip('/')}/_matrix/client/v3/sync"
+        while not self._stopping:
+            try:
+                async with client.client_session.get(
+                        url, params={"filter": json.dumps(flt), "timeout": "0"},
+                        headers={"Authorization": f"Bearer {client.access_token}"}) as r:
+                    data = await r.json() if r.status == 200 else {}
+                invites = ((data.get("rooms") or {}).get("invite") or {})
+                for room_id, inv in invites.items():
+                    state = (inv.get("invite_state") or {}).get("events") or []
+                    if not siem_alerts.is_alert_invite(state, self.user_id, self.alerts_bot):
+                        continue
+                    resp = await client.join(room_id)
+                    if isinstance(resp, JoinResponse):
+                        self._alert_rooms.add(room_id)
+                        siem_alerts.add_alert_room(room_id)
+                        self._full_state_next = True
+                        logger.info(f"[CHAT-MATRIX] joined SIEM alerts room {room_id} from {self.alerts_bot}")
+                    else:
+                        logger.warning(f"[CHAT-MATRIX] could not join SIEM alerts room {room_id}: {resp}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # noqa: BLE001 — retried on the next poll
+                logger.warning(f"[CHAT-MATRIX] SIEM alerts invite check failed: {e}")
+            await asyncio.sleep(_INVITE_POLL)
+
+    def _is_alert(self, room, event) -> bool:
+        return room.room_id in self._alert_rooms and event.sender == self.alerts_bot
+
     async def _on_message(self, room, event) -> None:
+        if self._is_alert(room, event):
+            siem_alerts.publish(room.room_id, event.event_id, getattr(event, "body", "") or "",
+                                getattr(event, "server_timestamp", None))
+            return
         q = self._turn_q
         if q is None or room.room_id != self.room_id or event.sender != self.bot:
             return
         q.put(("message", event.event_id, event.source.get("content") or {}))
 
     async def _on_undecryptable(self, room, event) -> None:
+        if self._is_alert(room, event):
+            logger.warning(f"[CHAT-MATRIX] cannot decrypt SIEM alert {event.event_id}")
+            siem_alerts.publish(room.room_id, event.event_id, siem_alerts.UNDECRYPTABLE,
+                                getattr(event, "server_timestamp", None))
+            return
         q = self._turn_q
         if q is None or room.room_id != self.room_id or event.sender != self.bot:
             return
@@ -423,6 +490,28 @@ def _get_service(homeserver: str, user_id: str, device_id: str, bot: str) -> Mat
                 s.shutdown()
             _service = s = MatrixService(homeserver, user_id, device_id, bot)
         return s
+
+
+def start_background(bot: str = DEFAULT_BOT) -> None:
+    """Connect the Matrix session now, not on the first chat message, so SIEM
+    alerts arrive while the app is open. Failures only log: the chat screen
+    reports problems itself when the user actually sends something."""
+    try:
+        t = MatrixTransport(bot)
+        if not t.user_id:
+            return
+        service = _get_service(t.homeserver, t.user_id, t.device_id, t.bot)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[CHAT-MATRIX] background start skipped: {e}")
+        return
+
+    def _go() -> None:
+        try:
+            service.ensure_ready()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[CHAT-MATRIX] background start failed: {e}")
+
+    threading.Thread(target=_go, name="matrix-start", daemon=True).start()
 
 
 def shutdown_service() -> None:
