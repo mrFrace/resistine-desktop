@@ -67,10 +67,11 @@ def _authorized_request(method: str, path: str, **kwargs):
 
     http = oidc._session()
     url = f"{api_url()}{path}"
+    extra_headers = kwargs.pop("headers", None) or {}
     for attempt in (1, 2):
         try:
             r = http.request(method, url, timeout=_TIMEOUT, verify=True,
-                             headers={"Authorization": f"Bearer {token}"}, **kwargs)
+                             headers={**extra_headers, "Authorization": f"Bearer {token}"}, **kwargs)
         except Exception as e:  # noqa: BLE001
             raise ProvisioningError(
                 f"Couldn't reach the Phoenix service ({api_url()}). "

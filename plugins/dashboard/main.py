@@ -3,8 +3,9 @@
 """Dashboard plugin UI (PyQt6): an at-a-glance view of this device.
 
 A branded header (the Phoenix mark links to https://phoenix.exposed), then
-three panels: the Endpoint agent, the AI assistant,
-and system facts. Data is gathered off the UI thread and refreshed on a
+four panels: the security posture of the user's machines (from the Phoenix
+service, see posture.py), the Endpoint agent, the AI assistant, and system
+facts. Data is gathered off the UI thread and refreshed on a
 timer; the last result is cached on the plugin so a rebuild (any plugin's
 status change rebuilds this screen) paints immediately. Protection status
 is shown by the glow on the sidebar logo (green/red), driven from here.
@@ -36,6 +37,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_widgets import CardGrid, StatusBadge, scroll_page
 from plugins.base_plugin import BasePlugin
+from plugins.dashboard import posture
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -237,6 +239,7 @@ class _Panel(QFrame):
         k.setStyleSheet(f"color: {theme.color('text_secondary')};")
         k.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         v = QLabel(val)
+        v.setTextFormat(Qt.TextFormat.PlainText)  # values include server text
         v.setWordWrap(True)
         v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         v.setStyleSheet("font-weight: 600;")
@@ -274,7 +277,9 @@ class Plugin(BasePlugin):
             uninstall_enabled=False,
         )
         self.app = app
-        self._data: dict = {"endpoint": None, "ai": None, "system": None}
+        self._data: dict = {"posture": posture.panel_data(
+                                posture.state(), posture.local_names(include_agent=False)),
+                            "endpoint": None, "ai": None, "system": None}
         self._panels: dict = {}
         self._timer: QTimer | None = None
         self._busy = False
@@ -335,6 +340,9 @@ class Plugin(BasePlugin):
             else ("ok" if self._agent_installed() else "error"))
 
         self._panels = {
+            "posture": _Panel(
+                "Security posture",
+                os.path.join(_PLUGINS_DIR, "antivirus", "antivirus_dark.png")),
             "endpoint": _Panel(
                 "Endpoint",
                 os.path.join(_PLUGINS_DIR, "wazuh", "add_user_dark.png"),
@@ -389,6 +397,10 @@ class Plugin(BasePlugin):
 
         def work():
             data = {}
+            try:
+                data["posture"] = posture.panel_data(posture.fetch(), posture.local_names())
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Dashboard posture probe failed: {e}")
             for key, fn in (("endpoint", _endpoint_info),
                             ("system", lambda: _system_info(self.app)),
                             ("ai", lambda: _ai_info(chat))):

@@ -62,7 +62,12 @@ class TestDashboardInit:
         assert dashboard_plugin.id == "001"
 
     def test_starts_with_empty_data_cache(self, dashboard_plugin):
-        assert dashboard_plugin._data == {"endpoint": None, "ai": None, "system": None}
+        data = dict(dashboard_plugin._data)
+        # Posture paints at once from its own persisted cache (or a sign-in
+        # hint); the probes start empty.
+        assert "posture" in data
+        data.pop("posture")
+        assert data == {"endpoint": None, "ai": None, "system": None}
         assert dashboard_plugin._timer is None
         assert dashboard_plugin._busy is False
 
@@ -356,7 +361,7 @@ class TestScreen:
     def test_protected_glow_and_panels(self, built, dashboard_plugin):
         screen = built(True)  # keep a ref: the panels die with their page
         dashboard_plugin.app.set_protection_status.assert_called_with("ok")
-        assert set(dashboard_plugin._panels) == {"endpoint", "ai", "system"}
+        assert set(dashboard_plugin._panels) == {"posture", "endpoint", "ai", "system"}
         # Cached data is painted immediately on rebuild.
         assert _grid_texts(dashboard_plugin._panels["system"]) == [["Device", "box"]]
         assert _grid_texts(dashboard_plugin._panels["ai"]) == [["Loading…", ""]]
