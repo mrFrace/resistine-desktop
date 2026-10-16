@@ -137,8 +137,9 @@ class TestPanel:
         items = [alert("🟡 old low", 120, "a"), alert("🔴 ssh brute force", 3, "b"), alert("🟠 odd login", 10, "c")]
         d = ra.panel_data(items, 2, NOW)
         assert d["badge"] == ("error", "2 new")  # the two newest include a high
-        assert list(d["rows"].values()) == ["🔴 ssh brute force", "🟠 odd login", "🟡 old low"]
-        assert list(d["rows"])[0] == "3 min ago"
+        assert list(d["rows"].values()) == ["🔴 ssh brute force", "🟠 odd login", "🟡 old low",
+                                            "1 high · 1 medium · 1 low"]
+        assert list(d["rows"])[0] == "3 min ago" and list(d["rows"])[-1] == "Last 7 days"
 
     def test_no_unread(self):
         assert ra.panel_data([alert("🔴 x")], 0, NOW)["badge"] == ("ok", "No new alerts")
@@ -146,11 +147,12 @@ class TestPanel:
     def test_caps_and_counts_older(self):
         items = [alert(f"⚪ n{i}", i, str(i)) for i in range(7)]
         d = ra.panel_data(items, 0, NOW)
-        assert len(d["rows"]) == ra.SHOWN + 1 and d["rows"]["More"] == "3 older alerts"
+        assert len(d["rows"]) == ra.SHOWN + 2 and d["rows"]["More"] == "3 older alerts"
+        assert d["rows"]["Last 7 days"] == "7 info"
 
     def test_same_minute_keeps_both(self):
         d = ra.panel_data([alert("⚪ a", 1, "a"), alert("⚪ b", 1, "b")], 0, NOW)
-        assert len(d["rows"]) == 2
+        assert len(d["rows"]) == 3  # both alerts + Last 7 days
 
     def test_rows_map_to_event_ids(self):
         d = ra.panel_data([alert(HUNT, 3, "$h"), alert(RESULT_FP, 1, "$r")], 1, NOW)
@@ -191,6 +193,73 @@ def test_panel_updates_live_and_unsubscribes(qapp, isolated_settings, monkeypatc
     assert siem_alerts._listeners == [] and screen is not None
 
 
+DAY = 86400
+
+
+@pytest.mark.unit
+class TestActivity:
+    def test_one_slot_per_day_ending_today(self):
+        days = ra.activity([], NOW)
+        assert len(days) == ra.DAYS and all(d["count"] == 0 and d["worst"] is None for d in days)
+        from datetime import datetime, timedelta
+        today = datetime.fromtimestamp(NOW).date()
+        assert days[-1]["day"] == today and days[0]["day"] == today - timedelta(days=6)
+
+    def test_counts_and_worst_per_day(self):
+        items = [alert("🟡 a", 1, "a"), alert("🔴 b", 2, "b"), alert(HUNT, 3, "c"),
+                 {"event_id": "d", "body": "🚨 old", "ts": NOW - 3 * DAY},
+                 {"event_id": "e", "body": "🚨 too old", "ts": NOW - 30 * DAY},
+                 {"event_id": "f", "body": "🚨 no ts"}, "junk"]
+        days = ra.activity(items, NOW)
+        from datetime import datetime
+        by_day = {d["day"]: d for d in days}
+        today = by_day[datetime.fromtimestamp(NOW - 60).date()]
+        assert today["count"] >= 2 and today["worst"] == "high"
+        old = by_day[datetime.fromtimestamp(NOW - 3 * DAY).date()]
+        assert old["count"] == 1 and old["worst"] == "critical"
+        assert sum(d["count"] for d in days) == 4  # 30 days old, no ts, junk: not counted
+
+    def test_breakdown(self):
+        items = [alert("🔴 a", 1, "a"), alert("🔴 b", 2, "b"), alert(HUNT, 3, "c"),
+                 {"event_id": "e", "body": "🚨 too old", "ts": NOW - 30 * DAY}]
+        assert ra.breakdown(items, NOW) == "2 high · 1 medium"
+        assert ra.breakdown([], NOW) == "None"
+
+    def test_panel_has_strip(self):
+        d = ra.panel_data([alert("🔴 a", 1, "a")], 1, NOW)
+        assert len(d["strip"]) == ra.DAYS and d["strip"][-1]["worst"] == "high"
+        assert "strip" not in ra.panel_data([], 0, NOW)
+
+
+@pytest.mark.unit
+class TestNotification:
+    def test_high_and_critical_only(self):
+        note = ra.notification(alert(TRIAGE, 0, "$t"), NOW - 600)
+        assert note == {"title": "High alert on AnubisAI",
+                        "body": "25 alerts on AnubisAI — File Modifications",
+                        "urgency": "normal", "event_id": "$t"}
+        assert ra.notification(alert("🚨 ransomware", 0, "$c"), NOW - 600)["urgency"] == "critical"
+        assert ra.notification(alert(HUNT, 0), NOW - 600) is None       # medium
+        assert ra.notification(alert(RESULT_FP, 0), NOW - 600) is None  # false positive
+
+    def test_backlog_is_not_notified(self):
+        started = NOW
+        assert ra.notification(alert("🚨 x", 60, "$old"), started) is None   # an hour before start
+        assert ra.notification(alert("🚨 x", 1, "$skew"), started) is not None  # within the slack
+        assert ra.notification({"event_id": "$n", "body": "🚨 x"}, started) is None  # no ts
+        assert ra.notification("junk", started) is None
+
+    def test_untrusted_text_is_plain(self):
+        body = "🚨 <a href='https://evil'>click</a> & \u202eevil\n" + "x" * 300
+        note = ra.notification(alert(body, 0, "$x"), NOW - 600)
+        assert "<" not in note["body"] and ">" not in note["body"] and "&" not in note["body"]
+        assert "\u202e" not in note["body"] and len(note["body"]) <= 161
+        host = "[Affected asset(s)] <b>evil</b> agent 007 | at now\n"
+        note = ra.notification(alert("*SIEM triage* — 1 alert(s)\n" + host + "Severity: Critical", 0, "$y"),
+                               NOW - 600)
+        assert note["title"] == "Critical alert on bevil/b"
+
+
 def _plugin(qapp, monkeypatch, tmp_path, chat=None):
     from plugins.chat import siem_alerts
     from plugins.dashboard.main import Plugin
@@ -201,7 +270,7 @@ def _plugin(qapp, monkeypatch, tmp_path, chat=None):
     monkeypatch.setattr(Plugin, "_agent_installed", staticmethod(lambda: True))
     app = MagicMock()
     app.plugins = [chat] if chat else []
-    app.after = lambda ms, fn: fn()
+    app.after = lambda ms, fn, *args: fn(*args)
     plugin = Plugin(app)
     plugin.create_main_screen()
     return plugin, siem_alerts, app
@@ -258,4 +327,52 @@ def test_ask_ai(qapp, isolated_settings, monkeypatch, tmp_path):
     plugin._ask_ai(HUNT)
     app.select_frame_by_name.assert_not_called()
     assert "Settings" in app.show_notification.call_args[0][0]
+    plugin.destroy()
+
+
+@pytest.mark.unit
+def test_new_high_alert_notifies_once_and_opens_on_click(qapp, isolated_settings, monkeypatch, tmp_path):
+    import time
+    from plugins.dashboard import main as dash
+    from utils import notifications
+    sent = []
+    monkeypatch.setattr(notifications, "send", lambda *a, **kw: sent.append((a, kw)))
+    monkeypatch.setattr(dash, "_NOTIFIED", set())
+    plugin, siem_alerts, app = _plugin(qapp, monkeypatch, tmp_path)
+    monkeypatch.setattr(dash, "_STARTED_AT", time.time() - 10)
+    old_ms = int((time.time() - 3600) * 1000)
+    siem_alerts.publish("!r", "$old", "🚨 history from before start", old_ms)
+    siem_alerts.publish("!r", "$med", HUNT)
+    assert sent == []  # backlog and medium alerts stay quiet
+    siem_alerts.publish("!r", "$t", TRIAGE)
+    assert len(sent) == 1
+    (title, body), kw = sent[0]
+    assert title == "High alert on AnubisAI" and kw["urgency"] == "normal"
+    plugin._notify_alert(siem_alerts.store().all()[-1])  # same event again: no repeat
+    assert len(sent) == 1
+    kw["on_click"]()  # clicking opens the alert's page
+    app.navigate.assert_called_with("Dashboard")
+    assert len(plugin._alert_pages) == 1
+    isolated_settings.set("dashboard", "alert_notifications", False)
+    siem_alerts.publish("!r", "$c", "🚨 ransomware")
+    assert len(sent) == 1  # turned off in Settings
+    plugin.destroy()
+
+
+@pytest.mark.unit
+def test_panels_paint_strip_and_sparkline(qapp, isolated_settings, monkeypatch, tmp_path):
+    from plugins.dashboard.main import _DayStrip, _Sparkline
+    plugin, siem_alerts, _ = _plugin(qapp, monkeypatch, tmp_path)
+    siem_alerts.publish("!r", "$t", TRIAGE)
+    panel = plugin._panels["alerts"]
+    strip = panel.findChild(_DayStrip)
+    assert strip is not None and "1 alert" in strip.toolTip()
+    strip.resize(300, strip.height())
+    strip.grab()  # paints without errors
+    plugin._panels["posture"].set_data({"badge": ("ok", "Grade A"), "rows": {"Trend": "▲ 6 since last week"},
+                                         "spark": [70, 72, 71, 76]})
+    spark = plugin._panels["posture"].findChild(_Sparkline)
+    assert spark is not None and "now 76" in spark.toolTip()
+    spark.resize(300, spark.height())
+    spark.grab()
     plugin.destroy()

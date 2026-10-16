@@ -16,7 +16,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Iterable, Optional
 
 from utils import settings
@@ -25,6 +25,8 @@ from utils.logger import logger
 SCHEMA = "phoenix.posture.v1"
 _NS = "dashboard"
 _KEY = "posture"
+_HISTORY_KEY = "posture_history"
+HISTORY_DAYS = 30
 MIN_INTERVAL_S = 300       # the data changes daily; ETag makes repeats cheap
 STALE_AFTER_S = 26 * 3600  # one missed daily run
 _lock = threading.Lock()
@@ -147,11 +149,12 @@ def split_cards(cards: list, names: Iterable[str]) -> tuple:
 
 
 def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
-               todo: Optional[str] = None) -> Optional[dict]:
+               todo: Optional[str] = None, score_trend: Optional[dict] = None) -> Optional[dict]:
     """The Security posture panel's badge and rows (None: still loading).
 
     ``todo``: this machine's mitigation summary (mitigations.summary); when
-    absent the server's plain recommendations are shown."""
+    absent the server's plain recommendations are shown. ``score_trend``:
+    trend() of this machine's score, shown as a row and a sparkline."""
     now = now or datetime.now()
     status, cards = st.get("status"), st.get("cards") or []
     if status == "signed_out":
@@ -182,6 +185,8 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
         rows["Machine"] = str(mine.get("hostname") or "—")
         health = str(mine.get("health") or "").replace("_", " ")
         rows["Score"] = f"{grade} · {mine.get('score', '—')}/100" + (f", {health}" if health else "")
+        if score_trend:
+            rows["Trend"] = score_trend["text"]
         rows["Vulnerabilities"] = f"{_n(v.get('critical'))} critical · {_n(v.get('high'))} high"
         pct = comp.get("score_pct")
         rows["Compliance"] = (f"{pct}%" if pct is not None else "—") + (
@@ -201,4 +206,78 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
             for c in others)
     if status == "error" and st.get("error"):
         rows["Note"] = f"Showing the last known posture. {st['error']}"
-    return {"badge": badge, "rows": rows}
+    out = {"badge": badge, "rows": rows}
+    if mine is not None and score_trend:
+        out["spark"] = list(score_trend["points"])
+    return out
+
+
+# --------------------------------------------------------------------------
+# Score trend: this machine's score, one point per day
+# --------------------------------------------------------------------------
+
+def _score(card) -> Optional[int]:
+    v = card.get("score") if isinstance(card, dict) else None
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100 else None
+
+
+def _clean_history(history) -> list:
+    out = []
+    for p in history if isinstance(history, list) else []:
+        try:
+            out.append([date.fromisoformat(str(p[0])).isoformat(), int(p[1])])
+        except (TypeError, ValueError, IndexError):
+            continue
+    return sorted(out)
+
+
+def add_point(history, score: int, today: date) -> list:
+    """History with today's score: one [iso date, score] point per day
+    (a second score the same day replaces the first), the last 30 days."""
+    pts = [p for p in _clean_history(history) if p[0] != today.isoformat()]
+    pts.append([today.isoformat(), int(score)])
+    cutoff = (today - timedelta(days=HISTORY_DAYS - 1)).isoformat()
+    return [p for p in sorted(pts) if p[0] >= cutoff]
+
+
+def record_score(card, today: Optional[date] = None) -> list:
+    """Store this machine's score in today's point. Returns the history."""
+    history = _clean_history(settings.get(_NS, _HISTORY_KEY))
+    score = _score(card)
+    if score is None:
+        return history
+    today = today or date.today()
+    new = add_point(history, score, today)
+    if new != history:
+        settings.set(_NS, _HISTORY_KEY, new)
+    return new
+
+
+def history() -> list:
+    return _clean_history(settings.get(_NS, _HISTORY_KEY))
+
+
+def trend(history, today: Optional[date] = None) -> Optional[dict]:
+    """{"points": [scores, oldest first], "delta": int, "text": str} or None
+    with fewer than two days of scores.
+
+    The delta compares today's (latest) score with the one from a week ago,
+    or with the oldest score when there is less than a week of history."""
+    pts = _clean_history(history)
+    if len(pts) < 2:
+        return None
+    today = today or date.today()
+    week_ago = (today - timedelta(days=7)).isoformat()
+    base = next((p for p in reversed(pts) if p[0] <= week_ago), pts[0])
+    latest = pts[-1]
+    delta = latest[1] - base[1]
+    days = (date.fromisoformat(latest[0]) - date.fromisoformat(base[0])).days
+    since = "since last week" if base[0] <= week_ago else (
+        f"in {days} day{'s' if days != 1 else ''}")
+    if delta > 0:
+        text = f"▲ {delta} {since}"
+    elif delta < 0:
+        text = f"▼ {-delta} {since}"
+    else:
+        text = f"No change {since}"
+    return {"points": [p[1] for p in pts], "delta": delta, "text": text}

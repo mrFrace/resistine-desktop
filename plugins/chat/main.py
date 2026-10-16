@@ -1236,9 +1236,10 @@ class Plugin(BasePlugin):
 
     def _on_alert_arrived(self, alert: dict) -> None:
         """GUI thread: a new SIEM alert was received."""
-        try:
-            first = (alert.get("body") or "").strip().splitlines()[0][:120]
-        except IndexError:
+        try:  # the parsed one-line title, not the raw markdown
+            from plugins.dashboard import alerts as recent_alerts
+            first = recent_alerts.parse(alert.get("body") or "")["title"]
+        except Exception:  # noqa: BLE001
             first = ""
         try:
             self.app.show_notification(f"🚨 SIEM alert: {first}", type="warning")

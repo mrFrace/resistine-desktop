@@ -92,7 +92,62 @@ def _drop_connection():
             pass
 
 
-def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str):
+# Click handling: notification id -> callback. The daemon emits
+# ActionInvoked(id, "default") when the user clicks a notification that
+# offered the "default" action; a listener on its own connection (signals
+# are broadcast) runs the callback. NotificationClosed forgets it.
+_clicks: dict = {}
+_clicks_lock = threading.Lock()
+_listener_started = False
+
+
+def _dispatch_signal(member: str, body) -> None:
+    """Handle one org.freedesktop.Notifications signal."""
+    if not body:
+        return
+    with _clicks_lock:
+        if member == "ActionInvoked" and len(body) >= 2 and body[1] == "default":
+            fn = _clicks.pop(body[0], None)
+        elif member == "NotificationClosed":
+            _clicks.pop(body[0], None)
+            return
+        else:
+            return
+    if fn is not None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Notification click handler failed: %s", e)
+
+
+def _listen() -> None:
+    try:
+        from jeepney import MatchRule, message_bus
+        from jeepney.io.blocking import Proxy, open_dbus_connection
+        from jeepney.low_level import HeaderFields
+
+        conn = open_dbus_connection(bus="SESSION")
+        rule = MatchRule(type="signal", interface="org.freedesktop.Notifications",
+                         path="/org/freedesktop/Notifications")
+        Proxy(message_bus, conn).AddMatch(rule)
+        with conn.filter(rule) as queue:
+            while True:
+                msg = conn.recv_until_filtered(queue)
+                _dispatch_signal(msg.header.fields.get(HeaderFields.member), msg.body)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Notification click listener stopped: %s", e)
+
+
+def _ensure_listener() -> None:
+    global _listener_started
+    with _clicks_lock:
+        if _listener_started:
+            return
+        _listener_started = True
+    threading.Thread(target=_listen, name="notification-clicks", daemon=True).start()
+
+
+def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str, on_click=None):
     """Try the D-Bus path. Returns None on success, else an error string."""
     try:
         from jeepney import DBusAddress, new_method_call
@@ -110,7 +165,8 @@ def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str):
     #        critical-urgency notifications persist until dismissed.
     msg = new_method_call(
         addr, "Notify", "susssasa{sv}i",
-        ("Phoenix", 0, _dbus_icon(icon), title, body, [],
+        ("Phoenix", 0, _dbus_icon(icon), title, body,
+         ["default", "Open"] if on_click else [],
          # desktop-entry ties the notification to our installed phoenix.desktop
          # (see utils/linux_desktop.py) so GNOME shows "Phoenix" + our icon
          # instead of the window's WM_CLASS-derived name.
@@ -130,6 +186,9 @@ def _send_via_dbus(title: str, body: str, urgency_byte: int, icon: str):
                 if reply.header.message_type == MessageType.error:
                     name = reply.header.fields.get(HeaderFields.error_name)
                     return f"daemon error {name}: {reply.body}"
+                if on_click and reply.body:
+                    with _clicks_lock:
+                        _clicks[reply.body[0]] = on_click
                 return None
             except Exception as e:
                 last_err = f"{type(e).__name__}: {e}"
@@ -154,19 +213,23 @@ def _send_via_notify_send(title: str, body: str, urgency: str,
         return False
 
 
-def send(title: str, body: str, urgency: str = "normal"):
+def send(title: str, body: str, urgency: str = "normal", on_click=None):
     """Send a Linux desktop notification. Never raises.
 
     Args:
         title: Notification title.
         body: Notification body text.
         urgency: One of "low", "normal", "critical".
+        on_click: called (on a background thread) when the user clicks it;
+                  D-Bus path only, notify-send can't report clicks.
     """
     urgency_byte = _URGENCY_BYTE.get(urgency, 1)
     icon = _icon()
+    if on_click:
+        _ensure_listener()
 
     def _run():
-        dbus_err = _send_via_dbus(title, body, urgency_byte, icon)
+        dbus_err = _send_via_dbus(title, body, urgency_byte, icon, on_click)
         if dbus_err is None:
             return
         if _send_via_notify_send(title, body, urgency, icon):

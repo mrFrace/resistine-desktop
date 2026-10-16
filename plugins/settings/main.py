@@ -3,8 +3,8 @@
 """Settings plugin (PyQt6).
 
 A flat page (gui/page_kit.py): a "Settings" header naming the signed-in
-account, then sections — Account, AI assistant, Appearance, Updates — and a
-last section with the Log in / Log out and Uninstall actions as menu rows.
+account, then sections — Account, AI assistant, Appearance, Notifications,
+Updates — and a last section with the Log in / Log out and Uninstall actions as menu rows.
 
 Author: Peres J. and the Resistine Team
 Copyright (c) Resistine 2025
@@ -130,6 +130,7 @@ class Plugin(BasePlugin):
         page.add(self._profile_card())
         page.add(self._api_card())
         page.add(self._appearance_card())
+        page.add(self._notifications_card())
         page.add(self._updates_card())
         page.add(self._uninstall_card())
         page.stretch()
@@ -239,6 +240,20 @@ class Plugin(BasePlugin):
         lay.addWidget(SettingRow(
             "Mode", "System follows your computer's light/dark setting",
             self.appearance_combo))
+        return box
+
+    # ---- Notifications ----------------------------------------------------
+    def _notifications_card(self) -> QWidget:
+        box, lay = self._section("Notifications")
+        self.alert_notifications_switch = ToggleSwitch()
+        self.alert_notifications_switch.setChecked(
+            bool(settings.get("dashboard", "alert_notifications", True)))
+        self.alert_notifications_switch.toggled.connect(
+            lambda on: settings.set("dashboard", "alert_notifications", bool(on)))
+        lay.addWidget(SettingRow(
+            "Alert notifications",
+            "Show a desktop notification for new high and critical SIEM alerts",
+            self.alert_notifications_switch))
         return box
 
     # ---- Software Updates -------------------------------------------------

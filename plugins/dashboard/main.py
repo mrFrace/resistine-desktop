@@ -21,8 +21,8 @@ import time
 import webbrowser
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QMimeData, QPoint, QSize, Qt, QTimer
-from PyQt6.QtGui import QDrag, QIcon, QPixmap
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
@@ -52,6 +52,11 @@ _DIR = os.path.dirname(os.path.realpath(__file__))
 _PLUGINS_DIR = os.path.dirname(_DIR)
 WEBSITE_URL = "https://phoenix.exposed"
 _REFRESH_MS = 20_000
+# Alert notifications: only alerts sent after the app started pop up, each
+# once (module level, so a rebuilt plugin instance doesn't repeat them).
+_STARTED_AT = time.time()
+_NOTIFIED: set = set()
+_notified_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -267,6 +272,9 @@ class _Panel(QFrame):
         self._grid.setVerticalSpacing(8)
         self._grid.setColumnStretch(1, 1)
         v.addLayout(self._grid)
+        self._extras = QVBoxLayout()  # charts under the rows (data "strip" / "spark")
+        self._extras.setContentsMargins(0, 0, 0, 0)
+        v.addLayout(self._extras)
 
     def add_header_control(self, widget: QWidget) -> QWidget:
         """A control (e.g. a switch) in the header, after the status pill."""
@@ -309,10 +317,11 @@ class _Panel(QFrame):
         super().mouseReleaseEvent(e)
 
     def set_data(self, data: dict | None) -> None:
-        while self._grid.count():
-            w = self._grid.takeAt(0).widget()
-            if w:
-                w.deleteLater()
+        for lay in (self._grid, self._extras):
+            while lay.count():
+                w = lay.takeAt(0).widget()
+                if w:
+                    w.deleteLater()
         if data is None:
             self._row(0, "Loading…", "")
             return
@@ -331,6 +340,10 @@ class _Panel(QFrame):
         for i, (k, val) in enumerate(data.get("rows", {}).items()):
             row_id = ids.get(k) if self._on_row else None
             self._row(i, k, str(val), (lambda r=row_id: self._on_row(r)) if row_id else None)
+        if data.get("strip"):
+            self._extras.addWidget(_DayStrip(data["strip"]))
+        if data.get("spark"):
+            self._extras.addWidget(_Sparkline(data["spark"]))
 
     def _row(self, i: int, key: str, val: str, on_click=None) -> None:
         k = QLabel(key)
@@ -348,6 +361,109 @@ class _Panel(QFrame):
                 fn() if e.button() == Qt.MouseButton.LeftButton else None)
         self._grid.addWidget(k, i, 0)
         self._grid.addWidget(v, i, 1)
+
+
+# Bar colour per worst severity of a day (badge text colours of the theme).
+_SEV_KIND = {"critical": "critical", "high": "error", "medium": "warning", "low": "info"}
+
+
+def _sev_color(sev) -> QColor:
+    if sev in _SEV_KIND:
+        return QColor(theme.badge_colors(_SEV_KIND[sev])[1])
+    return QColor(theme.color("text_secondary"))
+
+
+class _DayStrip(QWidget):
+    """Alerts per day, oldest left: one bar per day, its height the count
+    (square-root scale, so one busy day doesn't flatten the rest) and its
+    colour the day's worst severity. Weekday initials underneath."""
+
+    BAR_H = 30
+
+    def __init__(self, days: list):
+        super().__init__()
+        self._days = [d for d in days if isinstance(d, dict)]
+        self.setFixedHeight(self.BAR_H + 18)
+        self.setMinimumWidth(140)
+        busiest = max((d["count"] for d in self._days), default=0)
+        parts = [f"{d['day']:%a %d %b}: {d['count']} alert{'s' if d['count'] != 1 else ''}"
+                 + (f", worst {d['worst']}" if d["worst"] else "") for d in self._days]
+        self.setToolTip("\n".join(parts))
+        self._max = busiest
+
+    def paintEvent(self, _e):  # noqa: N802
+        if not self._days:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = len(self._days)
+        gap = 6
+        w = (self.width() - gap * (n - 1)) / n
+        muted = QColor(theme.color("text_secondary"))
+        f = p.font()
+        f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+        p.setFont(f)
+        for i, d in enumerate(self._days):
+            x = i * (w + gap)
+            if d["count"] and self._max:
+                h = max(5.0, self.BAR_H * (d["count"] / self._max) ** 0.5)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(_sev_color(d["worst"]))
+            else:
+                h = 2.0
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(theme.color("divider")))
+            p.drawRoundedRect(QRectF(x, self.BAR_H - h, w, h), 2, 2)
+            p.setPen(muted)
+            p.drawText(QRectF(x, self.BAR_H + 2, w, 16), Qt.AlignmentFlag.AlignCenter,
+                       f"{d['day']:%a}"[:2])
+        p.end()
+
+
+class _Sparkline(QWidget):
+    """The posture score over the last days: a line, the latest point dotted."""
+
+    def __init__(self, points: list):
+        super().__init__()
+        self._pts = [int(v) for v in points if isinstance(v, (int, float))]
+        self.setFixedHeight(50)
+        self.setMinimumWidth(120)
+        if self._pts:
+            self.setToolTip(f"Score over the last {len(self._pts)} days: "
+                            f"{min(self._pts)}–{max(self._pts)}, now {self._pts[-1]}")
+
+    def paintEvent(self, _e):  # noqa: N802
+        if len(self._pts) < 2:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        f = p.font()
+        f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
+        p.setFont(f)
+        p.setPen(QColor(theme.color("text_secondary")))
+        cap = 16.0
+        p.drawText(QRectF(0, 0, self.width(), cap), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                   f"Score, last {len(self._pts)} days")
+        lo, hi = min(self._pts), max(self._pts)
+        span = max(hi - lo, 10)  # small wobbles stay small
+        mid = (hi + lo) / 2
+        pad = 5.0
+        w, h = self.width() - 2 * pad, self.height() - cap - 2 * pad
+        step = w / (len(self._pts) - 1)
+
+        def at(i, v):
+            return QPointF(pad + i * step, cap + pad + h * (0.5 - (v - mid) / span))
+
+        path = QPainterPath(at(0, self._pts[0]))
+        for i, v in enumerate(self._pts[1:], 1):
+            path.lineTo(at(i, v))
+        accent = QColor(theme.color("sidebar_active_text"))  # reads on dark cards too
+        p.setPen(QPen(accent, 2))
+        p.drawPath(path)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(accent)
+        p.drawEllipse(at(len(self._pts) - 1, self._pts[-1]), 3.5, 3.5)
+        p.end()
 
 
 class _AlertText(QTextBrowser):
@@ -524,7 +640,8 @@ class Plugin(BasePlugin):
         )
         self.app = app
         self._data: dict = {"posture": posture.panel_data(
-                                posture.state(), posture.local_names(include_agent=False)),
+                                posture.state(), posture.local_names(include_agent=False),
+                                score_trend=posture.trend(posture.history())),
                             "endpoint": None, "ai": None, "system": None}
         self._panels: dict = {}
         self._grid: _PanelGrid | None = None
@@ -536,6 +653,7 @@ class Plugin(BasePlugin):
         self._busy = False
         self._alert_pages: list = []  # alert list/detail pages pushed over the panels
         self._alerts_list = None      # (RowList, PageHeader) while the list is open
+        self._subscribe_alerts()  # notify even before the Dashboard is opened
 
     # ---- screen -----------------------------------------------------------
     def create_main_screen(self):
@@ -694,8 +812,10 @@ class Plugin(BasePlugin):
                 st, names = posture.fetch(), posture.local_names()
                 mine, _ = posture.split_cards(st["cards"], names)
                 states = mitigations.check(mine, True) if mine else []
+                hist = posture.record_score(mine) if mine else posture.history()
                 data["posture"] = posture.panel_data(
-                    st, names, todo=mitigations.summary(states) if states else None)
+                    st, names, todo=mitigations.summary(states) if states else None,
+                    score_trend=posture.trend(hist))
                 data["_posture_view"] = (st, names)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard posture probe failed: {e}")
@@ -758,12 +878,46 @@ class Plugin(BasePlugin):
         except Exception:  # noqa: BLE001
             pass
 
-    def _alert_arrived(self, _alert: dict) -> None:
+    def _alert_arrived(self, alert: dict) -> None:
         # Matrix thread: repaint on the Qt thread.
         try:
             self.app.after(0, self._repaint_alerts)
         except Exception:  # noqa: BLE001
             pass
+        self._notify_alert(alert)
+
+    def _notify_alert(self, alert: dict) -> None:
+        """A desktop notification for a new high or critical alert."""
+        from utils import settings as app_settings
+
+        if not app_settings.get("dashboard", "alert_notifications", True):
+            return
+        note = recent_alerts.notification(alert, _STARTED_AT)
+        with _notified_lock:
+            if note is None or note["event_id"] in _NOTIFIED:
+                return
+            _NOTIFIED.add(note["event_id"])
+        eid = note["event_id"]
+        try:
+            from utils import notifications
+            notifications.send(note["title"], note["body"], urgency=note["urgency"],
+                               on_click=(lambda: self.app.after(0, self._show_alert, eid))
+                               if eid else None)
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Alert notification failed: {e}")
+
+    def _show_alert(self, event_id: str) -> None:
+        """Clicked notification: bring the window up on that alert."""
+        try:
+            win = self.app
+            win.showNormal()
+            win.raise_()
+            win.activateWindow()
+            win.navigate(self.get_name())
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"Could not show the window for an alert: {e}")
+        if self._views is not None:
+            self._open_alert(event_id)
 
     def _repaint_alerts(self) -> None:
         if self._alerts_list is not None:

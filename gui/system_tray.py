@@ -20,7 +20,7 @@ macOS/Linux is just a matter of calling ``install()`` there too.
 
 import os
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -33,6 +33,9 @@ _POLL_MS = 3000  # VPN status refresh cadence
 class SystemTray(QObject):
     """Owns a ``QSystemTrayIcon`` bound to the main window's lifetime."""
 
+    # notify() may be called from any thread; the signal hops to the GUI one.
+    _notify = pyqtSignal(str, str, str, object)
+
     def __init__(self, window) -> None:
         # Parent to the window so the tray is destroyed with it.
         super().__init__(window)
@@ -42,6 +45,8 @@ class SystemTray(QObject):
         self._status_action: QAction | None = None
         self._poll: QTimer | None = None
         self._notified_hidden = False
+        self._on_message_click = None
+        self._notify.connect(self._show_notification)
 
     # -- setup -------------------------------------------------------------
 
@@ -57,7 +62,13 @@ class SystemTray(QObject):
         self._tray.setToolTip("Phoenix")
         self._tray.setContextMenu(self._build_menu())
         self._tray.activated.connect(self._on_activated)
+        self._tray.messageClicked.connect(self._message_clicked)
         self._tray.show()
+        try:
+            from utils.notifications import windows as win_notifications
+            win_notifications.set_tray(self)
+        except Exception:  # noqa: BLE001
+            pass
 
         # Keep the process (and this tray) alive when the window is closed to
         # the tray. Only the tray's Quit action performs a real exit.
@@ -161,6 +172,33 @@ class SystemTray(QObject):
         except RuntimeError:
             pass
 
+    # -- notifications -----------------------------------------------------
+
+    def notify(self, title: str, body: str, urgency: str = "normal", on_click=None) -> None:
+        """A tray notification; *on_click* runs when it is clicked. Any thread."""
+        self._notify.emit(title, body, urgency, on_click)
+
+    def _show_notification(self, title, body, urgency, on_click) -> None:
+        if self._tray is None:
+            return
+        self._on_message_click = on_click  # Qt reports clicks on the latest message only
+        icon = (QSystemTrayIcon.MessageIcon.Critical if urgency == "critical"
+                else QSystemTrayIcon.MessageIcon.Warning)
+        try:
+            self._tray.showMessage(title, body, icon, 10000)
+        except RuntimeError:
+            pass
+
+    def _message_clicked(self) -> None:
+        fn, self._on_message_click = self._on_message_click, None
+        if fn is None:
+            self._show_window()
+            return
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[TRAY] notification click failed: {e}")
+
     # -- close-to-tray -----------------------------------------------------
 
     def on_window_close(self) -> bool:
@@ -175,6 +213,7 @@ class SystemTray(QObject):
         self._window.hide()
         if not self._notified_hidden:
             self._notified_hidden = True
+            self._on_message_click = None
             try:
                 self._tray.showMessage(
                     "Phoenix is still running",

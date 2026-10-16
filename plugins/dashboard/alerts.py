@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import datetime, timedelta
 from typing import Optional
 
 SHOWN = 4
@@ -221,6 +222,79 @@ def newest_first(alerts: list) -> list:
     return sorted(alerts, key=lambda a: a.get("ts") or 0, reverse=True)
 
 
+# --------------------------------------------------------------------------
+# Activity over the last days, and desktop notifications
+# --------------------------------------------------------------------------
+
+DAYS = 7
+SEV_ORDER = ("critical", "high", "medium", "low", "info")
+
+
+def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
+    """One entry per local day, oldest first, ending today:
+    {"day": date, "count": n, "worst": severity or None}."""
+    today = datetime.fromtimestamp(now or time.time()).date()
+    first = today - timedelta(days=days - 1)
+    out = [{"day": first + timedelta(days=i), "count": 0, "worst": None} for i in range(days)]
+    for a in alerts or []:
+        if not isinstance(a, dict) or not isinstance(a.get("ts"), (int, float)):
+            continue
+        day = datetime.fromtimestamp(a["ts"]).date()
+        if not first <= day <= today:
+            continue
+        slot = out[(day - first).days]
+        sev = severity(a.get("body", ""))
+        slot["count"] += 1
+        if slot["worst"] is None or _SEV_RANK[sev] > _SEV_RANK[slot["worst"]]:
+            slot["worst"] = sev
+    return out
+
+
+def breakdown(alerts: list, now: Optional[float] = None, days: int = DAYS) -> str:
+    """"2 high · 5 medium · 18 low" for the last *days* days, or "None"."""
+    counts = dict.fromkeys(SEV_ORDER, 0)
+    cutoff = datetime.fromtimestamp(now or time.time()).date() - timedelta(days=days - 1)
+    for a in alerts or []:
+        if (isinstance(a, dict) and isinstance(a.get("ts"), (int, float))
+                and datetime.fromtimestamp(a["ts"]).date() >= cutoff):
+            counts[severity(a.get("body", ""))] += 1
+    parts = [f"{n} {sev}" for sev, n in counts.items() if n]
+    return " · ".join(parts) or "None"
+
+
+NOTIFY_SEVERITIES = ("critical", "high")
+NOTIFY_SLACK_S = 120  # clock skew between the bot's server and this machine
+
+
+def _plain(text: str, limit: int) -> str:
+    """Notification text: no markup a notification server could interpret
+    (freedesktop bodies may be HTML-ish), single line, capped."""
+    text = _printable(re.sub(r"[<>]", "", text or "")).replace("&", "and").strip()
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def notification(alert: dict, started_at: float) -> Optional[dict]:
+    """The desktop notification for a newly received *alert*, or None.
+
+    Only high and critical alerts sent after the app started: the first sync
+    after start re-delivers the rooms' recent history, which must not pop up
+    as a burst of old alerts."""
+    if not isinstance(alert, dict):
+        return None
+    ts = alert.get("ts")
+    if not isinstance(ts, (int, float)) or ts < started_at - NOTIFY_SLACK_S:
+        return None
+    info = parse(alert.get("body", ""))
+    sev = info["severity"]
+    if sev not in NOTIFY_SEVERITIES:
+        return None
+    where = f" on {info['host']}" if info["host"] else ""
+    return {"title": _plain(f"{sev.capitalize()} alert{where}", 80),
+            "body": _plain(info["title"], 160) or "Open Phoenix to see the alert.",
+            "urgency": "critical" if sev == "critical" else "normal",
+            "event_id": alert.get("event_id")}
+
+
 def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
     """Badge and rows for the Recent alerts panel. "ids" maps each alert
     row's key to its event_id, so a click opens that alert."""
@@ -247,4 +321,5 @@ def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
         ids[key] = a.get("event_id")
     if len(alerts) > SHOWN:
         rows["More"] = f"{len(alerts) - SHOWN} older alert{'s' if len(alerts) - SHOWN != 1 else ''}"
-    return {"badge": badge, "rows": rows, "ids": ids}
+    rows[f"Last {DAYS} days"] = breakdown(alerts, now)
+    return {"badge": badge, "rows": rows, "ids": ids, "strip": activity(alerts, now)}

@@ -62,7 +62,7 @@ def init():
         logger.warning("Failed to initialize notification backend: %s", e)
 
 
-def send(title: str, body: str, urgency: str = "normal"):
+def send(title: str, body: str, urgency: str = "normal", on_click=None):
     """Send a system notification. Never raises.
 
     Args:
@@ -70,6 +70,9 @@ def send(title: str, body: str, urgency: str = "normal"):
         body: Notification body text.
         urgency: One of "low", "normal", "critical". Defaults to "normal"
                  if an invalid value is passed.
+        on_click: optional callable run when the user clicks the
+                  notification, where the platform reports clicks. It may
+                  run on any thread: marshal to the UI thread yourself.
     """
     if urgency not in _VALID_URGENCIES:
         urgency = "normal"
@@ -78,6 +81,9 @@ def send(title: str, body: str, urgency: str = "normal"):
         logger.debug("No notification backend for %s", _PLATFORM)
         return
     try:
-        _backend.send(title, body, urgency)
+        if on_click is None:
+            _backend.send(title, body, urgency)
+        else:
+            _backend.send(title, body, urgency, on_click=on_click)
     except Exception as e:
         logger.warning("Failed to send notification: %s", e)

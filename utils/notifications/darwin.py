@@ -18,6 +18,16 @@ _initialized = False
 _authorized = False
 _delegate = None  # prevent GC of the ObjC delegate
 _THREAT_CATEGORY_ID = "THREAT_DETECTED"
+_clicks: dict = {}  # request identifier -> callback, for clicked notifications
+
+
+def _clicked(identifier) -> None:
+    fn = _clicks.pop(str(identifier), None)
+    if fn is not None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Notification click handler failed: %s", e)
 
 
 def _make_delegate():
@@ -37,6 +47,14 @@ def _make_delegate():
             self, center, notification, handler,
         ):
             handler(_PRESENT_BANNER_SOUND)
+
+        def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(
+            self, center, response, handler,
+        ):
+            try:
+                _clicked(response.notification().request().identifier())
+            finally:
+                handler()
 
     _Delegate.protocols = [
         objc.protocolNamed("UNUserNotificationCenterDelegate"),
@@ -116,7 +134,7 @@ def init():
         logger.warning("Failed to request notification authorization: %s", e)
 
 
-def send(title: str, body: str, urgency: str = "normal"):
+def send(title: str, body: str, urgency: str = "normal", on_click=None):
     """Send a macOS system notification. Never raises.
 
     Args:
@@ -142,8 +160,11 @@ def send(title: str, body: str, urgency: str = "normal"):
             if urgency == "critical":
                 content.setCategoryIdentifier_(_THREAT_CATEGORY_ID)
 
+            ident = str(uuid.uuid4())
+            if on_click is not None:
+                _clicks[ident] = on_click
             request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
-                str(uuid.uuid4()), content, None,
+                ident, content, None,
             )
             center.addNotificationRequest_withCompletionHandler_(request, None)
             return
