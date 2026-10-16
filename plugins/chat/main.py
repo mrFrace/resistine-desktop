@@ -1216,6 +1216,24 @@ class Plugin(BasePlugin):
         self._refresh_sidebar()
         self._sync_input_enabled()
 
+    _ASK_LIMIT = 8000  # characters of alert text sent with "Ask AI"
+
+    def ask_about_alert(self, body: str) -> bool:
+        """Start a new chat asking Phoenix AI about one SIEM alert (the
+        Dashboard's alert page). False when the AI is not set up."""
+        if self.client is None:
+            return False
+        if getattr(self, "chat_entry", None) is None:
+            return False
+        self._new_chat()
+        text = (body or "").strip()
+        if len(text) > self._ASK_LIMIT:
+            text = text[: self._ASK_LIMIT] + "\n…(alert shortened)"
+        self._use_suggestion(
+            "Explain this Phoenix SIEM alert in plain words: what happened, how "
+            "serious it is, and what I should do now.\n\n" + text)
+        return True
+
     def _on_alert_arrived(self, alert: dict) -> None:
         """GUI thread: a new SIEM alert was received."""
         try:

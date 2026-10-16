@@ -67,9 +67,17 @@ def _demote_headings(html: str) -> str:
     return re.sub(r"<h([1-6])>(.*?)</h\1>", repl, html, flags=re.S)
 
 
-def markdown_to_html(md: str) -> str:
-    """Convert assistant markdown to Qt-friendly, styled HTML."""
-    html = markdown.markdown(_preprocess(md), extensions=list(_MD_EXTENSIONS))
+def markdown_to_html(md: str, *, allow_html: bool = True) -> str:
+    """Convert assistant markdown to Qt-friendly, styled HTML.
+
+    ``allow_html=False`` escapes raw HTML in the input instead of passing it
+    through: for text that is not ours (SIEM alerts quote the monitored
+    system's file names and log lines)."""
+    conv = markdown.Markdown(extensions=list(_MD_EXTENSIONS))
+    if not allow_html:
+        conv.preprocessors.deregister("html_block")
+        conv.inlinePatterns.deregister("html")
+    html = conv.convert(_preprocess(md))
     return _demote_headings(html)
 
 
