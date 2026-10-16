@@ -77,7 +77,7 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True,
     # Patch the three hardcoded constants to point at our shims.
     src = open(_WRAPPER).read()
     src = src.replace(
-        'FRESHCLAM="/Applications/Resistine.app/Contents/Helpers/freshclam"',
+        'FRESHCLAM="/Applications/Phoenix.app/Contents/Helpers/freshclam"',
         f'FRESHCLAM="{fake_freshclam!s}"',
     )
     src = src.replace(

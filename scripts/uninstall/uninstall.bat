@@ -46,6 +46,7 @@ echo.
 :: ---- Kill all Phoenix processes ----
 echo [1/6] Stopping Phoenix processes...
 powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' -or $_.CommandLine -like '*main.py*' -or $_.CommandLine -like '*Resistine*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+taskkill /F /IM "Phoenix.exe" >nul 2>&1
 taskkill /F /IM "Resistine.exe" >nul 2>&1
 echo       OK
 

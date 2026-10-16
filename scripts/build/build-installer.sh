@@ -40,7 +40,7 @@ echo ""
 # Build configuration
 BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
-APP_NAME="Resistine"   # bundle file name (Resistine.app); see packaging/Resistine.spec
+APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 BUNDLE_ID="com.resistine.desktop"
 
@@ -135,7 +135,7 @@ if [ ! -f "packaging/Resistine.spec" ]; then
 fi
 
 # Clean dist directory to avoid conflicts
-rm -rf dist/Resistine dist/Resistine.app
+rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
 
 # Build with PyInstaller using the spec file
 echo "  - Building with PyInstaller..."
@@ -143,7 +143,7 @@ pyinstaller packaging/Resistine.spec --noconfirm
 
 echo "✅ Python UI built"
 
-# Step 3: Place VPN components directly in Resistine.app bundle
+# Step 3: Place VPN components directly in Phoenix.app bundle
 # Apple bundle structure requirements (from Apple documentation):
 #   - App Extensions (.appex): Contents/PlugIns/
 #   - Helper Tools / CLI: Contents/MacOS/
@@ -307,10 +307,10 @@ find "$PYTHON_APP/Contents/Frameworks" "$PYTHON_APP/Contents/MacOS" \
 done
 echo "  ✅ Framework/library signing complete"
 
-# Sign the main Resistine.app bundle (the outer PyInstaller app)
+# Sign the main Phoenix.app bundle (the outer PyInstaller app)
 # Use --force but NOT --deep: --deep would re-sign nested components
 # and strip their provisioning profiles
-echo "  - Signing main Resistine.app bundle..."
+echo "  - Signing main Phoenix.app bundle..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     $ENTITLEMENTS_FLAG \
@@ -403,7 +403,8 @@ fi
 echo ""
 echo "Step 7: Installing to /Applications..."
 
-# Remove old installation if it exists
+# Remove old installation if it exists (and the pre-rebrand Resistine.app)
+rm -rf "/Applications/Resistine.app" 2>/dev/null || true
 if [ -d "/Applications/$APP_NAME.app" ]; then
     echo "  - Removing old /Applications/$APP_NAME.app..."
     rm -rf "/Applications/$APP_NAME.app" || {

@@ -72,13 +72,13 @@ _DEV_ARTIFACTS = os.path.join(
 
 
 def _installed_app_contents() -> str | None:
-    """Find an installed Resistine.app's Contents/ directory.
+    """Find an installed Phoenix.app's Contents/ directory.
 
     Checks standard macOS application directories rather than assuming
     a single hardcoded path, so it works on any machine.
     """
     for app_dir in ("/Applications", os.path.expanduser("~/Applications")):
-        contents = os.path.join(app_dir, "Resistine.app", "Contents")
+        contents = os.path.join(app_dir, "Phoenix.app", "Contents")
         if os.path.isdir(contents):
             return contents
     return None
@@ -634,12 +634,12 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
     contents = _app_bundle_contents()
     if not contents:
         # Dev mode: fall back to the installed app bundle
-        installed = "/Applications/Resistine.app/Contents"
+        installed = "/Applications/Phoenix.app/Contents"
         if os.path.isdir(installed):
             contents = installed
             logger.info("ClamAV: using installed app bundle for postinstall")
         else:
-            logger.error("ClamAV: no app bundle found (install Resistine.app first)")
+            logger.error("ClamAV: no app bundle found (install Phoenix.app first)")
             return False, "", 0
 
     unique_id = uuid.uuid4().hex[:12]

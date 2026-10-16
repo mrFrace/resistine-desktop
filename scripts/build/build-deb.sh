@@ -45,8 +45,8 @@ echo "Running PyInstaller..."
 pyinstaller --clean -y packaging/Resistine.spec
 
 # Verify build output
-if [ ! -d "dist/Resistine" ]; then
-	echo "Error: PyInstaller build failed. dist/Resistine directory not found."
+if [ ! -d "dist/Phoenix" ]; then
+	echo "Error: PyInstaller build failed. dist/Phoenix directory not found."
 	exit 1
 fi
 
@@ -62,13 +62,13 @@ mkdir -p "$STAGING_DIR/usr/share/pixmaps"
 
 # Copy PyInstaller files
 echo "Copying application files..."
-cp -r dist/Resistine/* "$STAGING_DIR/opt/phoenix/"
+cp -r dist/Phoenix/* "$STAGING_DIR/opt/phoenix/"
 
 # Create launcher script
 echo "Creating launcher script..."
 cat <<'EOF' >"$STAGING_DIR/usr/bin/phoenix"
 #!/bin/sh
-exec /opt/phoenix/Resistine "$@"
+exec /opt/phoenix/Phoenix "$@"
 EOF
 chmod 755 "$STAGING_DIR/usr/bin/phoenix"
 

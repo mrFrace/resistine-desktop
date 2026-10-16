@@ -238,6 +238,11 @@ def main() -> int:
     settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
     _install_excepthook()
+    if sys.platform == "darwin":
+        from utils.functions import remove_legacy_bundle
+
+        if remove_legacy_bundle():
+            logger.info("Removed the old /Applications/Resistine.app")
 
     qt_app, window = _build_app()
 

@@ -30,11 +30,11 @@
     <key>Label</key>
     <string>com.resistine.desktop.freshclam</string>
 
-    <!-- Paths assume /Applications/Resistine.app install location -->
+    <!-- Paths assume /Applications/Phoenix.app install location -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Applications/Resistine.app/Contents/Helpers/freshclam-update.sh</string>
+        <string>/Applications/Phoenix.app/Contents/Helpers/freshclam-update.sh</string>
     </array>
 
     <!-- Run once at load, then at fixed 4h wall-clock marks (00/04/08/12/
@@ -65,7 +65,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>CVD_CERTS_DIR</key>
-        <string>/Applications/Resistine.app/Contents/certs</string>
+        <string>/Applications/Phoenix.app/Contents/certs</string>
         <key>SSL_CERT_FILE</key>
         <string>/etc/ssl/cert.pem</string>
     </dict>

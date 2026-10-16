@@ -61,7 +61,7 @@ def prompt_move_to_applications() -> str:
             title="Phoenix",
             message=(
                 "Could not move automatically.\n\n"
-                "Please drag Resistine.app to your Applications "
+                "Please drag Phoenix.app to your Applications "
                 "folder and relaunch from there."
             ),
             buttons=["OK"],

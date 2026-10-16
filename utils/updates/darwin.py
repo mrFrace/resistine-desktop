@@ -22,7 +22,7 @@ def _get_sparkle_framework_path():
     """Return path to Sparkle.framework inside the app bundle, or None."""
     if not getattr(sys, "frozen", False):
         return None
-    # sys.executable = Resistine.app/Contents/MacOS/Resistine
+    # sys.executable = Phoenix.app/Contents/MacOS/Phoenix
     contents_dir = os.path.dirname(os.path.dirname(sys.executable))
     path = os.path.join(contents_dir, "Frameworks", "Sparkle.framework")
     if os.path.exists(path):

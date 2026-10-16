@@ -84,15 +84,15 @@ write_status() {
 CURRENT_STEP="init"
 
 # The freshclam LaunchDaemon plist is shipped static and code-signed, so its
-# ProgramArguments and CVD_CERTS_DIR hardcode /Applications/Resistine.app. We
+# ProgramArguments and CVD_CERTS_DIR hardcode /Applications/Phoenix.app. We
 # cannot rewrite a signed plist at install time, so refuse to set up the
 # daemons from any other location rather than register a daemon pointing at a
 # path that does not exist (every scheduled run would fail to exec). Most
 # signed macOS security apps require /Applications for the same reason. This
 # runs after write_status() is defined so the UI sees the failure reason.
-if [ "$APP_CONTENTS" != "/Applications/Resistine.app/Contents" ]; then
-    write_status "{\"status\":\"failed\",\"step\":\"validate\",\"error\":\"Phoenix (Resistine.app) must be installed in /Applications (found: $APP_CONTENTS)\",\"error_code\":\"WRONG_INSTALL_LOCATION\",\"exit_code\":1,\"pid\":$$,\"ts\":$(date +%s)}"
-    echo "Resistine must be installed in /Applications. Move Resistine.app to /Applications and reopen it." >&2
+if [ "$APP_CONTENTS" != "/Applications/Phoenix.app/Contents" ]; then
+    write_status "{\"status\":\"failed\",\"step\":\"validate\",\"error\":\"Phoenix must be installed in /Applications (found: $APP_CONTENTS)\",\"error_code\":\"WRONG_INSTALL_LOCATION\",\"exit_code\":1,\"pid\":$$,\"ts\":$(date +%s)}"
+    echo "Phoenix must be installed in /Applications. Move Phoenix.app to /Applications and reopen it." >&2
     exit 1
 fi
 

@@ -72,7 +72,7 @@ class HelperToolManager:
         """Locate resistine-vpn-cli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
-            # sys.executable is in Contents/MacOS/Resistine
+            # sys.executable is in Contents/MacOS/Phoenix
             macos_dir = os.path.dirname(sys.executable)
             contents_dir = os.path.dirname(macos_dir)
             
@@ -94,7 +94,7 @@ class HelperToolManager:
                 return old_cli_path
 
         # Development mode: VPN features require the built app bundle
-        # Run ./build-installer.sh first, then test from dist/Resistine.app
+        # Run ./build-installer.sh first, then test from dist/Phoenix.app
         logger.warning("VPN CLI not found - run ./build-installer.sh to build the app")
         return None
 

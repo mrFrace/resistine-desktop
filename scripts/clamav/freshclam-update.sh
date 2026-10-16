@@ -21,7 +21,7 @@
 
 set -u
 
-FRESHCLAM="/Applications/Resistine.app/Contents/Helpers/freshclam"
+FRESHCLAM="/Applications/Phoenix.app/Contents/Helpers/freshclam"
 CONF="/Library/Application Support/Resistine/clamav/freshclam.conf"
 # Records the epoch of the last attempt. Used to enforce ClamAV's CDN rule of
 # "no more than once per hour" — exceeding it earns an HTTP 429/403 block and

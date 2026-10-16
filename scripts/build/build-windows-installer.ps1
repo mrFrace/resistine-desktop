@@ -132,9 +132,9 @@ if (-not $SkipPyInstaller) {
     & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
 }
 
-$sourceDir = Join-Path $ProjectRoot "dist\Resistine"
-if (-not (Test-Path (Join-Path $sourceDir "Resistine.exe"))) {
-    throw "Expected PyInstaller output not found at $sourceDir\Resistine.exe"
+$sourceDir = Join-Path $ProjectRoot "dist\Phoenix"
+if (-not (Test-Path (Join-Path $sourceDir "Phoenix.exe"))) {
+    throw "Expected PyInstaller output not found at $sourceDir\Phoenix.exe"
 }
 
 # Copy installer helper files into distribution directory

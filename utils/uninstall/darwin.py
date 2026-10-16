@@ -758,7 +758,7 @@ def _remove_keychain_items():
 
 
 def _collect_app_bundle_admin_cmd(admin_cmds):
-    """Append the ``rm -rf /Applications/Resistine.app`` command into
+    """Append the ``rm -rf /Applications/Phoenix.app`` command into
     ``admin_cmds`` so it runs in the SAME osascript prompt as everything
     else. Previously the bundle removal had its own prompt — the third
     of the user's three password requests.
@@ -775,7 +775,7 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
         logger.info("[UNINSTALL] Not a frozen app, skipping bundle removal")
         return
 
-    # sys.executable → .../Resistine.app/Contents/MacOS/Resistine
+    # sys.executable → .../Phoenix.app/Contents/MacOS/Phoenix
     from pathlib import Path
     app_bundle = str(Path(sys.executable).parents[2])
 
@@ -789,6 +789,8 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
 
     escaped = app_bundle.replace("'", "'\\''")
     admin_cmds.append(f"rm -rf '{escaped}'")
+    if os.path.isdir("/Applications/Resistine.app"):  # pre-rename bundle
+        admin_cmds.append("rm -rf '/Applications/Resistine.app'")
 
 
 def _find_cli_path():

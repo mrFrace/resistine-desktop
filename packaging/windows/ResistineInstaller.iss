@@ -7,7 +7,7 @@
 #endif
 
 #ifndef SourceDir
-  #define SourceDir "..\..\dist\Resistine"
+  #define SourceDir "..\..\dist\Phoenix"
 #endif
 
 #ifndef OutputDir
@@ -59,7 +59,7 @@ DisableDirPage=auto
 DisableReadyPage=yes
 DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
-UninstallDisplayIcon={app}\Resistine.exe
+UninstallDisplayIcon={app}\Phoenix.exe
 SetupLogging=yes
 ; Show the GPL-2.0-or-later text on the install acceptance screen. Inno
 ; reads this at compile time and displays the contents as plain text in
@@ -93,20 +93,20 @@ Source: "deps\python-3.13.13-amd64.exe"; DestDir: "{tmp}"; Flags: deleteafterins
 Source: "deps\wireguard-amd64.msi"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: NeedWireGuardInstall
 
 [Icons]
-Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Resistine.exe"
+Name: "{autoprograms}\{#AppName}\{#AppName}"; Filename: "{app}\Phoenix.exe"
 Name: "{autoprograms}\{#AppName}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Resistine.exe"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Phoenix.exe"; Tasks: desktopicon
 
 [Registry]
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletevalue
-Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Resistine"; ValueData: """{app}\Resistine.exe"""; Tasks: startup; Flags: uninsdeletevalue
+Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Phoenix"; ValueData: """{app}\Phoenix.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
 ; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
 ; auto-update, and we still want the app relaunched afterward (otherwise the
 ; update applies but "nothing happens" — the app just stays closed).
-Filename: "{app}\Resistine.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
+Filename: "{app}\Phoenix.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
 
 [InstallDelete]
 ; Shortcuts created by pre-rebrand installers (AppName was "Resistine").
@@ -114,6 +114,8 @@ Type: files; Name: "{autoprograms}\Resistine\Resistine.lnk"
 Type: files; Name: "{autoprograms}\Resistine\Uninstall Resistine.lnk"
 Type: dirifempty; Name: "{autoprograms}\Resistine"
 Type: files; Name: "{autodesktop}\Resistine.lnk"
+; The app itself was Resistine.exe before the rename.
+Type: files; Name: "{app}\Resistine.exe"
 
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
@@ -312,7 +314,9 @@ end;
 
 function IsResistineRunning: Boolean;
 begin
-  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
+  { Resistine.exe: builds from before the rename }
+  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Phoenix.exe" | find /I "Phoenix.exe" >nul') or
+            HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
 end;
 
 function IsVpnServiceInstalled: Boolean;
@@ -331,9 +335,9 @@ var
   Params: string;
 begin
   if ForceKill then
-    Params := 'taskkill /F /T /IM Resistine.exe >nul 2>nul'
+    Params := 'taskkill /F /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul'
   else
-    Params := 'taskkill /T /IM Resistine.exe >nul 2>nul';
+    Params := 'taskkill /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul';
 
   { taskkill returns non-zero if not running; treat "not running" as success. }
   RunHiddenCmd(Params, ResultCode);
@@ -462,6 +466,7 @@ begin
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix');
 
   DeleteFile(ExpandConstant('{userdesktop}\Resistine VPN.lnk'));
 end;
@@ -945,11 +950,14 @@ begin
   if not ShouldPerformInstallAction then
     exit;
 
-  AppExe := QuotePath(ExpandConstant('{app}\Resistine.exe'));
+  AppExe := QuotePath(ExpandConstant('{app}\Phoenix.exe'));
+  { The pre-rename entry points at Resistine.exe, which is gone now. }
+  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
   if WizardIsTaskSelected('startup') then
-    RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine', AppExe)
+    RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix', AppExe)
   else
-    RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
+    RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix');
 end;
 
 procedure RunVpnServiceSetupRequired;
@@ -1296,8 +1304,9 @@ begin
 
   if ExistingInstallDir <> '' then
   begin
-    AppExePath := AddBackslash(ExistingInstallDir) + 'Resistine.exe';
-    ExistingAppExecutableAvailable := FileExists(AppExePath);
+    AppExePath := AddBackslash(ExistingInstallDir) + 'Phoenix.exe';
+    ExistingAppExecutableAvailable := FileExists(AppExePath) or
+      FileExists(AddBackslash(ExistingInstallDir) + 'Resistine.exe');
   end;
 
   if ExistingUninstallCmd <> '' then

@@ -14,10 +14,10 @@ IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
-# Bundle / executable file name. Stays 'Resistine' until the bundle-ID
-# rename: root launchd daemons, Windows Run keys and in-place updaters
-# reference the installed path. Users see DISPLAY_NAME.
-APP_NAME = 'Resistine'
+# Bundle / executable file name (Phoenix.app, Phoenix.exe). The bundle ID,
+# app group and service names keep the old name: they are tied to the Apple
+# signing profiles and to state on installed machines, and users never see them.
+APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
 VERSION = '2026.07.20-rc'
