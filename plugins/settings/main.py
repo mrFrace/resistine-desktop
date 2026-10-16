@@ -570,6 +570,12 @@ class Plugin(BasePlugin):
         # First tell the Phoenix API this device signed out, which removes
         # its VPN peer on the server; that call needs the still-valid token.
         try:
+            # Stop the Matrix session (chat and SIEM alerts) before its token goes.
+            from plugins.chat import matrix_transport
+            matrix_transport.shutdown_service()
+        except Exception as e:
+            logger.warning(f"Matrix shutdown on logout failed: {e}")
+        try:
             from plugins.login.oidc import has_session, revoke
             if has_session():
                 from plugins.vpn.provisioning import release_device

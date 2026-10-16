@@ -171,10 +171,12 @@ class TestReinitializeClient:
 
     def test_openai_transport_shuts_down_matrix_service(self, plugin, monkeypatch):
         from plugins.chat import matrix_transport
-        shutdown = MagicMock()
+        shutdown, listener = MagicMock(), MagicMock()
         monkeypatch.setattr(matrix_transport, "shutdown_service", shutdown)
+        monkeypatch.setattr(matrix_transport, "ensure_alerts_listener", listener)
         plugin.reinitialize_client()
         shutdown.assert_called_once()
+        listener.assert_called_once()
 
 
 # ===========================================================================

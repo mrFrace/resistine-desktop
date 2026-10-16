@@ -267,13 +267,17 @@ class TestPluginTransportSelection:
         assert p.client.bot == "@bot:example.org"
 
     def test_switching_back_to_openai(self, isolated_settings, monkeypatch):
+        from plugins.chat import matrix_transport
         from utils import settings
 
         p = self._plugin(monkeypatch, True)
+        listener = MagicMock()
+        monkeypatch.setattr(matrix_transport, "ensure_alerts_listener", listener)
         settings.set("chat", "transport", "openai")
         p.reinitialize_client()
         assert p.transport == "openai"
         assert not isinstance(p.client, MatrixTransport)
+        listener.assert_called_once()  # SIEM alerts keep arriving over Matrix
 
 
 @pytest.fixture()

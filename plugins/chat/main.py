@@ -654,6 +654,8 @@ class Plugin(BasePlugin):
         try:
             from plugins.chat import matrix_transport
             matrix_transport.shutdown_service()
+            # SIEM alerts still come over Matrix: keep an alerts-only session.
+            matrix_transport.ensure_alerts_listener()
         except Exception:
             pass
         api_key = settings.get_secret("chat", "openai_api_key")

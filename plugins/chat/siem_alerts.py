@@ -9,7 +9,8 @@ app's side of that contract, kept free of Qt and nio so it is unit-testable:
     (``alerts_bot()``); any other invite is left alone, exactly like the chat
     transport never touches the user's other rooms;
   * which rooms are alert rooms (persisted, so the sync filter can include
-    them from the first sync);
+    them from the first sync), including ones the user already joined in
+    another client (``is_alert_room``);
   * a small local store of received alerts (deduplicated by event id —
     every start re-syncs the rooms' recent timeline) and the listeners the
     chat UI subscribes with.
@@ -53,10 +54,38 @@ def alert_rooms() -> list[str]:
     return [r for r in rooms if isinstance(r, str) and r]
 
 
-def add_alert_room(room_id: str) -> None:
+def is_alert_room(state_events: list, bot: str) -> bool:
+    """True iff a room the user has ALREADY joined is an alerts DM: created by
+    *bot* and end-to-end encrypted. Covers rooms joined in another client
+    (Element), whose invite this app never saw; a room's creator is as
+    trustworthy as an invite's sender (both are set by the homeserver)."""
+    created_by = encrypted = None
+    for ev in state_events or ():
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") == "m.room.create" and ev.get("state_key") == "":
+            created_by = ev.get("sender")
+        elif ev.get("type") == "m.room.encryption" and ev.get("state_key") == "":
+            encrypted = (ev.get("content") or {}).get("algorithm") == "m.megolm.v1.aes-sha2"
+    return bool(bot) and created_by == bot and bool(encrypted)
+
+
+def add_alert_room(room_id: str, since: Optional[float] = None) -> None:
+    """Remember *room_id* as an alerts room. *since* is when this device
+    started listening there: alerts sent before it were never encrypted for
+    this device, so they stay unreadable here (see alert_room_since)."""
     rooms = alert_rooms()
     if room_id not in rooms:
         settings.set(_NS, "alert_rooms", rooms + [room_id])
+    if since is not None:
+        sinces = settings.get(_NS, "alert_rooms_since") or {}
+        if room_id not in sinces:
+            settings.set(_NS, "alert_rooms_since", {**sinces, room_id: float(since)})
+
+
+def alert_room_since(room_id: str) -> Optional[float]:
+    v = (settings.get(_NS, "alert_rooms_since") or {}).get(room_id)
+    return float(v) if isinstance(v, (int, float)) else None
 
 
 class AlertStore:

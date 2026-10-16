@@ -640,6 +640,13 @@ class Plugin(BasePlugin):
         def work():
             data = {}
             try:
+                # Recent alerts arrive over Matrix; (re)start the listener
+                # after a sign-in or a dropped connection. Cheap when it's up.
+                from plugins.chat import matrix_transport
+                matrix_transport.ensure_alerts_listener()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Dashboard alerts listener: {e}")
+            try:
                 st, names = posture.fetch(), posture.local_names()
                 mine, _ = posture.split_cards(st["cards"], names)
                 states = mitigations.check(mine, True) if mine else []

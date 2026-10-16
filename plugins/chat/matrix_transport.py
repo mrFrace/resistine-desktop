@@ -14,6 +14,11 @@ message contract (docs/MATRIX_BRIDGE.md there):
                prompt whose turn block carries ``part`` (1, 2, ...); the
                full text is the parts' bodies concatenated in order.
 
+SIEM alerts from siemgent's @siem-bot arrive over the same session
+(plugins/chat/siem_alerts.py). They are wanted whatever the chat transport,
+so with the OpenAI transport the service runs alerts-only (``bot=None``):
+no assistant DM is created and only the alert rooms are synced.
+
 Identity is the Phoenix account the user signed in with (plugins/login/oidc:
 MAS token + this install's device id); no separate Matrix login.
 
@@ -48,6 +53,8 @@ _SEND_TIMEOUT = 30
 _FIRST_REPLY_TIMEOUT = 90  # no reply and the bot isn't typing → give up
 _TURN_TIMEOUT = 15 * 60
 _INVITE_POLL = 120         # seconds between checks for a new SIEM-alerts invite
+_DISCOVER_EVERY = 15       # polls between scans for alert rooms joined elsewhere (30 min)
+_ALERTS_RESTART = 300      # min seconds between alerts-listener (re)starts
 
 
 class MatrixTransportError(Exception):
@@ -129,11 +136,15 @@ def _store_key() -> str:
 class MatrixService:
     """One encrypted Matrix session for this app, on a background thread."""
 
-    def __init__(self, homeserver: str, user_id: str, device_id: str, bot: str) -> None:
+    def __init__(self, homeserver: str, user_id: str, device_id: str, bot: Optional[str],
+                 predecessor: Optional["MatrixService"] = None) -> None:
         self.homeserver = homeserver
         self.user_id = user_id
         self.device_id = device_id
-        self.bot = bot
+        self.bot = bot  # None: alerts-only, no assistant DM
+        # A replaced service shares the E2EE store: never open it while the
+        # old one may still be writing (see _run).
+        self._predecessor = predecessor
         self.room_id: Optional[str] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
@@ -146,6 +157,19 @@ class MatrixService:
         self.alerts_bot = siem_alerts.alerts_bot()
         self._alert_rooms: set[str] = set(siem_alerts.alert_rooms())
         self._full_state_next = False
+        self._skipped_old = 0
+
+    @property
+    def alerts_only(self) -> bool:
+        return not self.bot
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def join(self, timeout: float) -> None:
+        t = self._thread
+        if t is not None and t is not threading.current_thread():
+            t.join(timeout)
 
     # -- lifecycle (any thread) -------------------------------------------
 
@@ -189,6 +213,9 @@ class MatrixService:
 
         # nio logs every event it can't decrypt at WARNING; not our concern.
         logging.getLogger("nio").setLevel(logging.ERROR)
+        if self._predecessor is not None:
+            self._predecessor.join(15)
+            self._predecessor = None
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         try:
@@ -255,8 +282,11 @@ class MatrixService:
         client.add_event_callback(self._on_message, (RoomMessageText, RoomMessageNotice))
         client.add_event_callback(self._on_undecryptable, MegolmEvent)
         sync_task = asyncio.create_task(self._sync_loop())
-        await self._ensure_room()
-        logger.info(f"[CHAT-MATRIX] ready: {self.user_id} ({self.device_id}) ↔ {self.bot} in {self.room_id}")
+        if self.alerts_only:
+            logger.info(f"[CHAT-MATRIX] ready: {self.user_id} ({self.device_id}), SIEM alerts only")
+        else:
+            await self._ensure_room()
+            logger.info(f"[CHAT-MATRIX] ready: {self.user_id} ({self.device_id}) ↔ {self.bot} in {self.room_id}")
         self._ready.set()
         invites_task = asyncio.create_task(self._alert_invites_loop())
         try:
@@ -329,15 +359,16 @@ class MatrixService:
                 await client.keys_claim(client.get_users_for_key_claiming())
 
     def _sync_filter(self) -> dict:
-        """Only ever fetch the assistant DM and the SIEM-alert DMs.
+        """Only ever fetch the assistant DM and the SIEM-alert DMs (alerts-only:
+        just the alert rooms, none at all until one is known).
 
         The account is the user's own Phoenix account, which has other rooms
         (other people's conversations). The chat transport must not pull, or
         try to decrypt, any of them. Until the DM is known only room state
         (memberships, encryption) is synced, no messages.
         """
-        if self.room_id:
-            rooms = [self.room_id] + sorted(self._alert_rooms - {self.room_id})
+        if self.room_id or self.alerts_only:
+            rooms = ([self.room_id] if self.room_id else []) + sorted(self._alert_rooms - {self.room_id})
             return {"room": {"rooms": rooms}, "presence": {"not_types": ["*"]}}
         return {"room": {"timeline": {"limit": 0}, "ephemeral": {"not_types": ["*"]}},
                 "presence": {"not_types": ["*"]}}
@@ -406,11 +437,13 @@ class MatrixService:
         return resp.event_id
 
     async def _alert_invites_loop(self) -> None:
-        """Accept SIEM-alert DM invites — ONLY those sent by the alerts bot.
+        """Find SIEM-alert DMs: accept invites ONLY from the alerts bot, and
+        adopt rooms already joined elsewhere (Element) that the bot created.
 
         The main sync is filtered to known rooms, which also hides new
-        invites, so they are looked up with a separate one-off sync that
-        carries no messages (timeline limit 0, no room state; an invite's
+        invites and other rooms, so they are looked up with a separate
+        one-off sync that carries no messages: timeline limit 0, and of the
+        room state only m.room.create and m.room.encryption (an invite's
         stripped state is always included).
         """
         import json
@@ -418,17 +451,30 @@ class MatrixService:
         from nio import JoinResponse
 
         client = self._client
-        flt = {"room": {"timeline": {"limit": 0}, "state": {"not_types": ["*"]},
-                        "ephemeral": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}},
-               "presence": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}}
+
+        def flt(discover: bool) -> dict:
+            # Discovery reads two state events of every joined room (~40 KB
+            # for ~50 rooms), so it runs at start and every _DISCOVER_EVERY
+            # polls; in between only invites (stripped state) come back.
+            state = {"types": ["m.room.create", "m.room.encryption"]} if discover else {"not_types": ["*"]}
+            return {"room": {"timeline": {"limit": 0}, "state": state,
+                             "ephemeral": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}},
+                    "presence": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}}
+
         url = f"{self.homeserver.rstrip('/')}/_matrix/client/v3/sync"
+        polls = 0
         while not self._stopping:
             try:
+                discover = polls % _DISCOVER_EVERY == 0
+                polls += 1
                 async with client.client_session.get(
-                        url, params={"filter": json.dumps(flt), "timeout": "0"},
+                        url, params={"filter": json.dumps(flt(discover)), "timeout": "0"},
                         headers={"Authorization": f"Bearer {client.access_token}"}) as r:
                     data = await r.json() if r.status == 200 else {}
-                invites = ((data.get("rooms") or {}).get("invite") or {})
+                rooms = data.get("rooms") or {}
+                if discover:
+                    self._adopt_joined_alert_rooms(rooms.get("join") or {})
+                invites = rooms.get("invite") or {}
                 for room_id, inv in invites.items():
                     state = (inv.get("invite_state") or {}).get("events") or []
                     if not siem_alerts.is_alert_invite(state, self.user_id, self.alerts_bot):
@@ -436,7 +482,7 @@ class MatrixService:
                     resp = await client.join(room_id)
                     if isinstance(resp, JoinResponse):
                         self._alert_rooms.add(room_id)
-                        siem_alerts.add_alert_room(room_id)
+                        siem_alerts.add_alert_room(room_id, since=time.time())
                         self._full_state_next = True
                         logger.info(f"[CHAT-MATRIX] joined SIEM alerts room {room_id} from {self.alerts_bot}")
                     else:
@@ -446,6 +492,18 @@ class MatrixService:
             except Exception as e:  # noqa: BLE001 — retried on the next poll
                 logger.warning(f"[CHAT-MATRIX] SIEM alerts invite check failed: {e}")
             await asyncio.sleep(_INVITE_POLL)
+
+    def _adopt_joined_alert_rooms(self, joined: dict) -> None:
+        for room_id, room in joined.items():
+            if room_id in self._alert_rooms:
+                continue
+            state = ((room or {}).get("state") or {}).get("events") or []
+            if not siem_alerts.is_alert_room(state, self.alerts_bot):
+                continue
+            self._alert_rooms.add(room_id)
+            siem_alerts.add_alert_room(room_id, since=time.time())
+            self._full_state_next = True
+            logger.info(f"[CHAT-MATRIX] using SIEM alerts room {room_id} from {self.alerts_bot} (joined elsewhere)")
 
     def _is_alert(self, room, event) -> bool:
         return room.room_id in self._alert_rooms and event.sender == self.alerts_bot
@@ -462,6 +520,15 @@ class MatrixService:
 
     async def _on_undecryptable(self, room, event) -> None:
         if self._is_alert(room, event):
+            since = siem_alerts.alert_room_since(room.room_id)
+            ts = getattr(event, "server_timestamp", None)
+            if since is not None and ts and ts / 1000.0 < since:
+                # Sent before this device listened there: never encrypted for
+                # it, so it can't ever be read here. Not a fault; don't show.
+                self._skipped_old += 1
+                if self._skipped_old in (1, 10, 100):
+                    logger.info(f"[CHAT-MATRIX] {self._skipped_old} older SIEM alert(s) predate this device; skipped")
+                return
             logger.warning(f"[CHAT-MATRIX] cannot decrypt SIEM alert {event.event_id}")
             siem_alerts.publish(room.room_id, event.event_id, siem_alerts.UNDECRYPTABLE,
                                 getattr(event, "server_timestamp", None))
@@ -478,17 +545,24 @@ class MatrixService:
 # ---------------------------------------------------------------------------
 
 _service: Optional[MatrixService] = None
+_retired: Optional[MatrixService] = None  # last shut-down service, until its thread ends
+_alerts_started = 0.0  # monotonic time of the last alerts-listener start
 _service_lock = threading.Lock()
 
 
-def _get_service(homeserver: str, user_id: str, device_id: str, bot: str) -> MatrixService:
-    global _service
+def _get_service(homeserver: str, user_id: str, device_id: str, bot: Optional[str]) -> MatrixService:
+    """The one service for this identity. ``bot=None`` (alerts only) reuses
+    any running service: a chat service listens for alerts too."""
+    global _service, _retired
     with _service_lock:
         s = _service
-        if s is None or (s.homeserver, s.user_id, s.device_id, s.bot) != (homeserver, user_id, device_id, bot):
-            if s is not None:
-                s.shutdown()
-            _service = s = MatrixService(homeserver, user_id, device_id, bot)
+        same = s is not None and (s.homeserver, s.user_id, s.device_id) == (homeserver, user_id, device_id)
+        if same and (bot is None or s.bot == bot):
+            return s
+        if s is not None:
+            s.shutdown()
+            _retired = s
+        _service = s = MatrixService(homeserver, user_id, device_id, bot, predecessor=_retired)
         return s
 
 
@@ -515,11 +589,43 @@ def start_background(bot: str = DEFAULT_BOT) -> None:
 
 
 def shutdown_service() -> None:
-    global _service
+    global _service, _retired
     with _service_lock:
         if _service is not None:
             _service.shutdown()
+            _retired = _service
             _service = None
+
+
+def ensure_alerts_listener() -> None:
+    """Keep a Matrix session up for SIEM alerts while signed in, whatever the
+    chat transport. Idempotent and cheap: call it often (Dashboard refresh).
+    Only connects in the background; failures only log."""
+    from plugins.login import oidc
+
+    try:
+        if not available() or not oidc.has_session():
+            return
+        t = MatrixTransport(None)
+        if not t.user_id or not t.homeserver:
+            return
+        service = _get_service(t.homeserver, t.user_id, t.device_id, None)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[CHAT-MATRIX] alerts listener skipped: {e}")
+        return
+    global _alerts_started
+    with _service_lock:
+        if service.is_running() or (_alerts_started and time.monotonic() - _alerts_started < _ALERTS_RESTART):
+            return  # up, or failed recently (offline): don't hammer the server
+        _alerts_started = time.monotonic()
+
+    def _go() -> None:
+        try:
+            service.ensure_ready()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[CHAT-MATRIX] alerts listener failed: {e}")
+
+    threading.Thread(target=_go, name="matrix-alerts", daemon=True).start()
 
 
 def available() -> bool:
@@ -534,10 +640,11 @@ def available() -> bool:
 class MatrixTransport:
     """The chat plugin's ``client`` when the Matrix transport is selected."""
 
-    def __init__(self, bot: str = DEFAULT_BOT) -> None:
+    def __init__(self, bot: Optional[str] = DEFAULT_BOT) -> None:
         from plugins.login import oidc
 
-        self.bot = bot or DEFAULT_BOT
+        # None only for ensure_alerts_listener's alerts-only session.
+        self.bot = DEFAULT_BOT if bot == "" else bot
         self.homeserver = oidc.homeserver_url()
         self.user_id = settings.get("auth", "user_id")
         self.device_id = settings.get("auth", "device_id") or oidc.get_device_id()
@@ -548,6 +655,8 @@ class MatrixTransport:
     def stream_deltas(self, text: str, session: Optional[str], cancel: threading.Event) -> Iterator[str]:
         if not self.user_id:
             raise MatrixTransportError("Sign in with your Phoenix account to use Matrix chat.")
+        if not self.bot:
+            raise MatrixTransportError("No assistant bot is configured for Matrix chat.")
         service = _get_service(self.homeserver, self.user_id, self.device_id, self.bot)
         service.ensure_ready()
         q = service.begin_turn()

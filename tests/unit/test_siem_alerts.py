@@ -118,3 +118,160 @@ class TestService:
         asyncio.run(svc._on_undecryptable(SimpleNamespace(room_id="!alerts:phoenix.exposed"),
                                           _ev(BOT, "$u")))
         assert siem_alerts.store().all()[0]["body"] == siem_alerts.UNDECRYPTABLE
+
+
+# --------------------------------------------------------------------------- rooms joined elsewhere
+
+def _state(creator=BOT, encrypted=True):
+    evs = [{"type": "m.room.create", "state_key": "", "sender": creator, "content": {}}]
+    if encrypted:
+        evs.append({"type": "m.room.encryption", "state_key": "", "sender": creator,
+                    "content": {"algorithm": "m.megolm.v1.aes-sha2"}})
+    return evs
+
+
+@pytest.mark.unit
+class TestJoinedElsewhere:
+    def test_room_created_by_the_bot_and_encrypted_is_an_alert_room(self):
+        assert siem_alerts.is_alert_room(_state(), BOT)
+
+    @pytest.mark.parametrize("state", [
+        _state(creator="@mallory:phoenix.exposed"),   # someone else's room
+        _state(encrypted=False),                       # plaintext: never trusted
+        [{"type": "m.room.create", "state_key": "x", "sender": BOT}],  # not the create event
+        [], None,
+    ])
+    def test_other_rooms_are_not(self, state):
+        assert not siem_alerts.is_alert_room(state, BOT)
+
+    def test_no_bot_configured_matches_nothing(self):
+        assert not siem_alerts.is_alert_room(_state(creator=""), "")
+
+    def test_service_adopts_only_bot_rooms(self, fresh):
+        svc = mt.MatrixService("https://hs", ME, "DEV", None)
+        svc._adopt_joined_alert_rooms({
+            "!alerts:hs": {"state": {"events": _state()}},
+            "!friends:hs": {"state": {"events": _state(creator="@alice:hs")}},
+            "!weird:hs": None,
+        })
+        assert svc._alert_rooms == {"!alerts:hs"}
+        assert siem_alerts.alert_rooms() == ["!alerts:hs"]
+        assert siem_alerts.alert_room_since("!alerts:hs") is not None
+        assert svc._full_state_next
+
+    def test_since_is_kept_from_the_first_time(self, fresh):
+        siem_alerts.add_alert_room("!a:hs", since=100.0)
+        siem_alerts.add_alert_room("!a:hs", since=200.0)
+        assert siem_alerts.alert_room_since("!a:hs") == 100.0
+        assert siem_alerts.alert_room_since("!other:hs") is None
+
+
+@pytest.mark.unit
+class TestOldUndecryptable:
+    def test_alerts_from_before_this_device_are_skipped(self, fresh):
+        siem_alerts.add_alert_room("!alerts:phoenix.exposed", since=1_800_000_000.0)
+        svc = mt.MatrixService("https://hs", ME, "DEV", None)
+        old = _ev(BOT, "$old")  # 1_700_000_000 s: before since
+        new = SimpleNamespace(**{**vars(_ev(BOT, "$new")), "server_timestamp": 1_800_000_100_000})
+        room = SimpleNamespace(room_id="!alerts:phoenix.exposed")
+        asyncio.run(svc._on_undecryptable(room, old))
+        asyncio.run(svc._on_undecryptable(room, new))
+        assert [a["event_id"] for a in siem_alerts.store().all()] == ["$new"]
+
+    def test_readable_old_alerts_are_still_shown(self, fresh):
+        siem_alerts.add_alert_room("!alerts:phoenix.exposed", since=1_800_000_000.0)
+        svc = mt.MatrixService("https://hs", ME, "DEV", None)
+        asyncio.run(svc._on_message(SimpleNamespace(room_id="!alerts:phoenix.exposed"), _ev(BOT, "$old")))
+        assert siem_alerts.store().all()[0]["body"] == "hello"
+
+
+# --------------------------------------------------------------------------- alerts-only service
+
+@pytest.mark.unit
+class TestAlertsOnly:
+    def test_filter_syncs_only_alert_rooms(self, fresh):
+        svc = mt.MatrixService("https://hs", ME, "DEV", None)
+        assert svc.alerts_only
+        assert svc._sync_filter()["room"]["rooms"] == []  # nothing until one is known
+        svc._alert_rooms.add("!alerts:hs")
+        assert svc._sync_filter()["room"]["rooms"] == ["!alerts:hs"]
+
+    def test_alerts_only_transport_never_streams(self, fresh):
+        t = mt.MatrixTransport(None)
+        t.user_id = ME
+        with pytest.raises(mt.MatrixTransportError):
+            next(t.stream_deltas("hi", None, __import__("threading").Event()))
+
+
+@pytest.fixture
+def no_service(monkeypatch):
+    monkeypatch.setattr(mt, "_service", None)
+    monkeypatch.setattr(mt, "_retired", None)
+    monkeypatch.setattr(mt, "_alerts_started", 0.0)
+
+
+@pytest.mark.unit
+class TestServiceFactory:
+    def test_alerts_only_reuses_a_chat_service(self, no_service):
+        chat = mt._get_service("https://hs", ME, "DEV", "@secagent:hs")
+        assert mt._get_service("https://hs", ME, "DEV", None) is chat
+
+    def test_chat_replaces_alerts_only_and_waits_for_it(self, no_service):
+        alerts = mt._get_service("https://hs", ME, "DEV", None)
+        chat = mt._get_service("https://hs", ME, "DEV", "@secagent:hs")
+        assert chat is not alerts and alerts._stopping
+        assert chat._predecessor is alerts  # shares the E2EE store: opened only after it ends
+
+    def test_after_shutdown_the_next_service_waits_too(self, no_service):
+        old = mt._get_service("https://hs", ME, "DEV", "@secagent:hs")
+        mt.shutdown_service()
+        assert mt._get_service("https://hs", ME, "DEV", None)._predecessor is old
+
+
+@pytest.mark.unit
+class TestEnsureAlertsListener:
+    @pytest.fixture
+    def env(self, fresh, no_service, monkeypatch):
+        from plugins.login import oidc
+        from utils import settings
+        settings.set("auth", "user_id", ME)
+        settings.set("auth", "device_id", "DEV")
+        monkeypatch.setattr(oidc, "homeserver_url", lambda: "https://hs")
+        monkeypatch.setattr(mt, "available", lambda: True)
+        started = []
+        monkeypatch.setattr(mt.MatrixService, "ensure_ready", lambda self, timeout=0: started.append(self))
+        return oidc, started
+
+    def _wait(self, started, n):
+        import time
+        for _ in range(100):
+            if len(started) >= n:
+                return
+            time.sleep(0.01)
+
+    def test_signed_out_does_nothing(self, env, monkeypatch):
+        oidc, started = env
+        monkeypatch.setattr(oidc, "has_session", lambda: False)
+        mt.ensure_alerts_listener()
+        assert mt._service is None and started == []
+
+    def test_signed_in_starts_alerts_only_once(self, env, monkeypatch):
+        oidc, started = env
+        monkeypatch.setattr(oidc, "has_session", lambda: True)
+        mt.ensure_alerts_listener()
+        self._wait(started, 1)
+        assert len(started) == 1 and started[0].alerts_only
+        mt.ensure_alerts_listener()  # within the restart window: no second start
+        import time
+        time.sleep(0.05)
+        assert len(started) == 1
+
+    def test_restart_after_the_window(self, env, monkeypatch):
+        oidc, started = env
+        monkeypatch.setattr(oidc, "has_session", lambda: True)
+        mt.ensure_alerts_listener()
+        self._wait(started, 1)
+        monkeypatch.setattr(mt, "_alerts_started", 1.0)  # long ago
+        mt.ensure_alerts_listener()
+        self._wait(started, 2)
+        assert len(started) == 2
