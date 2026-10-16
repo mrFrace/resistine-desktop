@@ -150,6 +150,10 @@ def ensure_vpn_config(on_status: Optional[Callable[[str], None]] = None,
             return CONFIG_NAME, path
 
     backend = _vpn_backend()
+    unavailable = getattr(backend, "vpn_unavailable_reason", None)
+    reason = unavailable() if unavailable else None
+    if isinstance(reason, str) and reason:  # before registering a key the device couldn't use
+        raise ProvisioningError(reason)
     if on_status:
         on_status("Creating your VPN keys…")
     public_key = backend.setup_vpn_keys()

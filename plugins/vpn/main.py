@@ -67,6 +67,7 @@ connect = None
 disconnect = None
 is_extension_enabled = None
 vpn_helper = None
+vpn_unavailable_reason = None
 
 try:
     if IS_WINDOWS:
@@ -99,6 +100,7 @@ try:
             start_vpn,
             stop_vpn,
             vpn_helper,
+            vpn_unavailable_reason,
         )
 except Exception as _imp_err:  # pragma: no cover - depends on host OS
     logger.warning(f"VPN backend import failed on {_PLATFORM}: {_imp_err}")
@@ -158,6 +160,16 @@ try:
     _config_manager.migrate_legacy_config()
 except Exception as e:
     logger.warning(f"Legacy VPN config migration failed: {e}")
+
+
+def _vpn_unavailable() -> str | None:
+    """macOS: why this build/install can't run the VPN at all, or None."""
+    if not IS_MACOS or vpn_unavailable_reason is None:
+        return None
+    try:
+        return vpn_unavailable_reason()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _safe_extension_enabled() -> bool:
@@ -580,6 +592,7 @@ class Plugin(BasePlugin):
             selected_conf_file = self.get_selected_conf_file_name()
 
         # On macOS, detect if the extension was disabled after onboarding.
+        unavailable = _vpn_unavailable()
         extension_disabled = IS_MACOS and not _safe_extension_enabled()
         if extension_disabled and my_vpn_status == "Running":
             my_vpn_status = "Stopped"
@@ -589,7 +602,12 @@ class Plugin(BasePlugin):
         self._last_polled_state = my_vpn_status
 
         # ── Status copy + pill colour ──
-        if extension_disabled:
+        if unavailable:
+            status_text = "Not available"
+            status_kind = "error"
+            sub_text = unavailable
+            is_enabled = False
+        elif extension_disabled:
             status_text = "Extension Disabled"
             status_kind = "error"
             try:
@@ -872,6 +890,13 @@ class Plugin(BasePlugin):
             return
 
         if IS_MACOS:
+            unavailable = _vpn_unavailable()
+            if unavailable:
+                logger.error(f"VPN unavailable: {unavailable}")
+                self.app.after(0, self.app.show_notification, unavailable, "error")
+                my_vpn_status = "Stopped"
+                active_client_name = None
+                return
             if not _safe_extension_enabled():
                 logger.error("Network extension is disabled in System Settings")
                 try:

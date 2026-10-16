@@ -235,24 +235,51 @@ class _VPNStepMac(_VPNStepBase):
         return bool(is_extension_enabled())
 
     def _ensure_permission(self, on_status) -> bool:
+        import time
+
         from plugins.vpn.wireguard.vpn_functions_darwin import (
             VPNHelper,
             is_extension_enabled,
+            vpn_unavailable_reason,
         )
+        reason = vpn_unavailable_reason()
+        if reason:
+            logger.warning(f"[VPN-SETUP] {reason}")
+            self._failed = reason
+            return False
         if is_extension_enabled():
             return True
         logger.info("[VPN-SETUP] requesting extension activation")
         try:
-            VPNHelper.activate_extension()
+            sent = VPNHelper.activate_extension()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[VPN-SETUP] activate_extension failed: {e}")
+            sent = False
+        if not sent:
+            self._failed = "Couldn't ask macOS to enable the VPN extension. You can try again or skip."
+            return False
+
+        def refused() -> bool:
+            err = VPNHelper.activation_error()
+            if err:
+                logger.error(f"[VPN-SETUP] macOS refused the extension: {err}")
+                self._failed = f"macOS refused the Phoenix VPN extension: {err}"
+            return bool(err)
+
+        # A refusal (unsigned build, missing entitlement) comes back within
+        # moments; don't send the user to System Settings for nothing.
+        for _ in range(8):
+            if refused():
+                return False
+            if is_extension_enabled():
+                return True
+            time.sleep(0.5)
         self._open_settings()
         on_status("Approve the Phoenix extension in System Settings — this "
                   "continues automatically once enabled.")
-        import time
         deadline = time.time() + 300
         while time.time() < deadline:
-            if self.cancelled():
+            if self.cancelled() or refused():
                 return False
             if is_extension_enabled():
                 logger.info("[VPN-SETUP] extension approved")

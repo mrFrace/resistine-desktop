@@ -10,9 +10,11 @@ class ExtensionActivator(NSObject):
         logger.info(f"✅ [Activator] Finished. Result code: {result}")
 
     def request_didFailWithError_(self, request, error):
-        logger.error(f"❌ [Activator] Failed: {error.localizedDescription()}")
+        self.error = str(error.localizedDescription())
+        logger.error(f"❌ [Activator] Failed: {self.error}")
 
     def requestNeedsUserApproval_(self, request):
+        self.needs_approval = True
         logger.info("⚠️ [Activator] Needs User Approval in System Settings!")
 
     def request_actionForReplacingExtension_withExtension_(self, request, existing, extension):
@@ -24,6 +26,8 @@ def run_activation(bundle_id):
     logger.info(f"🚀 [Activator] Requesting activation for {bundle_id}")
     
     activator = ExtensionActivator.alloc().init()
+    activator.error = None  # set by the delegate callbacks (main queue)
+    activator.needs_approval = False
     
     # Use the main queue's underlying dispatch queue
     queue = NSOperationQueue.mainQueue().underlyingQueue()

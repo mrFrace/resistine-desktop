@@ -171,6 +171,14 @@ class TestEnsureVpnConfig:
             prov.ensure_vpn_config()
         manager.set_active_config.assert_not_called()
 
+    def test_vpn_missing_from_build_stops_before_any_key(self, manager, monkeypatch):
+        backend = MagicMock(vpn_unavailable_reason=MagicMock(return_value="No VPN in this build."))
+        monkeypatch.setattr(prov, "_vpn_backend", lambda: backend)
+        monkeypatch.setattr(prov, "request_peer", lambda pub: pytest.fail("no peer registered"))
+        with pytest.raises(prov.ProvisioningError, match="No VPN in this build"):
+            prov.ensure_vpn_config()
+        backend.setup_vpn_keys.assert_not_called()
+
 
 @pytest.mark.unit
 class TestReleaseDevice:

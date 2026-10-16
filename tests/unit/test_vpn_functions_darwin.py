@@ -428,3 +428,36 @@ class TestIsExtensionEnabled:
 def test_check_wireguard_installed_always_true():
     from plugins.vpn.wireguard.vpn_functions_darwin import check_wireguard_installed
     assert check_wireguard_installed() is True
+
+
+# ===========================================================================
+# Builds without the VPN (unsigned test builds)
+# ===========================================================================
+@pytest.mark.unit
+class TestVpnAvailability:
+    def test_bundled_build_is_available(self, monkeypatch, tmp_path):
+        from plugins.vpn.wireguard import vpn_functions_darwin as vfd
+        monkeypatch.setattr(vfd, "get_writable_wireguard_dir", lambda: str(tmp_path))
+        assert vfd.vpn_bundled() and vfd.vpn_unavailable_reason() is None
+
+    def test_no_cli_means_no_vpn_and_no_extension_request(self, monkeypatch):
+        from plugins.vpn.wireguard import vpn_functions_darwin as vfd
+        monkeypatch.setattr(vfd.helper, "cli_path", None)
+        assert vfd.vpn_unavailable_reason() == vfd.NOT_BUNDLED
+        with patch.dict("sys.modules", {"plugins.vpn.wireguard.extension_activator": None}):
+            assert vfd.VPNHelper.activate_extension() is False  # returns before importing PyObjC
+
+    def test_blocked_app_group_folder(self, monkeypatch):
+        from plugins.vpn.wireguard import vpn_functions_darwin as vfd
+
+        def blocked():
+            raise PermissionError(1, "Operation not permitted")
+        monkeypatch.setattr(vfd, "get_writable_wireguard_dir", blocked)
+        assert "blocked Phoenix" in vfd.vpn_unavailable_reason()
+
+    def test_activation_error_comes_from_the_delegate(self, monkeypatch):
+        from plugins.vpn.wireguard import vpn_functions_darwin as vfd
+        monkeypatch.setattr(vfd.VPNHelper, "_activator_ref", None)
+        assert vfd.VPNHelper.activation_error() is None
+        monkeypatch.setattr(vfd.VPNHelper, "_activator_ref", MagicMock(error="Missing entitlement"))
+        assert vfd.VPNHelper.activation_error() == "Missing entitlement"

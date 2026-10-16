@@ -102,6 +102,28 @@ class HelperToolManager:
 # Initialize helper manager
 helper = HelperToolManager()
 
+NOT_BUNDLED = ("This build of Phoenix doesn't include the VPN. "
+               "Install the signed Phoenix release to use it.")
+
+
+def vpn_bundled() -> bool:
+    """The app carries the VPN helper (signed release builds do; unsigned
+    test builds don't, and macOS refuses their extension anyway)."""
+    return helper.cli_path is not None
+
+
+def vpn_unavailable_reason() -> Optional[str]:
+    """Why the VPN cannot work in this build/install, or None."""
+    if not vpn_bundled():
+        return NOT_BUNDLED
+    try:
+        get_writable_wireguard_dir()
+    except PermissionError:
+        # The App Group container needs the team-signed app-group entitlement.
+        return ("macOS blocked Phoenix from saving its VPN settings. "
+                "Reinstall the signed Phoenix release.")
+    return None
+
 
 # Add VPN-specific helper methods
 class VPNHelper:
@@ -112,7 +134,13 @@ class VPNHelper:
 
     @staticmethod
     def activate_extension() -> bool:
-        """Activate the System Extension using Main App PyObjC bridge"""
+        """Activate the System Extension using Main App PyObjC bridge.
+
+        False when no request was sent (no VPN in this build, or an error).
+        The request answers asynchronously: see activation_error()."""
+        if not vpn_bundled():
+            logger.info("🔌 [VPN] No VPN in this build — not requesting the extension")
+            return False
         try:
             from .extension_activator import ExtensionActivator, run_activation
             logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
@@ -126,6 +154,11 @@ class VPNHelper:
         except Exception as e:
             logger.error(f"❌ [VPN] Activation error: {e}")
             return False
+
+    @staticmethod
+    def activation_error() -> Optional[str]:
+        """macOS's refusal of the last activation request, if it refused."""
+        return getattr(VPNHelper._activator_ref, "error", None)
 
     @staticmethod
     def start_vpn(config_path: str) -> Tuple[bool, str]:

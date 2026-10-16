@@ -22,6 +22,34 @@ DEBUG = False
 
 
 
+def _install_excepthook() -> None:
+    """Log unhandled errors instead of dying.
+
+    With the default sys.excepthook, PyQt6 aborts the whole app on an
+    exception in any slot or event handler, and the traceback goes to
+    stderr, which a packaged build has nowhere to show. The traceback is
+    formatted without local variables (they may hold tokens)."""
+    import threading
+    import traceback
+
+    def hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        logger.error(f"Unhandled error (the app keeps running):\n{text}")
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit:
+            return
+        name = args.thread.name if args.thread else "?"
+        text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+        logger.error(f"Unhandled error in thread {name}:\n{text}")
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
+
+
 def _set_resolution_scaling() -> None:
     """Pre-flight check to scale the Qt app based on screen resolution.
     Runs a fast subprocess to read QApplication.primaryScreen() before the main app
@@ -209,6 +237,7 @@ def main() -> int:
     # Before the file log sink creates the new config dir.
     settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
+    _install_excepthook()
 
     qt_app, window = _build_app()
 
