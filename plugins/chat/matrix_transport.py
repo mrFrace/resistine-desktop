@@ -34,7 +34,9 @@ from __future__ import annotations
 import asyncio
 import os
 import queue
+import re
 import secrets
+import sys
 import threading
 import time
 from typing import Iterator, Optional
@@ -131,6 +133,38 @@ def _store_key() -> str:
         key = secrets.token_urlsafe(32)
         settings.set_secret(_NS, "matrix_store_key", key)
     return key
+
+
+def _store_prefix(user_id: str, device_id: str) -> str:
+    """Base name of nio's E2EE store files: ``<user_id>_<device_id>``.
+
+    A user ID has a ':' (@me:phoenix.exposed), which Windows takes as an NTFS
+    stream name: the SQLite database still opens, but replacing a trust file
+    (on the first send, when nio marks the bot's devices ignored) fails with
+    WinError 123. There the characters Windows rejects become '_'; elsewhere
+    nio's name is kept so existing stores still open.
+    """
+    prefix = f"{user_id}_{device_id}"
+    if sys.platform == "win32":
+        prefix = re.sub(r'[<>:"/\\|?*]', "_", prefix)
+    return prefix
+
+
+def _store_class():
+    """nio's DefaultStore with its files named by :func:`_store_prefix`."""
+    from nio.store import DefaultStore, MatrixStore
+    from nio.store.file_trustdb import KeyStore
+
+    class PhoenixStore(DefaultStore):
+        def __post_init__(self):
+            prefix = os.path.join(self.store_path, _store_prefix(self.user_id, self.device_id))
+            self.database_name = self.database_name or f"{os.path.basename(prefix)}.db"
+            MatrixStore.__post_init__(self)
+            self.trust_db = KeyStore(f"{prefix}.trusted_devices")
+            self.blacklist_db = KeyStore(f"{prefix}.blacklisted_devices")
+            self.ignore_db = KeyStore(f"{prefix}.ignored_devices")
+
+    return PhoenixStore
 
 
 class MatrixService:
@@ -260,6 +294,7 @@ class MatrixService:
             self.homeserver, self.user_id, device_id=self.device_id, store_path=store,
             config=AsyncClientConfig(
                 encryption_enabled=True,
+                store=_store_class(),
                 # Initial sync every start: it is what surfaces the saved DM
                 # (room state is not persisted). Turns are request/response,
                 # so nothing is lost by not resuming an old sync position.

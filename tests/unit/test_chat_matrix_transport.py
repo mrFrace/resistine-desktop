@@ -185,6 +185,32 @@ def key_check(published_ed25519):
 
 
 @pytest.mark.unit
+class TestStoreFileNames:
+    """nio names its store files after the user ID, whose ':' breaks Windows."""
+
+    USER, DEVICE = "@me:phoenix.exposed", "PHX_DEV"
+
+    def open_store(self, tmp_path, monkeypatch, platform):
+        pytest.importorskip("nio.store")
+        monkeypatch.setattr(mt.sys, "platform", platform)
+        store = mt._store_class()(self.USER, self.DEVICE, str(tmp_path), "pickle")
+        # A first send marks the bot's devices ignored: that replaces a trust file.
+        store.ignore_db._save()
+        store.database.close()
+        return sorted(p.name for p in tmp_path.iterdir())
+
+    def test_windows_names_have_no_colon(self, tmp_path, monkeypatch):
+        names = self.open_store(tmp_path, monkeypatch, "win32")
+        assert names == ["@me_phoenix.exposed_PHX_DEV.db",
+                         "@me_phoenix.exposed_PHX_DEV.ignored_devices"]
+
+    def test_other_platforms_keep_nio_names(self, tmp_path, monkeypatch):
+        names = self.open_store(tmp_path, monkeypatch, "linux")
+        assert names == ["@me:phoenix.exposed_PHX_DEV.db",
+                         "@me:phoenix.exposed_PHX_DEV.ignored_devices"]
+
+
+@pytest.mark.unit
 class TestDeviceKeyRepublish:
     def test_keys_on_server_left_alone(self):
         client = key_check("OURS")
