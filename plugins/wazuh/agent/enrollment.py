@@ -31,12 +31,24 @@ Matrix device, so the setup wizard enrolls again instead of trusting an agent
 that is still installed and running locally. The server's device -> agent
 mapping is what LLMAgent-api's Matrix bridge uses for "this machine".
 
-Contract: matrix repo, packages/phoenix-provisioning (enroll_agent).
+An agent installed some other way (the NixOS module, an upstream package)
+enrolled with the manager's password, so the server has no device for it.
+link() records it for this device instead:
+
+    POST /v1/agent/link {"agent_id", "proof"} -> {"agent_id", "agent_name", "group"}
+
+proof is HMAC-SHA256 keyed by the secret of the agent's client.keys line
+over link_message(); the secret never leaves this machine. The agent stays as
+it is, and signing out only drops the record.
+
+Contract: matrix repo, packages/phoenix-provisioning (enroll_agent, link_agent).
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import os
 import re
 import tempfile
@@ -47,6 +59,7 @@ from utils import settings
 from utils.logger import logger
 
 ENROLL_PATH = "/v1/agent/enroll"
+LINK_PATH = "/v1/agent/link"
 _NS = "wazuh"
 GROUP_PREFIX = "u_"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -103,6 +116,51 @@ def request(agent_name: str) -> Optional[Enrollment]:
 
 def _account() -> str:
     return settings.get("auth", "user_id", "") or settings.get("auth", "email", "") or ""
+
+
+def link_message(user_id: str, device_id: str) -> bytes:
+    """What the proof signs (phoenix-provisioning link_message)."""
+    return f"phoenix-agent-link\n{user_id}\n{device_id}".encode()
+
+
+def link(key_line: str) -> bool:
+    """Record the installed agent whose client.keys line is *key_line* as this
+    device's agent. True when the server did. Never raises."""
+    line = (key_line or "").strip()
+    if not _KEY_LINE_RE.match(line):
+        logger.error("[ENROLL] the agent's client.keys line is not usable for a link")
+        return False
+    agent_id, _name, _ip, secret = line.split(" ")
+    user, device = settings.get("auth", "user_id", "") or "", _device()
+    if not user or not device:
+        return False
+    proof = hmac.new(secret.encode(), link_message(user, device), hashlib.sha256).hexdigest()
+    try:
+        from plugins.vpn import provisioning
+        r = provisioning._authorized_request(
+            "POST", LINK_PATH, json={"agent_id": agent_id, "proof": proof})
+    except Exception as e:  # noqa: BLE001 - ProvisioningError, import problems
+        logger.warning(f"[ENROLL] agent link unavailable: {e}")
+        return False
+    if r.status_code != 200:
+        logger.warning(f"[ENROLL] agent link answered HTTP {r.status_code}: "
+                       f"{provisioning._error_detail(r)}")
+        return False
+    try:
+        body = r.json()
+        group = str(body["group"])
+        linked = str(body["agent_id"])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[ENROLL] malformed link answer: {e}")
+        return False
+    if linked != agent_id:
+        logger.error("[ENROLL] the link answer names another agent")
+        return False
+    logger.info(f"[ENROLL] linked agent {agent_id} in group {group}")
+    if _NAME_RE.match(group):
+        _remember_group(group)
+    mark_enrolled(agent_id)
+    return True
 
 
 def _remember_group(group: str) -> None:

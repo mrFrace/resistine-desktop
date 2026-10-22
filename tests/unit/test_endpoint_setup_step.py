@@ -38,6 +38,7 @@ def _running_agent(monkeypatch):
     monkeypatch.setattr(setup_steps, "_wazuh_connection", lambda: "pending")
     monkeypatch.setattr(setup_steps, "_wazuh_activate", lambda *_a: True)
     monkeypatch.setattr(setup_steps, "_maybe_forward_clamav", lambda _s: None)
+    monkeypatch.setattr("plugins.wazuh.agent.sign_in.app_managed", lambda: True)
 
 
 def _signed_in_as_new_device():
@@ -99,3 +100,25 @@ def test_agent_auth_fallback_still_completes(monkeypatch):
     monkeypatch.setattr(step, "_run_bg", lambda fn: fn())
     step.begin(lambda _m: None)
     assert step.is_complete()
+
+
+@pytest.mark.unit
+def test_agent_installed_elsewhere_is_linked_not_re_enrolled(monkeypatch):
+    """The NixOS module's agent: linked for the new sign-in, never re-enrolled,
+    and a failed link doesn't fail the step (the agent itself still works)."""
+    from plugins.wazuh.agent import sign_in
+
+    _running_agent(monkeypatch)
+    monkeypatch.setattr(sign_in, "app_managed", lambda: False)
+    _signed_in_as_new_device()
+    monkeypatch.setattr(setup_steps, "_wazuh_reenroll",
+                        lambda _s: pytest.fail("must not re-enroll"))
+    linked = []
+    monkeypatch.setattr(sign_in, "enroll_for_sign_in",
+                        lambda _s=None: linked.append(1) or False)
+
+    step = setup_steps._EndpointStepDirect(app=None)
+    monkeypatch.setattr(step, "_run_bg", lambda fn: fn())
+    step.begin(lambda _m: None)
+    assert linked == [1]
+    assert step._failed is None
