@@ -1,0 +1,48 @@
+# Maintainer: Phoenix Team <info@phoenix.exposed>
+#
+# Repackages the PyInstaller build in /opt/phoenix (x86_64 only). The source
+# tarball is the staged root that scripts/build/build-linux-packages.sh makes
+# alongside the .deb and .rpm; that script also runs makepkg on this file.
+# By hand: put phoenix-<version>-x86_64.tar.xz next to this PKGBUILD, set
+# pkgver (the release version with '-' dropped, 2026.07.20-rc -> 2026.07.20rc,
+# which pacman sorts before 2026.07.20), _relver and sha256sums, then
+# `makepkg -f`. Arch's desktop-file-utils hook refreshes the menu cache.
+
+pkgname=phoenix
+pkgver=@PKGVER@
+_relver=@VERSION@
+pkgrel=1
+pkgdesc="Phoenix security endpoint and VPN manager"
+arch=('x86_64')
+url="https://phoenix.exposed"
+license=('GPL-2.0-or-later')
+# The bundle carries its own Python and Qt; these are what it loads from the system.
+depends=(
+	'wireguard-tools'
+	'xcb-util-cursor'
+	'libxcb'
+	'libxkbcommon-x11'
+	'libglvnd'
+	'wayland'
+	'fontconfig'
+	'dbus'
+)
+optdepends=(
+	'systemd-resolvconf: DNS for the VPN through wg-quick'
+	'clamav: antivirus scanning'
+	'libnotify: desktop notifications'
+	'gnome-keyring: Secret Service keyring for stored secrets (or kwallet / keepassxc)'
+	'libarchive: bsdtar to install the SIEM agent'
+)
+provides=('resistine')
+conflicts=('resistine')
+replaces=('resistine')
+# PyInstaller files must ship untouched.
+options=('!strip' '!debug' '!emptydirs')
+source=("phoenix-${_relver}-x86_64.tar.xz")
+sha256sums=('@SHA256@')
+
+package() {
+	cp -a "${srcdir}/root/." "${pkgdir}/"
+	install -Dm644 "${srcdir}/LICENSE.md" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.md"
+}

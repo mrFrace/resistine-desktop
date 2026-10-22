@@ -1,0 +1,11 @@
+{
+  "product": "phoenix-agent",
+  "platform": "windows",
+  "version": "5.0.0-1",
+  "build": 458,
+  "dir": "5.0.0-1-458",
+  "file": "phoenix-agent-5.0.0-1.msi",
+  "sha512": "4e3be5fdcbe900cdbca63ba464072601d2f019f5d05ba6a0251654a27bb8df2b071ef1f23285a6b5e7b6586323e2bd8c191c30e4e01ef53d61fff28a6a4ce651",
+  "size": 39043008,
+  "published": "2026-10-13T14:46:06Z"
+}

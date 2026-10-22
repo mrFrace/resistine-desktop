@@ -1,6 +1,6 @@
 # Settings Plugin
 
-Global configuration manager for the Resistine environment.
+Global configuration manager for the Phoenix environment.
 
 ## Features
 - **Profile Management**: View your authenticated email account.

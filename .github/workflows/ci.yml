@@ -1,0 +1,284 @@
+name: CI
+
+on:
+  push:
+    branches: [main, feat/*, fix/*, build/*]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  syntax-check:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Check syntax (compile all .py files)
+        run: python -m compileall -q plugins/ utils/ gui/ main.py
+
+  test:
+    name: Tests (${{ matrix.os }})
+    needs: syntax-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            requirements: requirements/requirements-mac.txt
+            pytest-markers: ""
+          - os: ubuntu-latest
+            requirements: requirements/requirements-linux.txt
+            pytest-markers: "-m 'not platform_darwin and not platform_windows'"
+          - os: windows-latest
+            requirements: requirements/requirements-windows.txt
+            pytest-markers: "-m 'not platform_darwin and not platform_linux'"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            ${{ matrix.requirements }}
+            requirements/requirements-test.txt
+
+      - name: Install dependencies (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r ${{ matrix.requirements }}
+          pip install -r requirements/requirements-test.txt
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          python -m venv .venv
+          .venv\Scripts\activate
+          pip install -r ${{ matrix.requirements }}
+          pip install -r requirements/requirements-test.txt
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          source .venv/bin/activate
+          python -m pytest tests/unit/ tests/security/ --timeout=30 ${{ matrix.pytest-markers }}
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          .venv\Scripts\activate
+          python -m pytest tests/unit/ tests/security/ --timeout=30 ${{ matrix.pytest-markers }}
+
+  build-macos:
+    name: Build Test (macOS)
+    runs-on: macos-14
+    needs: syntax-check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/requirements-mac.txt
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements/requirements-mac.txt
+
+      - name: Audit dependencies
+        run: |
+          source .venv/bin/activate
+          pip install pip-audit
+          pip-audit -r requirements/requirements-mac.txt
+
+      - name: Run PyInstaller
+        run: |
+          source .venv/bin/activate
+          python -m PyInstaller packaging/Resistine.spec --noconfirm
+
+      - name: Verify .app bundle exists
+        run: |
+          test -d dist/Phoenix.app/Contents/MacOS
+          echo "Build artifact verified: dist/Phoenix.app"
+
+      - name: Smoke test — app launches and stays alive
+        run: |
+          # Launch the app in the background
+          open dist/Phoenix.app &
+          APP_PID=$!
+
+          # Wait for the process to start
+          sleep 5
+
+          # Check if the Resistine process is running
+          if pgrep -f "Phoenix" > /dev/null; then
+            echo "Smoke test passed: Resistine is running"
+            # Clean up — quit gracefully, then force-kill if needed
+            pkill -f "Phoenix" || true
+            sleep 2
+            pkill -9 -f "Phoenix" 2>/dev/null || true
+          else
+            echo "Smoke test FAILED: Resistine did not stay running"
+            # Check if it crashed — look for crash logs
+            ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
+            exit 1
+          fi
+
+  build-windows:
+    name: Build Test (Windows)
+    runs-on: windows-latest
+    needs: syntax-check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/requirements-windows.txt
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv\Scripts\activate
+          pip install -r requirements/requirements-windows.txt
+
+      - name: Audit dependencies
+        run: |
+          .venv\Scripts\activate
+          pip install pip-audit
+          pip-audit -r requirements/requirements-windows.txt
+
+      - name: Run PyInstaller
+        run: |
+          .venv\Scripts\activate
+          python -m PyInstaller packaging/Resistine.spec --noconfirm
+
+      - name: Verify build output exists
+        run: |
+          if (Test-Path "dist/Phoenix") { Write-Output "Build artifact verified: dist/Phoenix" }
+          elseif (Test-Path "dist/Phoenix.exe") { Write-Output "Build artifact verified: dist/Phoenix.exe" }
+          else { Write-Error "No build artifact found"; exit 1 }
+
+      - name: Smoke test — app launches and stays alive
+        run: |
+          # Find the executable
+          if (Test-Path "dist/Phoenix/Phoenix.exe") {
+            $exe = "dist/Phoenix/Phoenix.exe"
+          } elseif (Test-Path "dist/Phoenix.exe") {
+            $exe = "dist/Phoenix.exe"
+          } else {
+            Write-Error "No executable found for smoke test"
+            exit 1
+          }
+
+          # Launch in background
+          $proc = Start-Process -FilePath $exe -PassThru
+
+          # Wait for the process to start
+          Start-Sleep -Seconds 5
+
+          # Check if still running
+          if (!$proc.HasExited) {
+            Write-Output "Smoke test passed: Resistine is running (PID $($proc.Id))"
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          } else {
+            Write-Error "Smoke test FAILED: Resistine exited with code $($proc.ExitCode)"
+            exit 1
+          }
+
+  build-linux:
+    name: Build Test (Linux)
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements/requirements-linux.txt
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r requirements/requirements-linux.txt
+
+      - name: Audit dependencies
+        run: |
+          source .venv/bin/activate
+          pip install pip-audit
+          pip-audit -r requirements/requirements-linux.txt
+
+      - name: Run PyInstaller
+        run: |
+          source .venv/bin/activate
+          python -m PyInstaller packaging/Resistine.spec --noconfirm
+
+      - name: Verify build output exists
+        run: |
+          test -f dist/Phoenix || test -d dist/Phoenix
+          echo "Build artifact verified: dist/Phoenix"
+
+      - name: Smoke test — app launches and stays alive
+        run: |
+          # Find the executable
+          if [ -f dist/Phoenix ]; then
+            EXE=dist/Phoenix
+          elif [ -f dist/Phoenix/Phoenix ]; then
+            EXE=dist/Phoenix/Phoenix
+          else
+            echo "No executable found for smoke test"
+            exit 1
+          fi
+
+          # Launch in background (use virtual display for GUI)
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 1
+
+          ./$EXE &
+          APP_PID=$!
+
+          # Wait for the process to start
+          sleep 5
+
+          # Check if still running
+          if kill -0 $APP_PID 2>/dev/null; then
+            echo "Smoke test passed: Resistine is running (PID $APP_PID)"
+            kill $APP_PID || true
+            sleep 2
+            kill -9 $APP_PID 2>/dev/null || true
+          else
+            echo "Smoke test FAILED: Resistine did not stay running"
+            exit 1
+          fi

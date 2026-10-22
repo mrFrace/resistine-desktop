@@ -1,0 +1,235 @@
+name: Release
+
+# Only runs when you push a version tag — no cost for day-to-day coding
+on:
+  push:
+    tags:
+      - "v*"  # e.g. v1.0.0, v1.1.0-beta.1
+
+jobs:
+  build-macos:
+    name: Build, Sign & Publish (macOS)
+    runs-on: macos-14  # Apple Silicon runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # Detect if this is a beta/pre-release tag (e.g. v1.1.0-beta.1)
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "IS_PRERELEASE=true" >> "$GITHUB_OUTPUT"
+            echo "CHANNEL=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "IS_PRERELEASE=false" >> "$GITHUB_OUTPUT"
+            echo "CHANNEL=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Import Developer ID certificate into CI keychain ---
+      - name: Install Apple certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          echo "$CERTIFICATE_P12" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+
+      # --- Store notarization credentials ---
+      - name: Store notarization credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials "resistine-notarize" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+
+      # --- Copy provisioning profiles ---
+      - name: Install provisioning profiles
+        env:
+          NE_PROFILE: ${{ secrets.PROVISIONING_PROFILE_NE }}
+          XPC_PROFILE: ${{ secrets.PROVISIONING_PROFILE_XPC }}
+          MAIN_PROFILE: ${{ secrets.PROVISIONING_PROFILE_MAIN }}
+        run: |
+          mkdir -p provisioning-profiles
+          echo "$NE_PROFILE" | base64 --decode > provisioning-profiles/Mac_Network_Ext.provisionprofile
+          echo "$XPC_PROFILE" | base64 --decode > provisioning-profiles/Mac_VPNXPC.provisionprofile
+          echo "$MAIN_PROFILE" | base64 --decode > provisioning-profiles/Mac_Desktop.provisionprofile
+
+      # --- Install build dependencies ---
+      - name: Install dependencies
+        run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r scripts/requirements/requirements-mac.txt
+          pip install "cyclonedx-bom>=7.0.0"
+          brew install create-dmg
+
+      # --- Regenerate SBOM + LICENSE-3rd-Party.md from the installed env ---
+      # cyclonedx-py walks the exact venv we just provisioned, so both
+      # artifacts match what actually ships in this release. The generator
+      # also enforces the AGPL/SSPL/BUSL/Commons-Clause deny-list and aborts
+      # the build if any prod dep ships under one of those licenses.
+      - name: Generate SBOM + third-party license file
+        run: |
+          source .venv/bin/activate
+          python scripts/sbom/generate_sbom.py
+
+      # --- Verify committed sbom.cdx.json + LICENSE-3rd-Party.md are fresh
+      # Forces developers to regenerate and commit before tagging a release.
+      # Catches the "I added a pip dep but forgot to regenerate" mistake at
+      # the latest possible moment.
+      - name: Verify SBOM artifacts are committed and up to date
+        run: |
+          if ! git diff --exit-code sbom.cdx.json LICENSE-3rd-Party.md; then
+            echo ""
+            echo "============================================================"
+            echo "ERROR: SBOM artifacts are out of date."
+            echo ""
+            echo "A pip dependency was added or changed without regenerating"
+            echo "the SBOM. Fix this before re-tagging:"
+            echo ""
+            echo "  source .venv/bin/activate"
+            echo "  pip install -r scripts/requirements/requirements-mac.txt"
+            echo "  pip install 'cyclonedx-bom>=7.0.0'"
+            echo "  python scripts/sbom/generate_sbom.py"
+            echo "  git add sbom.cdx.json LICENSE-3rd-Party.md"
+            echo "  git commit -m 'chore: regenerate SBOM and third-party license file'"
+            echo "  git tag -d ${GITHUB_REF_NAME} && git push --delete origin ${GITHUB_REF_NAME}"
+            echo "  git tag ${GITHUB_REF_NAME} && git push origin ${GITHUB_REF_NAME}"
+            echo "============================================================"
+            exit 1
+          fi
+          echo "sbom.cdx.json and LICENSE-3rd-Party.md match the freshly-generated versions."
+
+      # --- Upload SBOM as a release artifact for procurement/security ---
+      - name: Upload SBOM as release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 90
+
+      # --- Build the app + DMG ---
+      - name: Build distribution
+        run: |
+          source .venv/bin/activate
+          chmod +x scripts/build/build-distribution.sh
+          ./scripts/build/build-distribution.sh
+
+      # --- Sign DMG with Sparkle EdDSA key ---
+      - name: Sign DMG for Sparkle
+        id: sparkle_sign
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          # sign_update reads the key from SPARKLE_ED_PRIVATE_KEY env var
+          # when the keychain entry isn't available
+          SIGN_OUTPUT=$(./scripts/build/sign_update dist/Phoenix-Installer.dmg)
+          echo "Raw output: $SIGN_OUTPUT"
+
+          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+          LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2)
+
+          echo "ED_SIGNATURE=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
+          echo "LENGTH=$LENGTH" >> "$GITHUB_OUTPUT"
+
+      # --- Create GitHub Release with the DMG ---
+      - name: Create GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Phoenix-Installer.dmg
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Update appcast.xml in resistine.github.io ---
+      - name: Update appcast
+        env:
+          ED_SIGNATURE: ${{ steps.sparkle_sign.outputs.ED_SIGNATURE }}
+          LENGTH: ${{ steps.sparkle_sign.outputs.LENGTH }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
+          DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
+        run: |
+          PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
+          DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Phoenix-Installer.dmg"
+
+          # Add sparkle:channel tag for beta/pre-release versions
+          CHANNEL_TAG=""
+          if [ -n "$CHANNEL" ]; then
+            CHANNEL_TAG="<sparkle:channel>${CHANNEL}</sparkle:channel>"
+          fi
+
+          NEW_ITEM=$(cat <<XMLEOF
+              <item>
+                <title>Version ${VERSION}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                ${CHANNEL_TAG}
+                <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
+                <enclosure
+                  url="${DOWNLOAD_URL}"
+                  sparkle:version="${VERSION}"
+                  sparkle:shortVersionString="${VERSION}"
+                  length="${LENGTH}"
+                  type="application/octet-stream"
+                  sparkle:edSignature="${ED_SIGNATURE}"
+                />
+              </item>
+          XMLEOF
+          )
+
+          # Clone the pages repo
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/pages_key
+          chmod 600 ~/.ssh/pages_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/pages_key -o StrictHostKeyChecking=no"
+
+          git clone git@github.com:Resistine/resistine.github.io.git /tmp/pages
+          cd /tmp/pages
+
+          # Insert new item after the comment block (before first existing <item>)
+          python3 -c "
+          import re
+          with open('appcast.xml', 'r') as f:
+              content = f.read()
+          new_item = '''$NEW_ITEM'''
+          # Insert before the first <item> tag
+          content = content.replace('<item>', new_item + '\n    <item>', 1)
+          with open('appcast.xml', 'w') as f:
+              f.write(content)
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "Release v${VERSION}"
+          git push
+
+      # --- Clean up keychain ---
+      - name: Clean up
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" 2>/dev/null || true

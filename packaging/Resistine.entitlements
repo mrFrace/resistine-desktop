@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Network access for VPN and API calls -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- File access -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+
+    <!-- Apple Events access (for controlling other apps) -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>   
+
+    <!-- Allow unsigned executable memory (needed for Python) -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Allow DYLD environment variables (needed for Python libraries) -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Allow JIT compilation (needed for some Python operations) -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!-- Disable library validation (needed for PyInstaller) -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- Hardened runtime (required for notarization) -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <true/>
+
+    <!-- Mach service lookups -->
+    <!-- Allow communication with system services -->
+    <key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+    <array>
+        <string>com.apple.cfprefsd.agent</string>
+    </array>
+
+    <!-- Allow embedded binaries with different entitlements (for CLI with NetworkExtension) -->
+    <key>com.apple.security.temporary-exception.executable.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Application Group (must match CLI and Network Extension) -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.Resistine.WireguardTest</string>
+        <string>C7KSRZC3Q9.*</string>
+    </array>
+
+
+
+    <key>com.apple.developer.system-extension.install</key>
+    <true/>
+
+</dict>
+</plist>

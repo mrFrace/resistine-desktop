@@ -1,6 +1,6 @@
 # Help Plugin
 
-Comprehensive documentation for the Resistine Desktop application.
+Comprehensive documentation for the Phoenix Desktop application.
 
 ## Features
 - Markdown-based manual viewer.
@@ -9,4 +9,4 @@ Comprehensive documentation for the Resistine Desktop application.
 - Platform-specific help topics.
 
 ## Usage
-Browse the built-in documentation to learn more about Resistine's features and configuration.
+Browse the built-in documentation to learn more about Phoenix's features and configuration.

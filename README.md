@@ -1,115 +1,194 @@
-# Resistine AI EndPoint Detection and Response (AI EDR)
+# Phoenix AI EndPoint Detection and Response (AI EDR)
 
-for Windows, Mac and Linux Desktops
+For Windows, Mac, and Linux desktops.
 
 ## Prerequisites
 
-- Python 3.12 or later (unless using the precompiled distribution)
-- Windows 11, Linux and macOS 15 or later
-- Apple Developer Account (for code signing and notarization)
+- Python 3.12+ (unless using a precompiled distribution)
+- macOS 13+ (Ventura), Windows 11, or Linux
+- [GitHub CLI](https://cli.github.com/) (`gh`) authenticated — used to download build artifacts
+- Apple Developer ID certificate (macOS distribution builds only)
 
-## Installation
+## Running from Source
 
-$ ./install.sh
+```bash
+./install.sh   # first time — installs dependencies
+./run.sh       # run the app
+./run.sh -d    # run in debug mode (runtime inspector)
+```
 
-This will install and run Resistine AI EDR
-
-## Running Resistine
-
-$ ./run.sh
-
-This will update the dependencies and run Resistine EndPoint
+Debug mode is also enabled automatically when running inside VSCode or JetBrains IDEs.
 
 ## Command Line Arguments
 
+```
 usage: main.py [-h] [-d] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
 
-Resistine Desktop Application
+  -h, --help       Show help
+  -d, --debug      Enable debug mode
+  -l, --log-level  Set logging level (default: INFO)
+```
 
-options:
--h, --help Show this help message and exit
--d, --debug Enable debug mode for real-time debugging
--l, --log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}
-Set logging level (default: INFO)
+## Building for macOS
 
-## Coding and debugging
+### Pre-Setup (one-time)
 
-To run Resistine in debug mode, use the following command:
+1. **Xcode Command Line Tools** (required for codesign, notarytool, etc.):
+   ```bash
+   xcode-select --install
+   ```
 
-$ ./run.sh -d
+2. **Python 3.12+** from [python.org](https://www.python.org/downloads/) (universal2 build):
+   ```bash
+   # Do NOT use Homebrew Python — it only targets the current macOS version.
+   # Verify python.org install:
+   /Library/Frameworks/Python.framework/Versions/3.*/bin/python3 --version
+   ```
 
-This will run Resistine in debug mode, which enables a few features:
+3. **Homebrew** (if not already installed):
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
 
-- A runtime inspector that allows you to inspect the runtime state of the application
-- DEPRECATED: You can also use the debug window that allows you to inspect the runtime state of the application
+4. **GitHub CLI** (used to download VPN and ClamAV artifacts from CI):
+   ```bash
+   brew install gh
+   gh auth login
+   ```
+   Your account needs read access to `Resistine/resistine-vpn-macos` and `Resistine/ClamAV-Mac`.
 
-The application automatically detects if it is running in IDEs (like VSCode, PyCharm / JetBrains) and enables the debug mode.
+5. **Apple Developer ID certificate** — must be installed in your Keychain. Verify:
+   ```bash
+   security find-identity -v -p codesigning | grep "Developer ID Application"
+   ```
+   If nothing shows up, import the certificate from your Apple Developer account or ask the team lead.
 
-## Setup Instructions for Mac OS
+6. **Notarization credentials** (optional — the build will prompt if missing):
+   ```bash
+   xcrun notarytool store-credentials "resistine-notarize" \
+     --apple-id "your@email.com" --team-id "YOURTEAMID" \
+     --password "<app-specific-password>"
+   ```
 
-### 1. Configuration
+7. **Clone the repo and switch to the build branch**:
+   ```bash
+   git clone git@github.com:Resistine/Resistine-Desktop.git
+   cd Resistine-Desktop
+   git checkout build/vpn-artifacts
+   ```
 
-#### Build Installer Configuration
+### Prerequisites Summary
 
-Edit `build_dmg_simple.py` with your Apple Developer credentials:
+| Tool | Install | Verify |
+|------|---------|--------|
+| Xcode CLI Tools | `xcode-select --install` | `xcode-select -p` |
+| Python 3.12+ (python.org) | [python.org/downloads](https://www.python.org/downloads/) | `python3 --version` |
+| Homebrew | [brew.sh](https://brew.sh) | `brew --version` |
+| GitHub CLI | `brew install gh` | `gh auth status` |
+| Developer ID cert | Apple Developer portal | `security find-identity -v -p codesigning` |
 
-- `SIGNING_IDENTITY`: Your code signing certificate ID
-- `NOTARY_APPLE_ID`: Your Apple ID email
-- `NOTARY_TEAM_ID`: Your Team ID from Apple Developer portal
-- `NOTARY_PASSWORD`: Your app-specific password
+### Distribution Build (signed + notarized DMG)
 
-#### WireGuard Configuration
+```bash
+scripts/build/build-distribution.sh
+```
 
-Copy the example WireGuard configuration:
+This script:
+1. Downloads VPN artifacts from `Resistine/resistine-vpn-macos` CI (or builds locally from `vpn-apple/`)
+2. Downloads ClamAV artifacts from `Resistine/ClamAV-Mac` CI
+3. Builds the Python app with PyInstaller
+4. Places VPN and ClamAV components in the app bundle
+5. Signs everything with Developer ID
+6. Creates a DMG, notarizes, and staples it
+7. Installs to `/Applications/`
+
+Output: `dist/Phoenix-Installer.dmg` (contains `Phoenix.app`)
+
+### Local Dev Build (signed, not notarized)
+
+```bash
+scripts/build/build-installer.sh
+```
+
+Uses Apple Development certificate instead of Developer ID. Good for local testing.
+
+### Artifact Scripts
+
+VPN and ClamAV components are built by separate repos and downloaded as CI artifacts:
+
+```bash
+scripts/build/download-vpn-artifacts.sh      # from Resistine/resistine-vpn-macos
+scripts/build/download-clamav-artifacts.sh    # from Resistine/ClamAV-Mac
+```
+
+These run automatically during the build. To manually refresh:
+
+```bash
+scripts/build/download-vpn-artifacts.sh          # download latest
+scripts/build/download-clamav-artifacts.sh        # download latest
+scripts/build/download-vpn-artifacts.sh --check   # check if up-to-date
+```
+
+## Building for Windows
+
+```powershell
+scripts\build\build-windows-installer.ps1
+```
+
+Requirements:
+- `python` on PATH
+- Inno Setup 6 (`ISCC.exe`) installed
+
+The installer bundles Python dependencies via PyInstaller and attempts to install WireGuard and GTK3 runtime via `winget`.
+
+## NixOS
+
+The flake ships a NixOS module that installs Phoenix together with the
+services it drives (ClamAV, the Phoenix SIEM agent, what the VPN needs):
+
+```nix
+# flake.nix
+inputs.phoenix.url = "git+https://gitlab.phoenix.exposed/francis/Resistine-Desktop?ref=feat/phoenix-rebrand";
+
+# in your nixosSystem modules
+imports = [ inputs.phoenix.nixosModules.default ];
+programs.phoenix.enable = true;
+services.wazuh-agent.enrollmentPasswordFile = "/etc/wazuh-agent/authd.pass";  # root-only, not in the store
+```
+
+Options: `programs.phoenix.{package, antivirus.{enable,package,realtime},
+siem.enable, vpn.{enable,looseReversePath}}`, plus `services.wazuh-agent.*`
+for the agent (manager, SCA policy, extra ossec.conf). The SIEM agent is
+x86_64 only and its `.deb` is not public: add it with
+`nix-store --add-fixed sha256 phoenix-agent_5.0.0-1_amd64.deb`, or set
+`programs.phoenix.siem.enable = false`.
+
+`nix build .#checks.x86_64-linux.nixos-module -L` boots a VM with the module
+and checks the app, the services and a headless start.
+
+## Testing the Build
+
+After building, verify:
+
+1. **App launches**: Open `Resistine.app` (or run from `/Applications/`)
+2. **VPN**: Connect to a WireGuard server — confirm tunnel activates
+3. **Antivirus**: Trigger a scan — confirm ClamAV binaries run
+4. **Signatures**: `codesign --verify --verbose /Applications/Resistine.app`
+
+## WireGuard Configuration
 
 ```bash
 cp plugins/vpn/wireguard/wg0-example.conf plugins/vpn/wireguard/wg0.conf
 ```
 
-Edit `plugins/vpn/wireguard/wg0.conf` with your VPN server details:
-
-- `PrivateKey`: Your private key
-- `Address`: Your VPN IP address
-- `Endpoint`: Your VPN server endpoint
-- `PublicKey`: Server's public key
-
-### 2. API Configuration
-
-#### OpenAI API Key
-
-Add your OpenAI API key for functional AI.
-Edit `plugins/chat/main.py` on line 47 with your OpenAI api key
-
-### Building the Application
-
-#### Quick Build (Signed but not notarized)
-
-```bash
-python3 build_dmg_simple.py
-```
-
-This will:
-
-- Build the application with PyInstaller
-- Sign the app with your Developer ID certificate
-- Create a DMG installer file
-- Notarize and staple the dmg
-
-### Output Files
-
-- `dist/Resistine.app` - The signed application bundle
-- `Resistine-Notarized-1.0.0.dmg` - Notarized DMG (if using full build)
+Edit `wg0.conf` with your VPN server details (PrivateKey, Address, Endpoint, PublicKey).
 
 ## License
 
-Resistine AI EndPoint Detection and Response (AI EDR)
-
-for Windows, Mac and Linux Desktops
-
 Copyright (C) 2025 Resistine
 
-This program is free software under the terms of the GNU General Public License v2 or later
+This program is free software under the terms of the GNU General Public License v2 or later.
 
-Resistine comes with ABSOLUTELY NO WARRANTY.
+Phoenix comes with ABSOLUTELY NO WARRANTY.
 
 See the [LICENSE](LICENSE.md) file for more details.

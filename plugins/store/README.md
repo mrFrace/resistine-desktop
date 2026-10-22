@@ -1,6 +1,6 @@
 # Store Plugin
 
-The official Resistine Plugin Marketplace.
+The official Phoenix Plugin Marketplace.
 
 ## Features
 - Browse available plugins with detailed descriptions.
@@ -9,4 +9,4 @@ The official Resistine Plugin Marketplace.
 - View detailed documentation for each plugin via the "Info" button.
 
 ## Architecture
-Downloaded plugins are stored in the user's home directory (`~/.config/resistine/plugins`), allowing the application to remain functional even in read-only environments.
+Downloaded plugins are stored in the user's home directory (`~/.config/phoenix/plugins`), allowing the application to remain functional even in read-only environments.

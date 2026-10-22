@@ -62,6 +62,35 @@ def is_keyring_secure():
     return True
 
 
+KEYRING_SERVICE = "phoenix"
+# Pre-rebrand service name. Read once to migrate existing installs, never written.
+LEGACY_KEYRING_SERVICE = "resistine"
+
+
+def _keyring_get(name):
+    """Read ``name`` from the Phoenix keyring service.
+
+    An entry that only exists under the pre-rebrand ``resistine`` service is
+    copied to ``phoenix``, read back to verify, and only then deleted from
+    the old service. If the copy fails, the old value is still returned.
+    """
+    value = keyring.get_password(KEYRING_SERVICE, name)
+    if value is not None:
+        return value
+    legacy = keyring.get_password(LEGACY_KEYRING_SERVICE, name)
+    if legacy is None:
+        return None
+    text = legacy.decode() if isinstance(legacy, bytes) else legacy
+    try:
+        keyring.set_password(KEYRING_SERVICE, name, text)
+        if keyring.get_password(KEYRING_SERVICE, name) == text:
+            keyring.delete_password(LEGACY_KEYRING_SERVICE, name)
+            logger.info(f"Moved keyring entry {name} from {LEGACY_KEYRING_SERVICE} to {KEYRING_SERVICE}.")
+    except Exception as e:  # noqa: BLE001 - keep working with the old entry
+        logger.warning(f"Could not move keyring entry {name} to {KEYRING_SERVICE}: {e}")
+    return legacy
+
+
 def get_or_create_key():
     """
     Retrieve or generate an encryption key and store it securely in the system keyring.
@@ -72,14 +101,17 @@ def get_or_create_key():
     # Check if keyring backend is secure first
     is_keyring_secure()
 
-    key = keyring.get_password("resistine", "encryption_key")
+    key = _keyring_get("encryption_key")
     if key is None:
-        key = Fernet.generate_key()
-        keyring.set_password("resistine", "encryption_key", key.decode())
+        new_key = Fernet.generate_key()  # already bytes
+        keyring.set_password(KEYRING_SERVICE, "encryption_key", new_key.decode())
         logger.info("Key securely stored in system keyring.")
+        return new_key
     else:
         logger.info("Key retrieved from system keyring.")
-    return key.encode()
+        # keyring normally returns str, but some backends return bytes;
+        # never .encode() bytes (AttributeError) or double-encode.
+        return key if isinstance(key, bytes) else key.encode()
 
 
 def retrieve_key():
@@ -93,10 +125,10 @@ def retrieve_key():
     # Check if keyring backend is secure first
     is_keyring_secure()
 
-    key = keyring.get_password("resistine", "encryption_key")
+    key = _keyring_get("encryption_key")
     if key is None:
         raise ValueError(get_text("encryption.no_key_found"))
-    return key.encode()
+    return key if isinstance(key, bytes) else key.encode()
 
 
 def encrypt_data(data_dict):
@@ -117,7 +149,7 @@ def encrypt_data(data_dict):
     for key_name, value in data_dict.items():
         encrypted_data_dict[key_name] = cipher.encrypt(value.encode()).decode()
 
-    keyring.set_password("resistine", "encrypted_data", json.dumps(encrypted_data_dict))
+    keyring.set_password(KEYRING_SERVICE, "encrypted_data", json.dumps(encrypted_data_dict))
     logger.info("Encrypted data securely stored in system keyring.")
 
     return encrypted_data_dict
@@ -137,7 +169,7 @@ def decrypt_data():
     key = retrieve_key()
     cipher = Fernet(key)
 
-    encrypted_data = keyring.get_password("resistine", "encrypted_data")
+    encrypted_data = _keyring_get("encrypted_data")
     if encrypted_data is None:
         raise ValueError(get_text("encryption.no_data_found"))
 

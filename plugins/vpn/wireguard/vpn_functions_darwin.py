@@ -7,25 +7,50 @@ Licensed under the GNU General Public License v2 or later
 
 import json
 import os
-import platform
 import re
 import subprocess
 import sys
 from typing import Optional, Tuple
 
 from utils import settings
-from utils.settings import get_config_dir
 from utils.logger import logger
+from plugins.vpn.wireguard.config_validation import (
+    optional_peer_lines,
+    validate_config_name,
+    validate_server_config,
+    validate_wg_field,
+)
+
+
+def _restrict_dir_permissions(path):
+    """Ensure the WireGuard config dir is private (0o700).
+
+    makedirs(mode=...) is subject to the umask and does not touch an existing
+    directory, so chmod explicitly. Failures are logged, not fatal.
+    """
+    try:
+        if (os.stat(path).st_mode & 0o777) != 0o700:
+            os.chmod(path, 0o700)
+    except OSError as e:
+        logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
 def get_writable_wireguard_dir():
-    """Get a writable directory for WireGuard configuration files"""
-    wireguard_dir = os.path.join(get_config_dir(), "wireguard")
-    os.makedirs(wireguard_dir, exist_ok=True)
+    """Get a writable directory for WireGuard configuration files
+    
+    Uses the App Group container so the sandboxed CLI can access configs.
+    Path: ~/Library/Group Containers/group.Resistine.WireguardTest/wireguard/
+    """
+    # Use App Group container instead of Application Support
+    # This allows the sandboxed resistine-vpn-cli to access the configs
+    home = os.path.expanduser("~")
+    app_group_container = os.path.join(
+        home, "Library", "Group Containers", "group.Resistine.WireguardTest"
+    )
+    wireguard_dir = os.path.join(app_group_container, "wireguard")
+    os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
+    _restrict_dir_permissions(wireguard_dir)
     return wireguard_dir
-
-
-
 
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
@@ -33,7 +58,7 @@ _interface_cache = {}
 
 
 class HelperToolManager:
-    """Manages XPC communication with the privileged helper via ResistCli"""
+    """Manages CLI communication with the resistine-vpn-cli tool"""
 
     def __init__(self):
         self.cli_path = self._find_cli_path()
@@ -44,84 +69,163 @@ class HelperToolManager:
         )
 
     def _find_cli_path(self):
-        """Locate ResistCli tool in the app bundle"""
+        """Locate resistine-vpn-cli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
-            # sys.executable is in Contents/MacOS/
+            # sys.executable is in Contents/MacOS/Phoenix
             macos_dir = os.path.dirname(sys.executable)
-            app_contents = os.path.abspath(os.path.join(macos_dir, ".."))
-            cli_path = os.path.join(
-                app_contents, "Library", "LaunchServices", "ResistCli"
-            )
+            contents_dir = os.path.dirname(macos_dir)
+            
+            # CLI is in Contents/MacOS/ — must be here (not Contents/Helpers/)
+            # because NSXPCConnection(serviceName:) requires launchd to associate
+            # the process with its parent app bundle, which only works for
+            # binaries in Contents/MacOS/.
+            cli_path = os.path.join(contents_dir, "MacOS", "resistine-vpn-cli")
             if os.path.exists(cli_path):
                 return cli_path
+            
+            # Fallback: old nested path for backwards compatibility
+            old_cli_path = os.path.join(
+                contents_dir, "Resources", "wireguard-apple.app",
+                "Contents", "MacOS", "resistine-vpn-cli"
+            )
+            if os.path.exists(old_cli_path):
+                logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")
+                return old_cli_path
 
-        # Development mode - search from script location
-        script_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        dev_cli_path = os.path.join(script_dir, "apple_helper", "cli", "ResistCli")
-        if os.path.exists(dev_cli_path):
-            return dev_cli_path
-
+        # Development mode: VPN features require the built app bundle
+        # Run ./build-installer.sh first, then test from dist/Phoenix.app
+        logger.warning("VPN CLI not found - run ./build-installer.sh to build the app")
         return None
 
 
 # Initialize helper manager
 helper = HelperToolManager()
 
+NOT_BUNDLED = ("This build of Phoenix doesn't include the VPN. "
+               "Install the signed Phoenix release to use it.")
+
+
+def vpn_bundled() -> bool:
+    """The app carries the VPN helper (signed release builds do; unsigned
+    test builds don't, and macOS refuses their extension anyway)."""
+    return helper.cli_path is not None
+
+
+def vpn_unavailable_reason() -> Optional[str]:
+    """Why the VPN cannot work in this build/install, or None."""
+    if not vpn_bundled():
+        return NOT_BUNDLED
+    try:
+        get_writable_wireguard_dir()
+    except PermissionError:
+        # The App Group container needs the team-signed app-group entitlement.
+        return ("macOS blocked Phoenix from saving its VPN settings. "
+                "Reinstall the signed Phoenix release.")
+    return None
+
 
 # Add VPN-specific helper methods
 class VPNHelper:
-    """VPN-specific operations using the XPC helper"""
+    """VPN-specific operations using the CLI interface"""
+
+    # Keep reference to avoid GC of the delegate
+    _activator_ref = None
+
+    @staticmethod
+    def activate_extension() -> bool:
+        """Activate the System Extension using Main App PyObjC bridge.
+
+        False when no request was sent (no VPN in this build, or an error).
+        The request answers asynchronously: see activation_error()."""
+        if not vpn_bundled():
+            logger.info("🔌 [VPN] No VPN in this build — not requesting the extension")
+            return False
+        try:
+            from .extension_activator import ExtensionActivator, run_activation
+            logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
+            
+            # Store reference to keep delegate alive
+            VPNHelper._activator_ref = run_activation("com.resistine.desktop.network-extension")
+            return True
+        except ImportError:
+            logger.error("❌ [VPN] PyObjC ExtensionActivator not found (ImportError)")
+            return False
+        except Exception as e:
+            logger.error(f"❌ [VPN] Activation error: {e}")
+            return False
+
+    @staticmethod
+    def activation_error() -> Optional[str]:
+        """macOS's refusal of the last activation request, if it refused."""
+        return getattr(VPNHelper._activator_ref, "error", None)
 
     @staticmethod
     def start_vpn(config_path: str) -> Tuple[bool, str]:
         """Start VPN using config file"""
         if not helper.cli_path:
+            logger.error("❌ [CLI] Helper CLI not found")
             return (False, "Helper CLI not found")
 
+        # Ensure extension is activated before starting
+        VPNHelper.activate_extension()
+
         try:
+            cmd = [helper.cli_path, "start", config_path]
+            logger.info(f"🔧 [CLI] Executing: {' '.join(cmd)}")
             result = subprocess.run(
-                [helper.cli_path, "start-vpn", config_path],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
+        except subprocess.TimeoutExpired:
+            logger.error("⏰ [CLI] Command timed out after 30 seconds")
+            return (False, "Command timed out")
         except Exception as e:
+            logger.error(f"❌ [CLI] Command error: {e}")
             return (False, str(e))
 
     @staticmethod
-    def stop_vpn(config_path: str) -> Tuple[bool, str]:
-        """Stop VPN using config file"""
+    def stop_vpn(config_path: str = None) -> Tuple[bool, str]:
+        """Stop VPN (config_path is ignored - CLI uses 'stop' without arguments)"""
         if not helper.cli_path:
+            logger.error("❌ [CLI] Helper CLI not found")
             return (False, "Helper CLI not found")
 
         try:
+            cmd = [helper.cli_path, "stop"]
+            logger.info(f"🔧 [CLI] Executing: {' '.join(cmd)}")
             result = subprocess.run(
-                [helper.cli_path, "stop-vpn", config_path],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
             output = result.stdout.strip() or result.stderr.strip()
+            logger.info(f"📤 [CLI] Result: returncode={result.returncode}, output='{output}'")
             return (result.returncode == 0, output)
+        except subprocess.TimeoutExpired:
+            logger.error("⏰ [CLI] Command timed out after 30 seconds")
+            return (False, "Command timed out")
         except Exception as e:
+            logger.error(f"❌ [CLI] Command error: {e}")
             return (False, str(e))
 
     @staticmethod
     def check_status(
-        interface_name: str, test_ip: Optional[str] = None
+        interface_name: str = None, test_ip: Optional[str] = None
     ) -> Tuple[bool, str]:
-        """Check VPN status"""
+        """Check VPN status (interface_name is ignored - CLI uses 'status' without arguments)"""
         if not helper.cli_path:
             logger.warning("⚠️ [HELPER] CLI path not available")
             return (False, "Stopped")
 
         try:
-            cmd = [helper.cli_path, "status", interface_name]
-            if test_ip:
-                cmd.append(test_ip)
+            cmd = [helper.cli_path, "status"]
 
             logger.info(f"🔍 [HELPER] Running command: {' '.join(cmd)}")
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -130,15 +234,15 @@ class VPNHelper:
                 f"📊 [HELPER] Command result: returncode={result.returncode}, output='{output}'"
             )
 
-            # Status check returns "Running" or "Stopped"
-            if "Running" in output:
+            # Status check returns "Connected" or "Disconnected" (or similar variations)
+            if "Running" in output or "Connected" in output:
                 is_running = True
             else:
                 is_running = False
             return (is_running, output)
 
         except subprocess.TimeoutExpired:
-            logger.error(f"⏰ [HELPER] Command timed out after 30 seconds")
+            logger.error("⏰ [HELPER] Command timed out after 30 seconds")
             return (False, "Command timed out")
         except FileNotFoundError:
             logger.error(f"❌ [HELPER] CLI executable not found: {helper.cli_path}")
@@ -149,11 +253,6 @@ class VPNHelper:
 
 
 vpn_helper = VPNHelper()
-
-# Keychain Management Functions
-
-
-# Key management functions removed - replaced by utils.settings
 
 
 def save_wireguard_keys(private_key, public_key):
@@ -203,11 +302,10 @@ def wireguard_keys_exist():
 
 def generate_wireguard_keys():
     """
-    Generate WireGuard public/private key pair.
+    Generate WireGuard public/private key pair using pure Python cryptography.
 
-    WireGuard keys are:
-    - Private key: 32 bytes, base64-encoded (44 characters)
-    - Public key: 32 bytes, base64-encoded (44 characters), derived from private key
+    Uses X25519 (Curve25519) from the cryptography library, which is the same
+    algorithm used by WireGuard. No wg binary required.
 
     Returns:
         dict: {
@@ -217,19 +315,30 @@ def generate_wireguard_keys():
         None: If key generation fails
     """
     try:
-        private_key = subprocess.check_output(["wg", "genkey"], text=True).strip()
-        public_key = subprocess.check_output(
-            ["wg", "pubkey"], input=private_key, text=True
-        ).strip()
+        import base64
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        from cryptography.hazmat.primitives import serialization
+
+        private_key_obj = X25519PrivateKey.generate()
+
+        private_bytes = private_key_obj.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        private_key = base64.b64encode(private_bytes).decode("utf-8")
+
+        public_bytes = private_key_obj.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        public_key = base64.b64encode(public_bytes).decode("utf-8")
 
         return {
             "private_key": private_key,
             "public_key": public_key,
         }
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ Key generation command failed: {e}")
-        return None
     except Exception as e:
         logger.error(f"❌ Key generation failed: {e}")
         return None
@@ -310,60 +419,11 @@ def check_service_status(interface_name, test_ip=None):
 
 
 def check_wireguard_installed():
-    """Check if WireGuard is available on the system"""
-    logger.info("🔍 [WIREGUARD] Checking WireGuard installation...")
-
-    # Check for wg binary in system locations (same as Swift helper)
-    wg_paths = [
-        "/usr/bin/wg",  # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg",  # Apple Silicon Homebrew
-        "/usr/local/bin/wg",  # Intel Homebrew
-    ]
-
-    wg_found = False
-    wg_path = None
-    for path in wg_paths:
-        if os.path.exists(path):
-            logger.info(f"✅ WireGuard (wg) found at: {path}")
-            wg_found = True
-            wg_path = path
-            break
-
-    if not wg_found:
-        logger.error("❌ WireGuard (wg) not found in system locations")
-        logger.info("💡 Please install WireGuard:")
-        logger.info("   - Via Homebrew: brew install wireguard-tools")
-        logger.info("   - Or download from: https://www.wireguard.com/install/")
-        return False
-
-    # Check for wg-quick in system locations (same as Swift helper)
-    wg_quick_paths = [
-        "/usr/bin/wg-quick",  # System installation (macOS built-in)
-        "/opt/homebrew/bin/wg-quick",  # Apple Silicon Homebrew
-        "/usr/local/bin/wg-quick",  # Intel Homebrew
-    ]
-
-    wg_quick_found = False
-    wg_quick_path = None
-    for path in wg_quick_paths:
-        if os.path.exists(path):
-            logger.info(f"✅ WireGuard (wg-quick) found at: {path}")
-            wg_quick_found = True
-            wg_quick_path = path
-            break
-
-    if not wg_quick_found:
-        logger.error("❌ WireGuard (wg-quick) not found in system locations")
-        logger.info("💡 Please install WireGuard:")
-        logger.info("   - Via Homebrew: brew install wireguard-tools")
-        logger.info("   - Or download from: https://www.wireguard.com/install/")
-        return False
-
-    logger.info("✅ WireGuard is properly installed and working on the system")
+    """On macOS, VPN uses Network Extension — wg/wg-quick binaries are not needed."""
     return True
 
 
-def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
+def parse_and_create_vpn_config(vpn_config_json_string, config_name="phoenix"):
     """
     Parse VPN configuration from server response and create WireGuard config file.
 
@@ -378,19 +438,22 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
     {
         "Peer": {
             "PublicKey": "...",
-            "AllowedIPs": ["10.49.0.0/17"],
-            "Endpoint": "18.199.109.145:987"
+            "AllowedIPs": ["10.0.0.0/24"],
+            "Endpoint": "vpn.example.com:51820"
         },
         "Interface": {
             "PrivateKey": "",  # Empty, will use from keychain
-            "Address": "10.49.65.6",
-            "DNS": ["10.49.11.10"]  # Uses DNS_SERVER constant (see top of file)
+            "Address": "10.0.0.2",
+            "DNS": ["10.0.0.53"]  # Uses DNS_SERVER constant (see top of file)
         }
     }
     """
     try:
-        # Parse the VPN config JSON string
-        vpn_config = json.loads(vpn_config_json_string)
+        # Parse the VPN config (accepts both dict and JSON string)
+        if isinstance(vpn_config_json_string, dict):
+            vpn_config = vpn_config_json_string
+        else:
+            vpn_config = json.loads(vpn_config_json_string)
 
         # Extract Peer configuration
         peer_config = vpn_config.get("Peer", {})
@@ -407,6 +470,20 @@ def parse_and_create_vpn_config(vpn_config_json_string, config_name="wg0"):
         private_key = get_wireguard_private_key()
         if not private_key:
             logger.error("❌ Error: Private key not found in keychain")
+            return None
+
+        # Validate every server-provided value (and the config name, which
+        # becomes a file path) before anything is written, so a malicious API
+        # response can't inject extra lines such as PostUp into the .conf.
+        try:
+            validate_config_name(config_name)
+            validate_wg_field(private_key, "PrivateKey")
+            validate_server_config(
+                server_public_key, endpoint, client_address, allowed_ips, dns_servers
+            )
+            extra_peer_lines = optional_peer_lines(peer_config)
+        except ValueError as e:
+            logger.error(f"Rejected invalid VPN config from server: {e}")
             return None
 
         # Convert AllowedIPs array to comma-separated string
@@ -434,6 +511,8 @@ PublicKey = {server_public_key}
 AllowedIPs = {allowed_ips_str}
 Endpoint = {endpoint}
 """
+        if extra_peer_lines:
+            config_content += "\n".join(extra_peer_lines) + "\n"
 
         # Get writable WireGuard directory
         wireguard_dir = get_writable_wireguard_dir()
@@ -507,7 +586,7 @@ def setup_vpn_keys():
         return None
 
 
-def save_vpn_configuration(vpn_config_json):
+def save_vpn_configuration(vpn_config_json, config_name="phoenix"):
     """
     Parse and save the VPN configuration.
     Returns the path to the saved config file if successful, None otherwise.
@@ -549,7 +628,7 @@ def save_vpn_configuration(vpn_config_json):
             logger.error(f"Error parsing VPN config for logging: {e}")
 
         # Create config file
-        config_path = parse_and_create_vpn_config(vpn_config_json, config_name="wg0")
+        config_path = parse_and_create_vpn_config(vpn_config_json, config_name=config_name)
 
         if config_path:
             logger.info("✅ VPN configuration saved successfully")
@@ -563,76 +642,47 @@ def save_vpn_configuration(vpn_config_json):
         return None
 
 
-def ensure_helper_registered():
-    """Register the privileged helper on macOS (runs silently on startup)"""
+import time as _time
+
+_extension_cache = {"value": None, "timestamp": 0}
+_EXTENSION_CACHE_TTL = 2  # seconds
+
+
+def is_extension_enabled():
+    """Check if the Phoenix network extension is enabled in Login Items & Extensions.
+
+    Uses systemextensionsctl to verify the extension is both activated AND enabled.
+    A NETunnelProviderManager can exist in preferences even when the extension is
+    disabled, so this is the only reliable check.
+
+    Results are cached for 2 seconds to avoid redundant subprocess calls when
+    multiple callers check within the same render cycle.
+
+    Returns:
+        bool: True if the extension is [activated enabled], False otherwise.
+    """
+    now = _time.monotonic()
+    if now - _extension_cache["timestamp"] < _EXTENSION_CACHE_TTL:
+        return _extension_cache["value"]
+
     try:
-        from ServiceManagement import SMAppService
-
-        plist_name = "com.resistine.plist"
-
-        # Create the service
-        try:
-            service = SMAppService.daemonServiceWithPlistName_(plist_name)
-        except:
-            try:
-                service = SMAppService.daemonWithPlistName_(plist_name)
-            except:
-                logger.warning("⚠️ Could not create SMAppService for helper")
-                return
-
-        # Check current status
-        status = int(service.status())
-        status_map = {
-            0: "notRegistered",
-            1: "enabled",
-            2: "requiresApproval",
-            3: "notFound",
-        }
-        status_str = status_map.get(status, "unknown")
-
-        if status == 1:  # Already enabled
-            logger.info("✅ Helper already enabled")
-            return
-
-        if status == 2:  # Requires approval
-            logger.warning("⚠️ Helper registered but requires user approval")
-            prompt_helper_approval(service)
-            return
-
-        # Not registered yet (0 or 3), try to register
-        logger.info("🔧 Registering privileged helper...")
-        error = service.registerAndReturnError_(None)
-
-        if error:
-            logger.error(f"⚠️ Helper registration error: {error}")
-            # Check status again after registration attempt
-            new_status = int(service.status())
-            if new_status == 2:  # Now requires approval
-                prompt_helper_approval(service)
-        else:
-            logger.info("✅ Helper registered successfully")
-
-    except ImportError:
-        logger.warning("⚠️ ServiceManagement framework not available")
-    except Exception as e:
-        logger.error(f"⚠️ Helper registration error: {e}")
-
-
-def prompt_helper_approval(service):
-    """Prompt user to approve helper in System Settings"""
-    try:
-        import tkinter.messagebox as messagebox
-
-        response = messagebox.askyesno(
-            "Helper Approval Required",
-            "Resistine needs your approval to install a helper tool for VPN functionality.\n\n"
-            "Click 'Yes' to open System Settings where you can enable it in Login Items.",
-            icon="info",
+        result = subprocess.run(
+            ["systemextensionsctl", "list"],
+            capture_output=True, text=True, timeout=10,
         )
+        output = result.stdout + result.stderr
+        enabled = False
+        for line in output.splitlines():
+            if "com.resistine.desktop.network-extension" in line:
+                if "[activated enabled]" in line:
+                    enabled = True
+                else:
+                    logger.info(f"Extension not enabled: {line.strip()}")
+                break
 
-        if response:
-            # Open System Settings → Login Items
-            service.openSystemSettingsLoginItems()
-            logger.info("📱 Opened System Settings → Login Items")
+        _extension_cache["value"] = enabled
+        _extension_cache["timestamp"] = now
+        return enabled
     except Exception as e:
-        logger.error(f"⚠️ Could not prompt for approval: {e}")
+        logger.warning(f"Extension status check failed: {e}")
+        return False

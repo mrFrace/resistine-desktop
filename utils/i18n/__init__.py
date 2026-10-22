@@ -1,5 +1,5 @@
 """
-Internationalization (i18n) module for Resistine.
+Internationalization (i18n) module for Phoenix.
 Provides centralized text storage and translation support for user-facing messages.
 
 Author: Petr and the Resistine Team

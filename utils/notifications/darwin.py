@@ -1,0 +1,191 @@
+"""macOS system notifications via UNUserNotificationCenter.
+
+Extracted from plugins/antivirus/main.py to be a shared backend.
+Uses the modern UserNotifications framework (macOS 10.14+) with an
+osascript fallback when authorization hasn't been granted yet.
+
+Author: Resistine Team
+Copyright (c) Resistine 2025
+Licensed under the GNU General Public License v2 or later
+"""
+
+import subprocess
+import uuid
+
+from utils.logger import logger
+
+_initialized = False
+_authorized = False
+_delegate = None  # prevent GC of the ObjC delegate
+_THREAT_CATEGORY_ID = "THREAT_DETECTED"
+_clicks: dict = {}  # request identifier -> callback, for clicked notifications
+
+
+def _clicked(identifier) -> None:
+    fn = _clicks.pop(str(identifier), None)
+    if fn is not None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Notification click handler failed: %s", e)
+
+
+def _make_delegate():
+    """Build a UNUserNotificationCenterDelegate that allows foreground banners."""
+    import objc
+    from UserNotifications import UNUserNotificationCenter  # noqa: F401
+
+    # UNNotificationPresentationOptionBanner | Sound
+    _PRESENT_BANNER_SOUND = (1 << 4) | (1 << 1)
+
+    NSObject = objc.lookUpClass("NSObject")
+
+    class _Delegate(NSObject):
+        """Delegate that opts in to foreground notification display."""
+
+        def userNotificationCenter_willPresentNotification_withCompletionHandler_(
+            self, center, notification, handler,
+        ):
+            handler(_PRESENT_BANNER_SOUND)
+
+        def userNotificationCenter_didReceiveNotificationResponse_withCompletionHandler_(
+            self, center, response, handler,
+        ):
+            try:
+                _clicked(response.notification().request().identifier())
+            finally:
+                handler()
+
+    _Delegate.protocols = [
+        objc.protocolNamed("UNUserNotificationCenterDelegate"),
+    ]
+    return _Delegate.alloc().init()
+
+
+def _set_auth(granted: bool, err):
+    global _authorized  # noqa: PLW0603
+    _authorized = granted
+    if granted:
+        logger.debug("macOS notification authorization granted")
+    elif err:
+        logger.warning("macOS notification authorization denied: %s", err)
+    else:
+        logger.debug("macOS notification authorization denied by user")
+
+
+def _in_app_bundle() -> bool:
+    """True when the process has a bundle identifier (runs from a .app)."""
+    try:
+        from Foundation import NSBundle
+
+        return bool(NSBundle.mainBundle().bundleIdentifier())
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def init():
+    """Request macOS notification authorization (call once at startup).
+
+    Must be called on the main thread — UNUserNotificationCenter
+    delegate installation requires it. Safe to call multiple times
+    (only the first call has any effect).
+    """
+    global _initialized, _authorized, _delegate  # noqa: PLW0603
+    if _initialized:
+        return
+    _initialized = True
+    if not _in_app_bundle():
+        # Run from source (python main.py): currentNotificationCenter raises
+        # an NSException that Python cannot catch and the process aborts.
+        # send() falls back to osascript.
+        logger.info("Not running from an app bundle; notifications use osascript")
+        return
+    try:
+        from UserNotifications import UNUserNotificationCenter
+
+        center = UNUserNotificationCenter.currentNotificationCenter()
+
+        # Install delegate so notifications display while app is foreground
+        _delegate = _make_delegate()
+        center.setDelegate_(_delegate)
+
+        # alert | sound | badge
+        center.requestAuthorizationWithOptions_completionHandler_(
+            0x1 | 0x2 | 0x4,
+            lambda granted, err: _set_auth(granted, err),
+        )
+
+        # Register a "threat" category so critical alerts persist as alerts
+        from UserNotifications import (
+            UNNotificationAction,
+            UNNotificationCategory,
+        )
+
+        view_action = UNNotificationAction.actionWithIdentifier_title_options_(
+            "VIEW", "View in Phoenix", 1 << 2,  # foreground
+        )
+        threat_category = UNNotificationCategory.categoryWithIdentifier_actions_intentIdentifiers_options_(
+            _THREAT_CATEGORY_ID, [view_action], [], 0,
+        )
+        center.setNotificationCategories_({threat_category})
+    except ImportError:
+        logger.warning("UserNotifications framework not available (pyobjc missing?)")
+    except Exception as e:
+        logger.warning("Failed to request notification authorization: %s", e)
+
+
+def send(title: str, body: str, urgency: str = "normal", on_click=None):
+    """Send a macOS system notification. Never raises.
+
+    Args:
+        title: Notification title.
+        body: Notification body text.
+        urgency: Accepted but unused — macOS has no public urgency API
+                 for third-party apps.
+    """
+    if _authorized:
+        try:
+            from UserNotifications import (
+                UNMutableNotificationContent,
+                UNNotificationRequest,
+                UNNotificationSound,
+                UNUserNotificationCenter,
+            )
+
+            center = UNUserNotificationCenter.currentNotificationCenter()
+            content = UNMutableNotificationContent.alloc().init()
+            content.setTitle_(title)
+            content.setBody_(body)
+            content.setSound_(UNNotificationSound.defaultSound())
+            if urgency == "critical":
+                content.setCategoryIdentifier_(_THREAT_CATEGORY_ID)
+
+            ident = str(uuid.uuid4())
+            if on_click is not None:
+                _clicks[ident] = on_click
+            request = UNNotificationRequest.requestWithIdentifier_content_trigger_(
+                ident, content, None,
+            )
+            center.addNotificationRequest_withCompletionHandler_(request, None)
+            return
+        except Exception as e:
+            logger.warning("UNUserNotificationCenter send failed, trying osascript: %s", e)
+
+    # Fallback: osascript (works without authorization).
+    # Strip newlines and control chars to prevent AppleScript injection.
+    safe_body = body.replace("\n", " ").replace("\r", "")
+    safe_body = safe_body.replace("\\", "\\\\").replace('"', '\\"')
+    safe_title = title.replace("\n", " ").replace("\r", "")
+    safe_title = safe_title.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        f'display notification "{safe_body}" '
+        f'with title "{safe_title}" sound name "default"'
+    )
+    try:
+        subprocess.Popen(
+            ["osascript", "-e", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as e:
+        logger.debug("osascript notification fallback failed: %s", e)
