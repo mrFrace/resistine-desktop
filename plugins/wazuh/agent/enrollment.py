@@ -17,6 +17,13 @@ before writing client.keys, so a swapped file can't make it copy anything else.
 When the API can't enroll (not signed in, endpoint not configured: 503) the
 installers fall back to agent-auth against the manager's enrollment port.
 
+Agents live in one Wazuh group per Phoenix user, u_<Matrix localpart>. The
+group the server answers with is remembered for the signed-in account
+(enrolled_group()); without one, agent_group() derives it from the Matrix ID
+with the server's rule (wazuh_group in phoenix-provisioning), so an agent-auth
+fallback lands in the same group. The email-derived groups of the old OTP
+sign-in (alice-example.com) are no longer used.
+
 Contract: matrix repo, packages/phoenix-provisioning (enroll_agent).
 """
 
@@ -29,9 +36,12 @@ import tempfile
 from dataclasses import dataclass
 from typing import Optional
 
+from utils import settings
 from utils.logger import logger
 
 ENROLL_PATH = "/v1/agent/enroll"
+_NS = "wazuh"
+GROUP_PREFIX = "u_"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # "<id> <name> <ip|any> <64 hex>" -- the same pattern is used by the root step.
 KEY_LINE_PATTERN = r"[0-9]{3,8} [A-Za-z0-9._-]{1,64} (any|[0-9A-Fa-f.:/]{2,64}) [0-9a-f]{64}"
@@ -74,8 +84,47 @@ def request(agent_name: str) -> Optional[Enrollment]:
     if not _KEY_LINE_RE.match(line) or parts[0] != agent_id or parts[1] != name:
         logger.error("[ENROLL] the enrollment answer's key does not match its agent")
         return None
+    # The group goes into ossec.conf and install scripts.
+    if not _NAME_RE.match(group):
+        logger.error(f"[ENROLL] unusable group {group!r} in the enrollment answer")
+        return None
     logger.info(f"[ENROLL] agent {agent_id} {name} in group {group}")
+    _remember_group(group)
     return Enrollment(agent_id, name, group, line, _write_private(line))
+
+
+def _account() -> str:
+    return settings.get("auth", "user_id", "") or settings.get("auth", "email", "") or ""
+
+
+def _remember_group(group: str) -> None:
+    settings.set(_NS, "enrolled_group", group)
+    settings.set(_NS, "enrolled_group_account", _account())
+
+
+def enrolled_group() -> Optional[str]:
+    """The group the server last enrolled this device's agent in, if that was
+    for the account signed in now; else None."""
+    group = settings.get(_NS, "enrolled_group", "")
+    account = _account()
+    if (group and _NAME_RE.match(group) and account
+            and settings.get(_NS, "enrolled_group_account", "") == account):
+        return group
+    return None
+
+
+def user_group() -> Optional[str]:
+    """u_<localpart> for the signed-in Matrix user, as the server names it."""
+    user_id = settings.get("auth", "user_id", "") or ""
+    if not user_id.startswith("@"):
+        return None
+    localpart = user_id[1:].split(":", 1)[0].lower()
+    return GROUP_PREFIX + (re.sub(r"[^a-z0-9._-]", "_", localpart)[:60] or "_")
+
+
+def agent_group() -> str:
+    """The Wazuh group this device's agent belongs in."""
+    return enrolled_group() or user_group() or "default"
 
 
 def _write_private(line: str) -> str:

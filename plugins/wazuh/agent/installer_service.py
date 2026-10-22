@@ -142,6 +142,7 @@ def trigger_install(app) -> bool:
     enrolled = enrollment.request(agent_name)
     if enrolled:
         agent_name = enrolled.agent_name
+        agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
         _fail(STATE_INSTALL_FAILED, "script_failed")

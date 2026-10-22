@@ -101,19 +101,18 @@ class TestGetAgentName:
 # ===========================================================================
 @pytest.mark.unit
 class TestGetAgentGroup:
-    def test_email_at_replaced_with_hyphen(self, isolated_settings):
-        # '@' -> '-' matches the group name the /verify-otp backend creates
-        # server-side; dots in the domain are preserved.
+    def test_group_from_matrix_id(self, isolated_settings):
+        # u_<localpart>, the group phoenix-provisioning creates; never the email.
+        isolated_settings.set("auth", "user_id", "@user:phoenix.exposed")
         isolated_settings.set("auth", "email", "user@example.com")
         from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_group
-        group = get_agent_group()
-        assert group == "user-example.com"
+        assert get_agent_group() == "u_user"
 
     def test_shell_unsafe_chars_stripped(self, isolated_settings):
         # Group is interpolated into a privileged shell script; quotes etc. must go.
-        isolated_settings.set("auth", "email", "o'brien;rm@example.com")
+        isolated_settings.set("auth", "user_id", "@o'brien;rm:phoenix.exposed")
         from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_group
-        assert get_agent_group() == "obrienrm-example.com"
+        assert get_agent_group() == "u_o_brien_rm"
 
     def test_no_email_returns_default(self, isolated_settings):
         # No email in settings

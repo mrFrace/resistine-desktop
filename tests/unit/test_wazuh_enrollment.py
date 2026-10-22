@@ -73,6 +73,7 @@ class TestRequest:
         _answer(line=LINE + "\n013 x any " + "ab" * 32),           # two lines
         {**_answer(), "key": "%%%"},                               # not base64
         {"detail": "x"},                                           # wrong shape
+        {**_answer(), "group": "u_a'; rm -rf /"},                  # unsafe group
     ])
     def test_bad_answers(self, api, body):
         api.return_value = _resp(200, body)
@@ -92,6 +93,64 @@ class TestRequest:
     def test_bad_name_no_call(self, api, name):
         assert enrollment.request(name) is None
         api.assert_not_called()
+
+
+@pytest.mark.unit
+class TestEnrolledGroup:
+    """The server's group (u_<localpart>) replaces the email-derived one."""
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self):
+        from utils import settings
+        settings.set("auth", "user_id", "@alice:phoenix.exposed")
+        settings.set("auth", "email", "alice@example.com")
+
+    def test_none_before_enrollment(self):
+        assert enrollment.enrolled_group() is None
+
+    @pytest.mark.parametrize("user_id,group", [
+        ("@alice:phoenix.exposed", "u_alice"),
+        ("@Alice.B:phoenix.exposed", "u_alice.b"),        # lowercased, like the server
+        ("@a=b/c:phoenix.exposed", "u_a_b_c"),           # chars Wazuh groups can't hold
+    ])
+    def test_user_group_like_the_server(self, user_id, group):
+        from utils import settings
+        settings.set("auth", "user_id", user_id)
+        assert enrollment.user_group() == group == enrollment.agent_group()
+
+    def test_no_email_group(self):
+        from utils import settings
+        settings.set("auth", "user_id", "")
+        assert enrollment.agent_group() == "default"   # not alice-example.com
+
+    def test_remembered_after_enrollment(self, api):
+        api.return_value = _resp(200, _answer())
+        enrollment.discard(enrollment.request("laptop-1a2b"))
+        assert enrollment.enrolled_group() == "u_alice"
+
+    def test_not_for_another_account(self, api):
+        from utils import settings
+        api.return_value = _resp(200, _answer())
+        enrollment.discard(enrollment.request("laptop-1a2b"))
+        settings.set("auth", "user_id", "@bob:phoenix.exposed")
+        assert enrollment.enrolled_group() is None
+
+    def test_failed_enrollment_keeps_previous(self, api):
+        api.return_value = _resp(200, _answer())
+        enrollment.discard(enrollment.request("laptop-1a2b"))
+        api.return_value = _resp(503, {"detail": "down"})
+        assert enrollment.request("laptop-1a2b") is None
+        assert enrollment.enrolled_group() == "u_alice"
+
+    @pytest.mark.parametrize("module", ["wazuh_functions_linux", "wazuh_functions_darwin",
+                                        "wazuh_functions_windows"])
+    def test_get_agent_group_prefers_it(self, api, module):
+        import importlib
+        mod = importlib.import_module(f"plugins.wazuh.agent.{module}")
+        assert mod.get_agent_group() == "u_alice"           # derived before enrolling
+        api.return_value = _resp(200, {**_answer(), "group": "u_alice2"})
+        enrollment.discard(enrollment.request("laptop-1a2b"))
+        assert mod.get_agent_group() == "u_alice2"          # the server's answer wins
 
 
 def _enrolled(tmp_path):
@@ -122,6 +181,8 @@ class TestLinuxInstall:
         assert "agent-auth" not in script
         assert e.key_file in script and enrollment.KEY_LINE_PATTERN in script
         assert "WAZUH_AGENT_NAME='laptop-1a2b'" in script  # the server's name
+        assert "WAZUH_AGENT_GROUP='u_alice'" in script     # and its group
+        assert "<groups>u_alice</groups>" in script and "'grp'" not in script
         assert LINE not in script  # the key itself never goes on a command line
 
     def test_fallback_agent_auth(self):

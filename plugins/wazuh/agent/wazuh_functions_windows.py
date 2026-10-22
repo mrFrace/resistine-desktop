@@ -200,19 +200,8 @@ def get_agent_name():
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group.
-
-    Replaces '@' with '-' to match the canonical group name created by
-    the /verify-otp backend.  Email flows into PowerShell commands
-    (msiexec args) so it must also be stripped of shell metacharacters
-    using the same allowlist as get_agent_name.
-    """
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", email.replace("@", "-"))
-        if sanitized:
-            return sanitized
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 
 def needs_reenrollment():
@@ -613,6 +602,7 @@ def reenroll_agent():
     enrolled = enrollment.request(new_name)
     if enrolled:
         new_name = enrolled.agent_name
+        group = enrolled.group
 
     script = (
         f"Stop-Service -Name {_ps_quote(_SERVICE_NAME)} -Force -ErrorAction SilentlyContinue; "
@@ -856,6 +846,7 @@ def full_install(progress_callback=None):
     enrolled = enrollment.request(agent_name)
     if enrolled:
         agent_name = enrolled.agent_name
+        agent_group = enrolled.group
     backup_dir = os.path.dirname(_KEY_BACKUP)
 
     # --- Single elevated batch: one UAC prompt for the whole install ---

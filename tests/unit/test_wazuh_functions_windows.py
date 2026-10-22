@@ -6,7 +6,7 @@ Covers plugins/wazuh/agent/wazuh_functions_windows.py:
 - _run_privileged: admin vs elevation paths, timeout, cleanup
 - _get_machine_guid: registry access
 - get_agent_name: hostname + GUID suffix, sanitization
-- get_agent_group: email → safe group name
+- get_agent_group: Matrix ID → u_<localpart>, a safe group name
 - needs_reenrollment: email mismatch detection
 - is_agent_installed: directory + exe check
 - get_agent_status: service query parsing
@@ -201,16 +201,17 @@ class TestGetAgentName:
 # ===========================================================================
 @pytest.mark.unit
 class TestGetAgentGroup:
-    def test_email_at_replaced(self, isolated_settings, monkeypatch):
-        monkeypatch.setattr("plugins.wazuh.agent.wazuh_functions_windows.settings", isolated_settings)
+    def test_user_group_from_matrix_id(self, isolated_settings, monkeypatch):
+        monkeypatch.setattr("plugins.wazuh.agent.enrollment.settings", isolated_settings)
+        isolated_settings.set("auth", "user_id", "@User:phoenix.exposed")
         isolated_settings.set("auth", "email", "user@example.com")
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_group
-        # '@' -> '-' to match the canonical group name created server-side
-        # by /verify-otp (groups are auto-created on enroll).
-        assert get_agent_group() == "user-example.com"
+        # The group phoenix-provisioning creates; never the email.
+        assert get_agent_group() == "u_user"
 
-    def test_default_when_no_email(self, isolated_settings, monkeypatch):
-        monkeypatch.setattr("plugins.wazuh.agent.wazuh_functions_windows.settings", isolated_settings)
+    def test_default_when_signed_out(self, isolated_settings, monkeypatch):
+        monkeypatch.setattr("plugins.wazuh.agent.enrollment.settings", isolated_settings)
+        isolated_settings.set("auth", "email", "user@example.com")
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_group
         assert get_agent_group() == "default"
 
@@ -457,13 +458,12 @@ class TestPrivilegedCommandSafety:
         # The remaining name must still be non-empty and useful
         assert len(name) > 0
 
-    def test_email_with_quote_safe_for_group_name(self, isolated_settings, monkeypatch):
-        """Email used as group name reaches PowerShell. Quotes/spaces/etc.
+    def test_user_id_with_quote_safe_for_group_name(self, isolated_settings, monkeypatch):
+        """The Matrix ID the group is made from reaches PowerShell. Quotes/spaces/etc.
         could break the agent_group argument in msiexec call."""
-        monkeypatch.setattr("plugins.wazuh.agent.wazuh_functions_windows.settings",
-                            isolated_settings)
-        # An email-shaped string containing dangerous chars
-        isolated_settings.set("auth", "email", "user'; calc.exe; '@evil.com")
+        monkeypatch.setattr("plugins.wazuh.agent.enrollment.settings", isolated_settings)
+        # A user-ID-shaped string containing dangerous chars
+        isolated_settings.set("auth", "user_id", "@user'; calc.exe; ':evil.com")
 
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_group
         group = get_agent_group()

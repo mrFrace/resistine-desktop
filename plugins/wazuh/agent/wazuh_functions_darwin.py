@@ -83,19 +83,8 @@ def get_agent_name():
 
 
 def get_agent_group():
-    """Return the user's email (sanitized) as the agent group.
-
-    Replaces '@' with '-' to match the canonical group name created by
-    the /verify-otp backend.  Falls back to 'default' if no email is
-    stored.
-    """
-    import re
-
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        raw = email.replace("@", "-")
-        return re.sub(r"[^A-Za-z0-9.\-_]", "", raw) or "default"
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 
 def needs_reenrollment():
@@ -569,6 +558,7 @@ def reenroll_agent():
     enrolled = enrollment.request(new_name)
     if enrolled:
         new_name = enrolled.agent_name
+        group = enrolled.group
     # new_name also lands unquoted inside a sed expression below.
     if not (_SAFE_TOKEN_RE.match(new_name) and _SAFE_TOKEN_RE.match(group)):
         enrollment.discard(enrolled)
@@ -793,6 +783,7 @@ def full_install(progress_callback=None):
     enrolled = enrollment.request(agent_name)
     if enrolled:
         agent_name = enrolled.agent_name
+        agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
         if progress_callback:

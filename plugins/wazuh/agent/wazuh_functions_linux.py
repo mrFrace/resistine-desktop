@@ -125,13 +125,8 @@ def get_agent_name():
     return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
 
 def get_agent_group():
-    """Return the user's email with '@' replaced by '-' to match the
-    canonical group name created by /verify-otp.
-    """
-    email = settings.get("auth", "email", "default")
-    if email and email != "default":
-        return email.replace("@", "-")
-    return "default"
+    """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
+    return enrollment.agent_group()
 
 def needs_reenrollment():
     enrolled = settings.get("wazuh", "enrolled_email", "")
@@ -577,6 +572,7 @@ def full_install(progress_callback=None):
     enrolled = enrollment.request(agent_name)
     if enrolled:
         agent_name = enrolled.agent_name
+        agent_group = enrolled.group
 
     os_type = _get_os_info()
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
@@ -675,6 +671,7 @@ def reenroll_agent():
     enrolled = enrollment.request(new_name)
     if enrolled:
         new_name = enrolled.agent_name
+        group = enrolled.group
         register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
     else:
         register = (f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "
