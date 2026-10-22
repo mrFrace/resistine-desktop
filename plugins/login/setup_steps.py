@@ -815,11 +815,31 @@ def _enrolled_for_sign_in() -> bool:
         return True
 
 
+def _enroll_for_sign_in(on_status) -> bool:
+    """Give the server the agent for this sign-in: re-enroll this app's agent,
+    or link one installed some other way. An agent this app didn't install
+    keeps working when the link fails (only the assistant lacks "this
+    machine"), so that never fails the step. Worker thread only."""
+    try:
+        from plugins.wazuh.agent import sign_in
+        if not sign_in.app_managed():
+            if not sign_in.enroll_for_sign_in(on_status):
+                logger.warning("[EP-SETUP] could not link the agent for this sign-in")
+            return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] agent link failed: {e}")
+        return True
+    return _wazuh_reenroll(on_status)
+
+
 def _mark_enrolled() -> None:
     """Record the enrollment for this sign-in. Already done by a successful
-    API enrollment; this covers the agent-auth fallback."""
+    API enrollment or link; this covers the agent-auth fallback. An agent
+    this app didn't install is only ever recorded by a link."""
     try:
-        from plugins.wazuh.agent import enrollment
+        from plugins.wazuh.agent import enrollment, sign_in
+        if not sign_in.app_managed():
+            return
         if not enrollment.enrolled_for_this_sign_in():
             enrollment.mark_enrolled()
     except Exception as e:  # noqa: BLE001
@@ -1052,7 +1072,7 @@ class _EndpointStepMac(SetupStep):
                     # Running, but enrolled for an earlier sign-in, whose agent
                     # the server deleted at sign-out.
                     logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
-                    if not _wazuh_reenroll(on_status):
+                    if not _enroll_for_sign_in(on_status):
                         self._failed = (
                             "Couldn't enroll the endpoint agent with the monitoring "
                             "server. Check your internet connection and try again.")
@@ -1147,7 +1167,7 @@ class _EndpointStepDirect(SetupStep):
                 # Running, but enrolled for an earlier sign-in, whose agent the
                 # server deleted at sign-out.
                 logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
-                if not _wazuh_reenroll(_status):
+                if not _enroll_for_sign_in(_status):
                     self._failed = (
                         "Couldn't enroll the endpoint agent with the monitoring "
                         "server. Check your internet connection and try again."

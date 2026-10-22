@@ -124,6 +124,11 @@ def _build_app() -> tuple[QApplication, object]:
         else:
             logger.info("✅ User already logged in.")
         window.create_dashboard()
+        try:
+            from plugins.wazuh.agent import sign_in
+            sign_in.ensure_in_background()
+        except Exception as e:
+            logger.warning(f"Agent check at startup failed: {e}")
         if sys.platform == "darwin":
             _resume_macos_installs()
     else:

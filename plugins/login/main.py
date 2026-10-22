@@ -243,6 +243,13 @@ class Plugin(BasePlugin):
             self._transition_to_setup_wizard()
         else:
             self.app.create_dashboard()
+            # The wizard's endpoint step won't run again: re-enroll or link
+            # the agent for this sign-in here.
+            try:
+                from plugins.wazuh.agent import sign_in
+                sign_in.ensure_in_background()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Agent check after sign-in failed: {e}")
 
     def skip_login(self):
         self.cancel_login()

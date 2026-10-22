@@ -299,6 +299,27 @@ def is_app_managed_agent():
     """
     return os.path.isdir(LINUX_WAZUH_DIR) and bool(settings.get("wazuh", _APP_INSTALLED, False))
 
+def read_agent_key_line():
+    """The installed agent's client.keys line, read as root (one admin prompt),
+    or None when it can't be read or the prompt was dismissed.
+
+    For linking an agent installed some other way (enrollment.link); the key
+    stays in this process. The traced runner is not used: it would log it.
+    """
+    agent_dir = installed_agent_dir()
+    if not agent_dir:
+        return None
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", ["head", "-n", "1", f"{agent_dir}/etc/client.keys"])
+    ok, out = _run_privileged_command(
+        ["sh", "-c", 'head -n 1 -- "$1"', "sh", f"{agent_dir}/etc/client.keys"], timeout=120)
+    http_trace.event("root command result", ok)
+    if not ok:
+        logger.warning("Could not read the agent's key (admin prompt dismissed or no key)")
+        return None
+    return (out or "").strip().splitlines()[0] if (out or "").strip() else None
+
+
 def get_agent_status():
     if not is_agent_installed():
         return "Not Installed"

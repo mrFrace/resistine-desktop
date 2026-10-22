@@ -646,4 +646,9 @@ class Plugin(BasePlugin):
         settings.clear_namespace("chat_history")
         settings.delete("chat", "openai_api_key")
         settings.delete("chat", "openai_base_url")
+        # Whether this app installed the agent outlives the sign-in: without
+        # it the next sign-in would treat the agent as someone else's.
+        app_installed = settings.get("wazuh", "app_installed", False)
         settings.clear_namespace("wazuh")
+        if app_installed:
+            settings.set("wazuh", "app_installed", True)
