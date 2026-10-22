@@ -5,7 +5,7 @@ Phoenix bot (@secagent by default) instead of the OpenAI-compatible HTTPS API.
 The server side is the matrix_bridge service of Phoenix-LLMAgent-api; its
 message contract (docs/MATRIX_BRIDGE.md there):
 
-  user → bot   m.text, ``net.resisti.request: {session}`` picks the server
+  user → bot   m.text, ``exposed.phoenix.request: {session}`` picks the server
                session (one per Desktop chat)
   bot → user   one reply (m.in_reply_to the prompt) grown by m.replace
                edits; every version carries ``net.resisti.turn: {status}``,
@@ -46,7 +46,7 @@ from utils import settings
 from utils.logger import logger
 
 TURN_KEY = "net.resisti.turn"
-REQUEST_KEY = "net.resisti.request"
+REQUEST_KEY = "exposed.phoenix.request"
 DEFAULT_BOT = "@secagent:phoenix.exposed"
 _NS = "chat"
 

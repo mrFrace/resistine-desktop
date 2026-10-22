@@ -242,6 +242,8 @@ def main() -> int:
     parser.add_argument("-l", "--log-level",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         default="INFO", help="Set logging level (default: INFO)")
+    parser.add_argument("--trace", action="store_true",
+                        help="Write every HTTP exchange (secrets masked) to logs/trace-*.log")
     args = parser.parse_args()
 
     if args.debug or functions.is_running_in_ide():
@@ -259,6 +261,10 @@ def main() -> int:
     # Before the file log sink creates the new config dir.
     settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
+    if args.trace or os.environ.get("PHOENIX_TRACE") == "1":
+        from utils import http_trace
+        trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))
+        logger.info(f"HTTP trace enabled: {trace_file}")
     _install_excepthook()
     if sys.platform == "darwin":
         from utils.functions import remove_legacy_bundle

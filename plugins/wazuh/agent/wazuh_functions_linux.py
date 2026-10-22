@@ -42,6 +42,16 @@ def _deploy_env(agent_name, agent_group):
     )
 
 def run_privileged_command(command, timeout=120):
+    """Traced entry point; see _run_privileged_command."""
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", command)
+    result = _run_privileged_command(command, timeout)
+    http_trace.event("root command result", result if isinstance(result, tuple)
+                     else getattr(result, "returncode", result))
+    return result
+
+
+def _run_privileged_command(command, timeout=120):
     """
     Run a command with elevated privileges using pkexec or sudo.
     Shows the password dialog if sudo is used.

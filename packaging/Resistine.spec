@@ -22,6 +22,14 @@ APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
 VERSION = '2026.07.20-rc'
+# Build ID: tells builds of one VERSION apart (package versions, file names,
+# the version line in the app). UTC minutes, so every rebuild sorts after the
+# one before. The build scripts set PHOENIX_BUILD so that every package made
+# in one run carries the same ID.
+import datetime as _dt
+BUILD = os.environ.get('PHOENIX_BUILD') or _dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%d%H%M')
+if not BUILD.isdigit():
+    raise SystemExit(f"PHOENIX_BUILD must be digits (UTC YYYYMMDDHHMM), not {BUILD!r}")
 
 # Paths — project root is one level up from packaging/
 _spec_dir = os.path.dirname(os.path.abspath(SPEC))
@@ -37,10 +45,14 @@ import tempfile as _tmpmod
 _version_file = os.path.join(_tmpmod.gettempdir(), 'VERSION')
 with open(_version_file, 'w') as _vf:
     _vf.write(VERSION)
+_build_file = os.path.join(_tmpmod.gettempdir(), 'BUILD')
+with open(_build_file, 'w') as _bf:
+    _bf.write(BUILD)
 
 # Collect data files
 datas = [
     (_version_file, '.'),
+    (_build_file, '.'),
     (_src('resources'), 'resources'),
     (_src('plugins'), 'plugins'),
     (_src('gui'), 'gui'),

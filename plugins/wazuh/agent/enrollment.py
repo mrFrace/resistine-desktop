@@ -24,6 +24,13 @@ with the server's rule (wazuh_group in phoenix-provisioning), so an agent-auth
 fallback lands in the same group. The email-derived groups of the old OTP
 sign-in (alice-example.com) are no longer used.
 
+The enrollment is also remembered against the Matrix device and account it
+was made for (enrolled_for_this_sign_in()). Signing out deletes the device's
+agent on the server and clears this record, and the next sign-in is a new
+Matrix device, so the setup wizard enrolls again instead of trusting an agent
+that is still installed and running locally. The server's device -> agent
+mapping is what LLMAgent-api's Matrix bridge uses for "this machine".
+
 Contract: matrix repo, packages/phoenix-provisioning (enroll_agent).
 """
 
@@ -90,6 +97,7 @@ def request(agent_name: str) -> Optional[Enrollment]:
         return None
     logger.info(f"[ENROLL] agent {agent_id} {name} in group {group}")
     _remember_group(group)
+    mark_enrolled(agent_id)
     return Enrollment(agent_id, name, group, line, _write_private(line))
 
 
@@ -100,6 +108,33 @@ def _account() -> str:
 def _remember_group(group: str) -> None:
     settings.set(_NS, "enrolled_group", group)
     settings.set(_NS, "enrolled_group_account", _account())
+
+
+def _device() -> str:
+    """The Matrix device signed in now (set from /whoami at sign-in)."""
+    return settings.get("auth", "device_id", "") or ""
+
+
+def mark_enrolled(agent_id: str = "") -> None:
+    """Remember that this device's agent was enrolled for the current sign-in.
+
+    request() calls it with the server's agent ID; the setup wizard calls it
+    without one after an agent-auth fallback, so a server it couldn't reach
+    doesn't send the wizard round in circles."""
+    settings.set(_NS, "enrolled_agent_id", agent_id or "")
+    settings.set(_NS, "enrolled_device", _device())
+    settings.set(_NS, "enrolled_device_account", _account())
+
+
+def enrolled_for_this_sign_in() -> bool:
+    """Whether this device's agent was enrolled for the Matrix device and
+    account signed in now. True when there is no Matrix sign-in to compare
+    with (nothing on the server is keyed by a device then)."""
+    device, account = _device(), _account()
+    if not device or not account:
+        return True
+    return (settings.get(_NS, "enrolled_device", "") == device
+            and settings.get(_NS, "enrolled_device_account", "") == account)
 
 
 def enrolled_group() -> Optional[str]:

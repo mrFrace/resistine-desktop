@@ -37,12 +37,22 @@ cp -a %{_phoenix_root}/. %{buildroot}/
 
 %post
 update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
+# openSUSE: zypper reads its own repo directory. (No rpm --import here: rpm
+# can't be run from its own scriptlet; dnf imports the key from gpgkey= on
+# first refresh.)
+if [ -d /etc/zypp/repos.d ] && [ ! -e /etc/zypp/repos.d/phoenix.repo ]; then
+	cp /usr/share/phoenix/phoenix-zypp.repo /etc/zypp/repos.d/phoenix.repo || :
+fi
 
 %postun
 update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
 
 %files
 /opt/phoenix
+# The Phoenix repository (packaging/linux/repo), so dnf/zypper upgrade it.
+%config(noreplace) /etc/yum.repos.d/phoenix.repo
+/etc/pki/rpm-gpg/RPM-GPG-KEY-phoenix
+/usr/share/phoenix/phoenix-zypp.repo
 /usr/bin/phoenix
 /usr/share/applications/phoenix.desktop
 /usr/share/pixmaps/phoenix.png

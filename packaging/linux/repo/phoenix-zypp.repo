@@ -1,0 +1,12 @@
+# Phoenix updates for zypper (openSUSE): copied to /etc/zypp/repos.d by the
+# phoenix package's %post. The repository metadata is signed and lists every
+# package's checksum.
+[phoenix]
+name=Phoenix
+baseurl=https://phoenix.exposed/linux/rpm
+type=rpm-md
+enabled=1
+autorefresh=1
+repo_gpgcheck=1
+pkg_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-phoenix

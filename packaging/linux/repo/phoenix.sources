@@ -1,0 +1,8 @@
+# Phoenix updates: installed by the phoenix package, which upgrades through
+# this repository from then on (scripts/build/publish-linux-repos.sh).
+Types: deb
+URIs: https://phoenix.exposed/linux/apt
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /usr/share/keyrings/phoenix-archive-keyring.gpg

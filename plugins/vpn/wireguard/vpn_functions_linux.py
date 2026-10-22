@@ -74,6 +74,16 @@ def is_admin():
 
 
 def run_privileged_command(command_args):
+    """Traced entry point; see _run_privileged_command."""
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", command_args)
+    result = _run_privileged_command(command_args)
+    http_trace.event("root command result", result if isinstance(result, tuple)
+                     else getattr(result, "returncode", result))
+    return result
+
+
+def _run_privileged_command(command_args):
     """
     Run a command with elevated privileges using pkexec or sudo fallback.
 

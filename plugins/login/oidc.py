@@ -33,7 +33,7 @@ from typing import Callable, Optional
 
 import requests
 
-from utils import settings
+from utils import http_trace, settings
 from utils.logger import logger
 
 HOMESERVER_URL = "https://matrix.phoenix.exposed"
@@ -57,8 +57,11 @@ class Cancelled(OIDCError):
 
 def _user_agent() -> str:
     try:
-        from utils.updates.version import get_current_version
+        from utils.updates.version import get_build, get_current_version
         ver = get_current_version()
+        build = get_build()
+        if build:
+            ver += f"+{build}"
     except Exception:
         ver = "dev"
     return f"Phoenix-Desktop/{ver} ({platform.system()})"
@@ -239,6 +242,7 @@ class _CallbackHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
             return
         params = dict(urllib.parse.parse_qsl(url.query))
+        http_trace.event("browser -> app: loopback redirect GET /callback", params)
         if self.server.result is None:
             self.server.result = params
         ok = "code" in params
@@ -288,6 +292,9 @@ def login_browser(cancel: Optional[threading.Event] = None,
             "code_challenge_method": "S256",
         })
         logger.info(f"[OIDC] opening browser for sign-in (device {device_id})")
+        http_trace.event("app -> system browser: open authorization URL",
+                         {"url": url.split("?")[0],
+                          **dict(urllib.parse.parse_qsl(url.split("?", 1)[1]))})
         open_url(url)
 
         deadline = time.monotonic() + _LOGIN_TIMEOUT
@@ -432,6 +439,10 @@ def complete_login(tokens: Tokens) -> dict:
     settings.set(_AUTH_NS, "device_id", who.get("device_id") or get_device_id())
     if email:
         settings.set(_AUTH_NS, "email", email)
+    http_trace.event("session stored in settings namespace 'auth'",
+                     {k: settings.get(_AUTH_NS, k) for k in
+                      ("method", "issuer", "user_id", "device_id", "email",
+                       "access_token", "refresh_token", "expires_at")})
     logger.info(f"[OIDC] signed in as {who.get('user_id')} "
                 f"(device {who.get('device_id')}, email {'set' if email else 'none'})")
     return {"user_id": who.get("user_id"), "device_id": who.get("device_id"),

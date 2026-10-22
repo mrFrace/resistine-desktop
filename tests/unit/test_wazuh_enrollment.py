@@ -244,3 +244,52 @@ class TestMsiLog:
         from plugins.wazuh.agent import wazuh_functions_windows as ww
         script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
         assert script.index(ww._PS_UNINSTALL_AGENT_MSI) < script.index("'/i'")
+
+
+@pytest.mark.unit
+class TestEnrolledForThisSignIn:
+    """The enrollment is tied to the Matrix device + account it was made for:
+    sign-out deletes the device's agent on the server, and the next sign-in is
+    a new device, so the wizard must enroll again."""
+
+    @pytest.fixture(autouse=True)
+    def _signed_in(self):
+        from utils import settings
+        settings.set("auth", "user_id", "@alice:phoenix.exposed")
+        settings.set("auth", "device_id", "PHX_AAAAAAAAAAAAAAAA")
+
+    def test_not_before_enrollment(self):
+        assert not enrollment.enrolled_for_this_sign_in()
+
+    def test_after_api_enrollment(self, api):
+        from utils import settings
+        api.return_value = _resp(200, _answer())
+        enrollment.discard(enrollment.request("laptop-1a2b"))
+        assert enrollment.enrolled_for_this_sign_in()
+        assert settings.get("wazuh", "enrolled_agent_id") == "012"
+
+    def test_failed_enrollment_records_nothing(self, api):
+        api.return_value = _resp(503, {"detail": "down"})
+        assert enrollment.request("laptop-1a2b") is None
+        assert not enrollment.enrolled_for_this_sign_in()
+
+    def test_new_device_or_account_needs_enrollment(self):
+        from utils import settings
+        enrollment.mark_enrolled()
+        assert enrollment.enrolled_for_this_sign_in()
+        settings.set("auth", "device_id", "PHX_BBBBBBBBBBBBBBBB")
+        assert not enrollment.enrolled_for_this_sign_in()
+        settings.set("auth", "device_id", "PHX_AAAAAAAAAAAAAAAA")
+        settings.set("auth", "user_id", "@bob:phoenix.exposed")
+        assert not enrollment.enrolled_for_this_sign_in()
+
+    def test_sign_out_clears_it(self):
+        from utils import settings
+        enrollment.mark_enrolled()
+        settings.clear_namespace("wazuh")   # what logout does
+        assert not enrollment.enrolled_for_this_sign_in()
+
+    def test_nothing_to_compare_without_matrix_sign_in(self):
+        from utils import settings
+        settings.set("auth", "device_id", "")
+        assert enrollment.enrolled_for_this_sign_in()

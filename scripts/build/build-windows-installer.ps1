@@ -120,6 +120,14 @@ if (-not (Test-Path $venvPython)) {
     Write-Host "Using existing virtual environment: $venvPython"
 }
 
+# Build ID (UTC minutes, see packaging/Resistine.spec), shared by PyInstaller
+# (the app's BUILD file) and Inno Setup (installer name, displayed version).
+if (-not $env:PHOENIX_BUILD) {
+    $env:PHOENIX_BUILD = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmm")
+}
+$build = $env:PHOENIX_BUILD
+Write-Host "Build ID: $build"
+
 # $ErrorActionPreference doesn't cover native commands: a failed pip install
 # (e.g. a wheel that needs a compiler) would otherwise still yield an installer.
 function Invoke-VenvPython {
@@ -199,11 +207,11 @@ if (-not (Test-Path $issScript)) {
 # ArchitecturesInstallIn64BitMode and ArchitecturesAllowed correctly.
 $targetArch = if ($IsARM64) { "arm64" } else { "x64" }
 Write-Host "Building Windows installer (.exe) with Inno Setup ($targetArch)..."
-& $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
+& $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DAppBuild=$build" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
 }
 
 Write-Host ""
 Write-Host "Done. Installer output:"
-Write-Host "  $outputDir\Phoenix-Setup-${version}.exe"
+Write-Host "  $outputDir\Phoenix-Setup-${version}-${build}.exe"

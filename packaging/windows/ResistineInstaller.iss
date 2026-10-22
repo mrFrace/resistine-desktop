@@ -6,6 +6,13 @@
   #define AppVersion "0.0.0"
 #endif
 
+; Build ID (UTC YYYYMMDDHHMM, see packaging/Resistine.spec). It goes into the
+; file name and the version Windows shows, not into AppVersion: the version
+; checks below compare dot-separated numbers.
+#ifndef AppBuild
+  #define AppBuild "0"
+#endif
+
 #ifndef SourceDir
   #define SourceDir "..\..\dist\Phoenix"
 #endif
@@ -22,14 +29,14 @@
 [Setup]
 AppId={#AppId}
 AppName={#AppName}
-AppVersion={#AppVersion}
+AppVersion={#AppVersion}+{#AppBuild}
 AppPublisher=Phoenix
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 OutputDir={#OutputDir}
-OutputBaseFilename={#AppName}-Setup-{#AppVersion}
+OutputBaseFilename={#AppName}-Setup-{#AppVersion}-{#AppBuild}
 Compression=lzma2
 SolidCompression=yes
 #ifdef TargetArch
@@ -100,6 +107,7 @@ Name: "{autodesktop}\{#AppName}"; Filename: "{app}\Phoenix.exe"; Tasks: desktopi
 [Registry]
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue uninsdeletekeyifempty
 Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Version"; ValueData: "{#AppVersion}"; Flags: uninsdeletevalue
+Root: HKLM64; Subkey: "Software\Resistine"; ValueType: string; ValueName: "Build"; ValueData: "{#AppBuild}"; Flags: uninsdeletevalue
 Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Phoenix"; ValueData: """{app}\Phoenix.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
@@ -1186,7 +1194,7 @@ begin
 
   ActionText :=
     'Action: ' + SelectedActionCaption + #13#10 +
-    'Installer version: {#AppVersion}' + #13#10;
+    'Installer version: {#AppVersion} (build {#AppBuild})' + #13#10;
 
   if ExistingInstallDetected then
   begin
@@ -1415,7 +1423,7 @@ begin
     StatusLine := StatusLine + #13#10 + 'Uninstaller not found. Some maintenance actions are unavailable.';
 
   Result := StatusLine + #13#10 +
-    'Installer version: {#AppVersion}' + #13#10 +
+    'Installer version: {#AppVersion} (build {#AppBuild})' + #13#10 +
     'Install location: ' + ExistingInstallDir + #13#10#13#10 +
     'Choose an action below. A short description is shown under each option.';
 end;

@@ -164,7 +164,11 @@ def ensure_vpn_config(on_status: Optional[Callable[[str], None]] = None,
         on_status("Getting your VPN configuration…")
     cfg = request_peer(public_key)
 
+    from utils import http_trace
+    http_trace.event("VPN keypair generated locally; only the public key is sent",
+                     {"public_key": public_key})
     path = backend.save_vpn_configuration(cfg, CONFIG_NAME)
+    http_trace.event("VPN config written", {"path": path, "config": cfg})
     if not path:
         raise ProvisioningError(
             "The VPN config from the Phoenix service was rejected as invalid.")

@@ -195,8 +195,8 @@ def _system_info(app) -> dict:
     except Exception:
         rows["VPN"] = "—"
     try:
-        from utils.updates.version import get_current_version
-        rows["Phoenix"] = get_current_version()
+        from utils.updates.version import get_display_version
+        rows["Phoenix"] = get_display_version()
     except Exception:
         pass
     return {"badge": None, "rows": rows}

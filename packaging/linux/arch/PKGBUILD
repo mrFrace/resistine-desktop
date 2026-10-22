@@ -3,15 +3,17 @@
 # Repackages the PyInstaller build in /opt/phoenix (x86_64 only). The source
 # tarball is the staged root that scripts/build/build-linux-packages.sh makes
 # alongside the .deb and .rpm; that script also runs makepkg on this file.
-# By hand: put phoenix-<version>-x86_64.tar.xz next to this PKGBUILD, set
-# pkgver (the release version with '-' dropped, 2026.07.20-rc -> 2026.07.20rc,
-# which pacman sorts before 2026.07.20), _relver and sha256sums, then
-# `makepkg -f`. Arch's desktop-file-utils hook refreshes the menu cache.
+# By hand: put phoenix-<version>-<build>-x86_64.tar.xz next to this PKGBUILD,
+# set pkgver (the release version with '-' dropped, 2026.07.20-rc ->
+# 2026.07.20rc, which pacman sorts before 2026.07.20), pkgrel (the build ID,
+# UTC YYYYMMDDHHMM, so each build upgrades the last), _relver
+# (<version>-<build>) and sha256sums, then `makepkg -f`. Arch's
+# desktop-file-utils hook refreshes the menu cache.
 
 pkgname=phoenix
 pkgver=@PKGVER@
 _relver=@VERSION@
-pkgrel=1
+pkgrel=@PKGREL@
 pkgdesc="Phoenix security endpoint and VPN manager"
 arch=('x86_64')
 url="https://phoenix.exposed"
@@ -39,6 +41,10 @@ conflicts=('resistine')
 replaces=('resistine')
 # PyInstaller files must ship untouched.
 options=('!strip' '!debug' '!emptydirs')
+# The Phoenix repository (packaging/linux/repo): its key goes into pacman's
+# keyring on install; enabling it is one Include in /etc/pacman.conf.
+backup=('etc/pacman.d/phoenix.conf')
+install=phoenix.install
 source=("phoenix-${_relver}-x86_64.tar.xz")
 sha256sums=('@SHA256@')
 

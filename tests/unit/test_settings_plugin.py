@@ -419,31 +419,48 @@ class TestHandleUninstall:
 # _check_for_updates
 # ---------------------------------------------------------------------------
 
+def _check_result(available=False, build=202610221500, stale=False, os_key="windows"):
+    latest = MagicMock(build=build, expires="2026-10-01")
+    return MagicMock(available=available, latest=latest, stale=stale, os_key=os_key)
+
+
 @pytest.mark.unit
 class TestCheckForUpdates:
-    def test_updates_not_available(self, built_plugin):
-        with patch("utils.updates.is_available", return_value=False), \
-             patch("utils.updates.check_for_updates") as mock_check:
-            built_plugin._check_for_updates()
-        mock_check.assert_not_called()
-        assert "not available" in built_plugin.update_status_label.text().lower()
-
-    def test_check_success(self, built_plugin):
-        with patch("utils.updates.is_available", return_value=True), \
-             patch("utils.updates.check_for_updates", return_value=True):
+    def test_button_checks_off_the_gui_thread(self, built_plugin):
+        with patch("plugins.settings.main.threading.Thread") as thread:
             built_plugin._check_for_updates()
         assert "checking" in built_plugin.update_status_label.text().lower()
+        assert thread.call_args.kwargs["target"] == built_plugin._update_check_worker
+        thread.return_value.start.assert_called_once()
 
-    def test_check_error_result(self, built_plugin):
-        with patch("utils.updates.is_available", return_value=True), \
-             patch("utils.updates.check_for_updates", return_value="error"):
-            built_plugin._check_for_updates()
-        assert built_plugin.update_status_label.text() == "Update check failed"
+    def _run_worker(self, plugin, **check):
+        plugin.app.after.side_effect = lambda ms, fn, *a: fn(*a)
+        with patch("utils.updates.channel.check", **check):
+            plugin._update_check_worker()
+        return plugin.update_status_label.text()
 
-    def test_check_exception(self, built_plugin):
-        with patch("utils.updates.is_available", side_effect=RuntimeError("boom")):
-            built_plugin._check_for_updates()
-        assert built_plugin.update_status_label.text() == "Error: boom"
+    def test_update_available(self, built_plugin):
+        text = self._run_worker(built_plugin, return_value=_check_result(available=True))
+        assert "202610221500 is available" in text
+
+    def test_update_available_on_linux_comes_from_the_repository(self, built_plugin):
+        text = self._run_worker(built_plugin, return_value=_check_result(
+            available=True, os_key="linux-rpm"))
+        assert "software updates install it" in text
+
+    def test_up_to_date(self, built_plugin):
+        assert self._run_worker(built_plugin, return_value=_check_result()) == "Phoenix is up to date"
+
+    def test_stale_channel_is_mentioned(self, built_plugin):
+        text = self._run_worker(built_plugin, return_value=_check_result(stale=True))
+        assert "expired on 2026-10-01" in text
+
+    def test_not_from_the_channel(self, built_plugin):
+        assert "isn't updated" in self._run_worker(built_plugin, return_value=None)
+
+    def test_failure_shows_the_reason(self, built_plugin):
+        text = self._run_worker(built_plugin, side_effect=RuntimeError("signature bad"))
+        assert text == "Update check failed: signature bad"
 
 
 # ---------------------------------------------------------------------------
