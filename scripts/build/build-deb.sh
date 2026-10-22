@@ -49,6 +49,7 @@ if [ ! -d "dist/Phoenix" ]; then
 	echo "Error: PyInstaller build failed. dist/Phoenix directory not found."
 	exit 1
 fi
+python scripts/build/check_bundle.py dist/Phoenix
 
 # Prepare Debian staging directory
 STAGING_DIR="dist/deb_staging"
