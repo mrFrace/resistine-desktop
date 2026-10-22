@@ -127,6 +127,17 @@ class TestPanelData:
     def test_badge_follows_grade(self, grade, kind):
         assert posture.panel_data(st(cards=[card(grade=grade)]), {"francispc"}, NOW)["badge"] == (kind, f"Grade {grade}")
 
+    @pytest.mark.parametrize("reason,text", [
+        ("not_covered", "Not scanned: the SIEM has no vulnerability feed for this OS"),
+        ("unavailable", "Unavailable: the last scan failed"),
+    ])
+    def test_no_vulnerability_scan_is_not_zero_vulnerabilities(self, reason, text):
+        nixos = card("AnubisAI", "B", 88, vulnerabilities={"total": 0, "critical": 0, "high": 0,
+                                                             "available": False, "reason": reason})
+        d = posture.panel_data(st(cards=[nixos]), {"anubisai"}, NOW)
+        assert d["badge"] == ("warning", "Grade B, partial")
+        assert d["rows"]["Vulnerabilities"] == text
+
     def test_stale_after_a_missed_daily_run(self):
         d = posture.panel_data(st(cards=[card(computed="2026-10-11T06:00:00")]), {"francispc"}, NOW)
         assert d["badge"] == ("warning", "Stale") and d["rows"]["Updated"] == "1 day ago"

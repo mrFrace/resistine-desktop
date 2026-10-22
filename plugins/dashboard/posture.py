@@ -180,14 +180,25 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
         grade = str(mine.get("grade") or "?")
         when = _computed(mine)
         stale = when is None or (now.replace(tzinfo=None) - when.replace(tzinfo=None)).total_seconds() > STALE_AFTER_S
-        badge = ("warning", "Stale") if stale else (_grade_kind(grade), f"Grade {grade}")
         v, comp, al = mine.get("vulnerabilities") or {}, mine.get("compliance") or {}, mine.get("alerts") or {}
+        scanned = v.get("available", True) is not False
+        if stale:
+            badge = ("warning", "Stale")
+        elif not scanned:  # graded without its vulnerabilities: not a clean bill
+            badge = ("warning", f"Grade {grade}, partial")
+        else:
+            badge = (_grade_kind(grade), f"Grade {grade}")
         rows["Machine"] = str(mine.get("hostname") or "—")
         health = str(mine.get("health") or "").replace("_", " ")
         rows["Score"] = f"{grade} · {mine.get('score', '—')}/100" + (f", {health}" if health else "")
         if score_trend:
             rows["Trend"] = score_trend["text"]
-        rows["Vulnerabilities"] = f"{_n(v.get('critical'))} critical · {_n(v.get('high'))} high"
+        if scanned:
+            rows["Vulnerabilities"] = f"{_n(v.get('critical'))} critical · {_n(v.get('high'))} high"
+        elif v.get("reason") == "not_covered":
+            rows["Vulnerabilities"] = "Not scanned: the SIEM has no vulnerability feed for this OS"
+        else:
+            rows["Vulnerabilities"] = "Unavailable: the last scan failed"
         pct = comp.get("score_pct")
         rows["Compliance"] = (f"{pct}%" if pct is not None else "—") + (
             f" ({_n(comp.get('failed_checks'))} failed checks)" if comp.get("failed_checks") else "")
@@ -240,14 +251,18 @@ def add_point(history, score: int, today: date) -> list:
     return [p for p in sorted(pts) if p[0] >= cutoff]
 
 
-def record_score(card, today: Optional[date] = None) -> list:
-    """Store this machine's score in today's point. Returns the history."""
+def record_score(card) -> list:
+    """Store this machine's score under the day the server computed it.
+    Returns the history.
+
+    Not the day the app ran: a cached or stale card would otherwise add a
+    point every day with the same score, a flat line nobody measured."""
     history = _clean_history(settings.get(_NS, _HISTORY_KEY))
     score = _score(card)
-    if score is None:
+    when = _computed(card) if isinstance(card, dict) else None
+    if score is None or when is None:
         return history
-    today = today or date.today()
-    new = add_point(history, score, today)
+    new = add_point(history, score, when.date())
     if new != history:
         settings.set(_NS, _HISTORY_KEY, new)
     return new

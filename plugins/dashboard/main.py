@@ -364,7 +364,8 @@ class _Panel(QFrame):
 
 
 # Bar colour per worst severity of a day (badge text colours of the theme).
-_SEV_KIND = {"critical": "critical", "high": "error", "medium": "warning", "low": "info"}
+_SEV_KIND = {"critical": "critical", "high": "error", "medium": "warning", "unknown": "warning",
+             "low": "info"}
 
 
 def _sev_color(sev) -> QColor:
@@ -374,7 +375,7 @@ def _sev_color(sev) -> QColor:
 
 
 class _DayStrip(QWidget):
-    """Alerts per day, oldest left: one bar per day, its height the count
+    """Incidents per day, oldest left: one bar per day, its height the count
     (square-root scale, so one busy day doesn't flatten the rest) and its
     colour the day's worst severity. Weekday initials underneath."""
 
@@ -386,7 +387,7 @@ class _DayStrip(QWidget):
         self.setFixedHeight(self.BAR_H + 18)
         self.setMinimumWidth(140)
         busiest = max((d["count"] for d in self._days), default=0)
-        parts = [f"{d['day']:%a %d %b}: {d['count']} alert{'s' if d['count'] != 1 else ''}"
+        parts = [f"{d['day']:%a %d %b}: {d['count']} incident{'s' if d['count'] != 1 else ''}"
                  + (f", worst {d['worst']}" if d["worst"] else "") for d in self._days]
         self.setToolTip("\n".join(parts))
         self._max = busiest
@@ -934,7 +935,8 @@ class Plugin(BasePlugin):
             pass
 
     # ---- alert list and detail (slide in over the panels) ------------------
-    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "low": "info", "info": "ok"}
+    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "unknown": "warning",
+                 "low": "info", "info": "ok"}
     _KIND_ICON = {"triage": "activity", "hunt": "folder-search", "result": "shield-check"}
 
     def _push_page(self, page: Page) -> None:
@@ -1123,6 +1125,7 @@ class Plugin(BasePlugin):
     _PILLS = {
         mitigations.OPEN: ("error", "To fix"),
         mitigations.FIXED_HERE: ("ok", "Fixed here"),
+        mitigations.REBOOT: ("error", "Restart needed"),
         mitigations.UNKNOWN: ("info", "Can't check here"),
         mitigations.SERVER: ("info", "Next scan"),
         None: ("info", "Checking…"),
@@ -1144,7 +1147,8 @@ class Plugin(BasePlugin):
         page.spacing(14)
         page.add(muted(
             "Fixed here means the vulnerable version is no longer installed on this "
-            "machine. The daily scan confirms it and the item disappears. Phoenix never "
+            "machine. The daily scan confirms it and the item disappears. Restart needed "
+            "means the kernel is updated but the old one is still running. Phoenix never "
             "changes your system on its own: update packages with your system's "
             "software updater."))
         page.stretch()
@@ -1238,7 +1242,7 @@ class Plugin(BasePlugin):
         h.addLayout(text, 1)
         if state != mitigations.REMOTE:
             kind, label = self._PILLS.get(state, self._PILLS[None])
-            if state == mitigations.OPEN and item["severity"] not in ("critical", "high"):
+            if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
                 kind = "warning"
             pill = QLabel()
             set_pill(pill, kind, label)

@@ -110,20 +110,36 @@ class AlertStore:
             logger.warning(f"[SIEM-ALERTS] store unreadable ({e}); starting empty")
 
     def _save(self) -> None:
+        # Decrypted alerts name hosts, users and file paths: owner-only (0600),
+        # created that way so there is no world-readable window.
         tmp = f"{self.path}.tmp"
         try:
-            with open(tmp, "w", encoding="utf-8") as fh:
+            if os.path.lexists(tmp):
+                os.remove(tmp)  # never follow a stale or planted temp file
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"alerts": self._alerts, "unread": self._unread}, fh)
             os.replace(tmp, self.path)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[SIEM-ALERTS] store not saved: {e}")
 
     def add(self, alert: dict) -> bool:
-        """Store *alert*; False if its event id is already known."""
+        """Store *alert*; False if its event id is already known.
+
+        The one exception: an alert stored as UNDECRYPTABLE whose room key
+        arrived later. The real text replaces the placeholder (same place,
+        same time) and counts as new again."""
         with self._lock:
             eid = alert.get("event_id")
-            if eid and any(a.get("event_id") == eid for a in self._alerts):
-                return False
+            known = next((a for a in self._alerts if eid and a.get("event_id") == eid), None)
+            if known is not None:
+                if known.get("body") != UNDECRYPTABLE or alert.get("body") == UNDECRYPTABLE:
+                    return False
+                known["body"] = alert.get("body", "")
+                alert.update(known)
+                self._unread += 1
+                self._save()
+                return True
             self._alerts.append(alert)
             self._alerts = self._alerts[-MAX_ALERTS:]
             self._unread += 1

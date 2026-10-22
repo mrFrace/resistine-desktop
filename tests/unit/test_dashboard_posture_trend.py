@@ -32,10 +32,19 @@ class TestHistory:
         assert posture.add_point("junk", 61, TODAY) == [[TODAY.isoformat(), 61]]
 
     def test_record_score_persists(self, isolated_settings):
-        assert posture.record_score({"score": 80}, TODAY) == [[TODAY.isoformat(), 80]]
-        assert posture.history() == [[TODAY.isoformat(), 80]]
-        for bad in ({"score": "80"}, {"score": 140}, {"score": True}, {}, None):
-            assert posture.record_score(bad, TODAY) == [[TODAY.isoformat(), 80]]
+        at = f"{day(2)}T06:04:37"
+        assert posture.record_score({"score": 80, "computed_at": at}) == [[day(2), 80]]
+        assert posture.history() == [[day(2), 80]]
+        for bad in ({"score": "80", "computed_at": at}, {"score": 140, "computed_at": at},
+                    {"score": True, "computed_at": at}, {"score": 81}, {"score": 81, "computed_at": "?"},
+                    {}, None):
+            assert posture.record_score(bad) == [[day(2), 80]]
+
+    def test_a_stale_card_adds_no_new_day(self, isolated_settings):
+        card = {"score": 88, "computed_at": f"{day(3)}T06:04:37"}
+        for _ in range(3):  # the app refreshes on three days; the server never recomputed
+            posture.record_score(card)
+        assert posture.history() == [[day(3), 88]]
 
 
 @pytest.mark.unit

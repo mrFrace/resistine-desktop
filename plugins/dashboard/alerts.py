@@ -16,19 +16,25 @@ siem-bot sends three kinds of message (see parse()):
 The prose is model output, so a word like "critical system files" says
 nothing about severity: only the structured fields count. Bodies are
 untrusted and parsed defensively. No Qt in here.
+
+"unknown" is a severity of its own, for an alert that could not be read
+on this device and a hunt that could not decide: it ranks above low, so
+not knowing never looks calmer than a minor alert.
 """
 
 from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from plugins.chat.siem_alerts import UNDECRYPTABLE
 
 SHOWN = 4
 _SEV_EMOJI = {"🚨": "critical", "🔴": "high", "🟠": "medium", "🟡": "low", "⚪": "info"}
 _SEV_WORD = re.compile(r"\b(critical|high|medium|low)\b", re.IGNORECASE)
-_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "unknown": 1.5, "low": 1, "info": 0}
 _MARKUP = re.compile(r"[*_`#>]+")
 
 
@@ -51,10 +57,16 @@ _ASSET_BULLET = re.compile(r"^\s*•\s*(.+?)\s*\(id\s*([^)]+)\)", re.IGNORECASE)
 _FIELD = re.compile(r"^\*(What|When|Source|Assessment):\*\s*(.+)$", re.IGNORECASE)
 _RULE_LEVEL = re.compile(r"rule\.level\s+(\d+|critical|high|medium|low|informational)", re.IGNORECASE)
 _SEVS = "critical|high|medium|low"
-# "**Severity:** High", "Severity: Medium", "(High Severity)", "of medium severity"
-_SEV_FIELD = re.compile(rf"severity\W{{0,6}}({_SEVS})\b|\b({_SEVS})\s+severity\b", re.IGNORECASE)
-_FINDING = re.compile(r"^\s*\d+\.\s+\*\*(?:Finding:\s*)?(.+?)\*\*", re.IGNORECASE)
-_SEV_SUFFIX = re.compile(rf"\s*\((?:{_SEVS})\s+severity\)\s*$", re.IGNORECASE)
+# Only the verdict's fields: a "- **Severity:** High" line, or a finding
+# header's "(High Severity)". Prose like "might be of medium severity" is
+# the model thinking aloud and changes from one run to the next.
+_SEV_LINE = re.compile(rf"^[\s\-•*]*severity[\s*]*:[\s*]*({_SEVS})\b", re.IGNORECASE)
+# "1. **Name**", "1. **Finding: Name**", "**Finding:** Name", "**Finding 2:**"
+_FINDING = re.compile(r"^\s*(?:\d+\.\s+\*\*(?:Finding:\s*)?(.+?)\*\*"
+                      r"|\*\*(Finding(?:\s+\d+)?):\*\*\s*(.*))", re.IGNORECASE)
+_GENERIC_FINDING = re.compile(r"^Finding(?:\s+\d+)?$", re.IGNORECASE)
+_DESCRIPTION = re.compile(r"^[\s\-•*]*description[\s*]*:[\s*]*(.+)$", re.IGNORECASE)
+_SEV_SUFFIX = re.compile(rf"\s*\(({_SEVS})\s+severity\)\s*$", re.IGNORECASE)
 
 
 def _level_severity(level: str) -> str:
@@ -123,18 +135,32 @@ def parse(body: str) -> dict:
     m_triage, m_result = _TRIAGE.match(_clean(first)), _RESULT.match(_clean(first))
     if m_triage:
         out["kind"], out["count"] = "triage", int(m_triage.group(1))
+        loose = []  # severity lines before any finding header
         for ln in lines:
             m = _FINDING.match(ln)
             if m:
-                out["findings"].append({"severity": "info", "name": _SEV_SUFFIX.sub("", _clean(m.group(1)))})
-            for m in _SEV_FIELD.finditer(ln):
-                sev = (m.group(1) or m.group(2)).lower()
-                if out["findings"] and out["findings"][-1]["severity"] == "info":
-                    out["findings"][-1]["severity"] = sev
+                name = _clean(m.group(1) or m.group(3) or m.group(2))
+                suffix = _SEV_SUFFIX.search(name)
+                out["findings"].append({"severity": suffix.group(1).lower() if suffix else None,
+                                        "name": _SEV_SUFFIX.sub("", name)})
+                continue
+            m = _DESCRIPTION.match(ln)
+            if m and out["findings"] and _GENERIC_FINDING.match(out["findings"][-1]["name"]):
+                # "**Finding 1:**" names nothing; its description does.
+                desc = _clean(m.group(1)).split(". ")[0].rstrip(".")
+                out["findings"][-1]["name"] = desc[:80] + ("…" if len(desc) > 80 else "")
+                continue
+            m = _SEV_LINE.match(_printable(ln))
+            if m:
+                if out["findings"] and out["findings"][-1]["severity"] is None:
+                    out["findings"][-1]["severity"] = m.group(1).lower()
                 elif not out["findings"]:
-                    out.setdefault("_loose", []).append(sev)
-        loose = out.pop("_loose", [])
-        out["severity"] = _worst([f["severity"] for f in out["findings"]] + loose)
+                    loose.append(m.group(1).lower())
+        # The worst stated severity; none stated at all: unknown.
+        stated = [f["severity"] for f in out["findings"] if f["severity"]] + loose
+        out["severity"] = _worst(stated) if stated else "unknown"
+        for f in out["findings"]:
+            f["severity"] = f["severity"] or "unknown"
         top = next((f["name"] for f in out["findings"] if f["severity"] == out["severity"]), "")
         n = out["count"]
         out["title"] = f"{n} alert{'s' if n != 1 else ''}{on}" + (f" — {top}" if top else "")
@@ -148,9 +174,12 @@ def parse(body: str) -> dict:
         out["verdict"] = m_result.group(1).strip().capitalize()
         out["fp"] = int(m_result.group(2)) if m_result.group(2) else None
         v = out["verdict"].lower()
-        out["severity"] = ("info" if "false" in v else "high" if "true" in v
-                           else _first_marker(first) if _first_marker(first) != "info" else "low")
+        # The result's 🟢/🟡/🔴 is the verdict's colour, not a severity:
+        # an inconclusive (or unadjudicated) hunt is unknown, not low.
+        out["severity"] = "info" if "false" in v else "high" if "true" in v else "unknown"
         out["title"] = f"{out['verdict']}: {out['what']}" if out["what"] else f"Hunt result: {out['verdict']}"
+    elif body.strip() == UNDECRYPTABLE:
+        out["severity"], out["title"] = "unknown", "Alert not readable on this device"
     else:
         out["severity"] = _first_marker(body)
         out["title"] = title(body)
@@ -188,7 +217,7 @@ def ago(ts: Optional[float], now: Optional[float] = None) -> str:
     return f"{days} day{'s' if days != 1 else ''} ago"
 
 
-_DOT = {"critical": "🚨", "high": "🔴", "medium": "🟠", "low": "🟡", "info": "⚪"}
+_DOT = {"critical": "🚨", "high": "🔴", "medium": "🟠", "unknown": "❔", "low": "🟡", "info": "⚪"}
 
 
 def detail_text(body: str) -> str:
@@ -227,39 +256,100 @@ def newest_first(alerts: list) -> list:
 # --------------------------------------------------------------------------
 
 DAYS = 7
-SEV_ORDER = ("critical", "high", "medium", "low", "info")
+SEV_ORDER = ("critical", "high", "medium", "unknown", "low", "info")
 
 
-def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
-    """One entry per local day, oldest first, ending today:
-    {"day": date, "count": n, "worst": severity or None}."""
-    today = datetime.fromtimestamp(now or time.time()).date()
-    first = today - timedelta(days=days - 1)
-    out = [{"day": first + timedelta(days=i), "count": 0, "worst": None} for i in range(days)]
+INCIDENT_GAP_S = 300  # events on one machine this close together are one incident
+# Zone names siemgent prints in *When:* ("2026-10-16 12:26:59 CEST").
+_TZ_HOURS = {"UTC": 0, "GMT": 0, "WET": 0, "WEST": 1, "BST": 1, "CET": 1, "CEST": 2,
+             "EET": 2, "EEST": 3, "MSK": 3, "EST": -5, "EDT": -4, "CST": -6, "CDT": -5,
+             "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
+_WHEN_ZONE = re.compile(r"^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d(?::\d\d)?)\s+([A-Z]{2,5})$")
+
+
+def event_time(when: str) -> Optional[float]:
+    """When the alerted event happened (epoch seconds), from a parsed
+    "when": an ISO time or window start, or "<local time> <zone>"."""
+    when = (when or "").split("→")[0].strip()
+    try:
+        t = datetime.fromisoformat(when.replace("Z", "+00:00"))
+        return t.timestamp() if t.tzinfo else None
+    except ValueError:
+        pass
+    m = _WHEN_ZONE.match(when)
+    if m and m.group(2) in _TZ_HOURS:
+        try:
+            t = datetime.fromisoformat(m.group(1)).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+        return t.timestamp() - _TZ_HOURS[m.group(2)] * 3600
+    return None
+
+
+def incidents(alerts: list) -> list:
+    """The alerts grouped by what they are about, oldest first.
+
+    siem-bot sends several messages per incident: a triage (sometimes
+    re-sent for the same window), then per finding an "Investigating" and
+    a hunt result. Messages about one machine whose events are at most
+    INCIDENT_GAP_S apart are one incident; a message with no machine or
+    event time is one on its own. Each: {"ts": first message, "severity":
+    the worst of its messages, "count": messages}."""
+    by_host: dict = {}
+    out = []
     for a in alerts or []:
         if not isinstance(a, dict) or not isinstance(a.get("ts"), (int, float)):
             continue
-        day = datetime.fromtimestamp(a["ts"]).date()
+        info = parse(a.get("body", ""))
+        host = (info["agent"] or info["host"]).lower()
+        et = event_time(info["when"])
+        if not host or et is None:
+            out.append({"ts": a["ts"], "severity": info["severity"], "count": 1})
+            continue
+        by_host.setdefault(host, []).append((et, a["ts"], info["severity"]))
+    for events in by_host.values():
+        events.sort()
+        last = None
+        for et, ts, sev in events:
+            if last is None or et - last > INCIDENT_GAP_S:
+                cur = {"ts": ts, "severity": sev, "count": 0}
+                out.append(cur)
+            cur["ts"] = min(cur["ts"], ts)
+            cur["severity"] = _worst((cur["severity"], sev))
+            cur["count"] += 1
+            last = et
+    return sorted(out, key=lambda i: i["ts"])
+
+
+def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
+    """Incidents per local day (by first message), oldest first, ending
+    today: {"day": date, "count": n, "worst": severity or None}."""
+    today = datetime.fromtimestamp(now or time.time()).date()
+    first = today - timedelta(days=days - 1)
+    out = [{"day": first + timedelta(days=i), "count": 0, "worst": None} for i in range(days)]
+    for inc in incidents(alerts):
+        day = datetime.fromtimestamp(inc["ts"]).date()
         if not first <= day <= today:
             continue
         slot = out[(day - first).days]
-        sev = severity(a.get("body", ""))
         slot["count"] += 1
-        if slot["worst"] is None or _SEV_RANK[sev] > _SEV_RANK[slot["worst"]]:
-            slot["worst"] = sev
+        if slot["worst"] is None or _SEV_RANK[inc["severity"]] > _SEV_RANK[slot["worst"]]:
+            slot["worst"] = inc["severity"]
     return out
 
 
 def breakdown(alerts: list, now: Optional[float] = None, days: int = DAYS) -> str:
-    """"2 high · 5 medium · 18 low" for the last *days* days, or "None"."""
+    """"7 incidents: 2 high · 5 medium" for the last *days* days, or "None"."""
     counts = dict.fromkeys(SEV_ORDER, 0)
     cutoff = datetime.fromtimestamp(now or time.time()).date() - timedelta(days=days - 1)
-    for a in alerts or []:
-        if (isinstance(a, dict) and isinstance(a.get("ts"), (int, float))
-                and datetime.fromtimestamp(a["ts"]).date() >= cutoff):
-            counts[severity(a.get("body", ""))] += 1
-    parts = [f"{n} {sev}" for sev, n in counts.items() if n]
-    return " · ".join(parts) or "None"
+    for inc in incidents(alerts):
+        if datetime.fromtimestamp(inc["ts"]).date() >= cutoff:
+            counts[inc["severity"]] += 1
+    total = sum(counts.values())
+    if not total:
+        return "None"
+    parts = " · ".join(f"{n} {sev}" for sev, n in counts.items() if n)
+    return f"{total} incident{'s' if total != 1 else ''}: {parts}"
 
 
 NOTIFY_SEVERITIES = ("critical", "high")
@@ -306,7 +396,8 @@ def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
     unread = max(0, min(int(unread or 0), len(alerts)))
     worst_new = max((_SEV_RANK[severity(a.get("body", ""))] for a in newest[:unread]), default=-1)
     if unread:
-        kind = "error" if worst_new >= _SEV_RANK["high"] else "warning" if worst_new >= 2 else "info"
+        kind = ("error" if worst_new >= _SEV_RANK["high"] else
+                "warning" if worst_new >= _SEV_RANK["unknown"] else "info")
         badge = (kind, f"{unread} new")
     else:
         badge = ("ok", "No new alerts")

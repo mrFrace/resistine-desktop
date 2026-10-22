@@ -120,22 +120,32 @@ if (-not (Test-Path $venvPython)) {
     Write-Host "Using existing virtual environment: $venvPython"
 }
 
+# $ErrorActionPreference doesn't cover native commands: a failed pip install
+# (e.g. a wheel that needs a compiler) would otherwise still yield an installer.
+function Invoke-VenvPython {
+    & $venvPython @args
+    if ($LASTEXITCODE -ne 0) {
+        throw "python $($args -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
 if (-not $SkipDependencyInstall) {
     Write-Host "Installing build/runtime dependencies into .venv..."
-    & $venvPython -m pip install --upgrade pip
-    & $venvPython -m pip install -r (Join-Path $ProjectRoot "scripts\requirements\requirements-windows.txt")
-    & $venvPython -m pip install pyinstaller
+    Invoke-VenvPython -m pip install --upgrade pip
+    Invoke-VenvPython -m pip install -r (Join-Path $ProjectRoot "scripts\requirements\requirements-windows.txt")
+    Invoke-VenvPython -m pip install pyinstaller
 }
 
 if (-not $SkipPyInstaller) {
     Write-Host "Building Windows application bundle with PyInstaller..."
-    & $venvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
+    Invoke-VenvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
 }
 
 $sourceDir = Join-Path $ProjectRoot "dist\Phoenix"
 if (-not (Test-Path (Join-Path $sourceDir "Phoenix.exe"))) {
     throw "Expected PyInstaller output not found at $sourceDir\Phoenix.exe"
 }
+Invoke-VenvPython (Join-Path $ProjectRoot "scripts\build\check_bundle.py") $sourceDir
 
 # Copy installer helper files into distribution directory
 Write-Host "Copying installer helper files..."

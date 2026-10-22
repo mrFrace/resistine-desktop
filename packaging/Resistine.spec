@@ -7,7 +7,8 @@ Swift components (CLI, XPC, Network Extension) are added by build script
 
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_all, collect_data_files, collect_dynamic_libs, collect_submodules)
 
 block_cipher = None
 IS_MACOS = sys.platform == "darwin"
@@ -77,6 +78,17 @@ hiddenimports = [
     'opentelemetry.trace',
 ]
 
+# Chat over Matrix. plugins/ ships as data, so PyInstaller never sees the chat
+# plugin's `from nio import ...`; without this the bundle has no nio and
+# matrix_transport.available() is False ("lacks Matrix encryption support").
+# nio.crypto picks its E2EE backend at import time (vodozemac, a Rust
+# extension), so collect both packages whole.
+hiddenimports += collect_submodules('nio')
+_vodozemac_datas, _vodozemac_binaries, _vodozemac_hidden = collect_all('vodozemac')
+datas += _vodozemac_datas
+hiddenimports += _vodozemac_hidden + [
+    'peewee', 'cachetools', 'atomicwrites', 'unpaddedbase64', 'jsonschema']
+
 if IS_MACOS:
     hiddenimports.extend([
         'keyring.backends.macOS',
@@ -102,7 +114,8 @@ if IS_WINDOWS:
 a = Analysis(
     [_src('main.py')],
     pathex=[base_path],
-    binaries=[(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else [],
+    binaries=_vodozemac_binaries + (
+        [(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else []),
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

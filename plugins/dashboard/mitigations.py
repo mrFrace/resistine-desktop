@@ -10,7 +10,8 @@ names what to fix, the evidence, and a condition from a closed vocabulary:
   server                   only the next daily scan can tell
 
 The app checks what it can locally and shows each item as to fix, fixed
-here (the next scan confirms it and the item disappears), can't check here,
+here (the next scan confirms it and the item disappears), restart needed
+(a kernel that is upgraded on disk but still running), can't check here,
 or decided by the next scan. The server is never trusted to run anything:
 items are re-validated here against the same strict shapes, unknown kinds
 and checks are dropped, and probes are fixed argv lists (no shell) with the
@@ -43,6 +44,13 @@ RECHECK_AFTER_S = 300
 
 # Item states
 OPEN, FIXED_HERE, UNKNOWN, SERVER, REMOTE = "open", "fixed_here", "unknown", "server", "remote"
+REBOOT = "reboot"  # the vulnerable kernel is gone from disk but still running
+
+# Kernel packages whose version is the running kernel's: deb names carry
+# the release ("linux-image-7.0.0-34-generic"), rpm versions it.
+_DEB_KERNEL = re.compile(r"linux-(?:image(?:-unsigned)?|modules(?:-extra)?)-(\d[A-Za-z0-9.+_~-]*)")
+_RPM_KERNEL = {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core",
+               "kernel-modules-extra", "kernel-default", "kernel-uek"}
 
 _results: dict = {}   # item id -> (state, checked_at)
 _lock = threading.Lock()
@@ -93,7 +101,8 @@ def validate(raw) -> Optional[dict]:
         "critical": _int(ev.get("critical")), "high": _int(ev.get("high")),
         "cves": [c for c in (ev.get("cves") or [])[:5] if isinstance(c, str) and CVE_RE.fullmatch(c)],
         "fixed_version": fixed if isinstance(fixed, str) and VERSION_RE.fullmatch(fixed) else None,
-        "fix_available": bool(ev.get("fix_available", True)),
+        # None: the scanner didn't say whether a fix exists.
+        "fix_available": ev["fix_available"] if isinstance(ev.get("fix_available"), bool) else None,
         "failed_checks": _int(ev.get("failed_checks")), "checks": _int(ev.get("checks")),
     }
     return {"id": item_id, "kind": kind, "severity": sev, "title": _plain(raw.get("title"), 120),
@@ -137,7 +146,7 @@ def _package_state(pkg: str, version: str, ptype: str) -> str:
         if r is None:
             return UNKNOWN
         if r.returncode == 1 and "no packages found" in (r.stderr or "").lower():
-            return FIXED_HERE  # removed
+            return _fixed_unless_running(pkg, version, ptype)  # removed
         if r.returncode != 0:
             return UNKNOWN
         installed = [line.split("|", 1)[1].strip() for line in r.stdout.splitlines()
@@ -150,14 +159,47 @@ def _package_state(pkg: str, version: str, ptype: str) -> str:
         if r is None:
             return UNKNOWN
         if r.returncode == 1 and "is not installed" in (r.stdout + r.stderr):
-            return FIXED_HERE
+            return _fixed_unless_running(pkg, version, ptype)
         if r.returncode != 0:
             return UNKNOWN
         installed = [line.strip() for line in r.stdout.splitlines() if line.strip()]
     if not installed:
-        return FIXED_HERE
+        return _fixed_unless_running(pkg, version, ptype)
     vulnerable = _strip_epoch0(version)
-    return OPEN if any(_strip_epoch0(v) == vulnerable for v in installed) else FIXED_HERE
+    if any(_strip_epoch0(v) == vulnerable for v in installed):
+        return OPEN
+    return _fixed_unless_running(pkg, version, ptype)
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read(512)
+    except OSError:
+        return ""
+
+
+def _fixed_unless_running(pkg: str, version: str, ptype: str) -> str:
+    """FIXED_HERE, or REBOOT when *pkg* at *version* is the running kernel:
+    upgrading or removing the package doesn't replace a booted kernel."""
+    release = platform.release()
+    if ptype == "deb":
+        m = _DEB_KERNEL.fullmatch(pkg)
+        if not m or m.group(1) != release:
+            return FIXED_HERE
+        # Same ABI name, rebuilt package: Ubuntu names the running build
+        # ("Ubuntu 7.0.0-34.34-generic 7.0.0"); elsewhere the name decides.
+        parts = _read("/proc/version_signature").split()
+        if len(parts) >= 2:
+            v = _strip_epoch0(version)
+            if parts[1] != v and not parts[1].startswith(v + "-"):
+                return FIXED_HERE
+        return REBOOT
+    if pkg in _RPM_KERNEL:
+        v = _strip_epoch0(version)
+        if release == v or release.startswith(v + "."):  # "6.8.5-301.fc40.x86_64"
+            return REBOOT
+    return FIXED_HERE
 
 
 def _service_state() -> str:
@@ -220,11 +262,14 @@ def cached(card: dict, this_machine: bool) -> list:
 def summary(states: list) -> str:
     """'3 to fix · 1 fixed here' for the panel's row."""
     n_open = sum(1 for _, s in states if s == OPEN)
+    n_reboot = sum(1 for _, s in states if s == REBOOT)
     n_fixed = sum(1 for _, s in states if s == FIXED_HERE)
-    n_other = len(states) - n_open - n_fixed
+    n_other = len(states) - n_open - n_reboot - n_fixed
     parts = []
     if n_open:
         parts.append(f"{n_open} to fix")
+    if n_reboot:
+        parts.append(f"{n_reboot} restart needed")
     if n_fixed:
         parts.append(f"{n_fixed} fixed here")
     if n_other:
@@ -246,7 +291,7 @@ def detail_line(item: dict) -> str:
         installed = f"installed {c['version']}"
         if ev["fixed_version"]:
             installed += f", fixed in {ev['fixed_version']}"
-        elif not ev["fix_available"]:
+        elif ev["fix_available"] is False:
             installed += ", no fix released yet"
         bits.append(installed)
         return " · ".join(bits)

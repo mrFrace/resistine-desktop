@@ -2,6 +2,8 @@
 MatrixService routing of alert-room messages away from the chat turn."""
 
 import asyncio
+import os
+import stat
 from types import SimpleNamespace
 
 import pytest
@@ -65,6 +67,24 @@ class TestStore:
         assert len(again.all()) == siem_alerts.MAX_ALERTS
         assert again.all()[-1]["body"] == f"a{siem_alerts.MAX_ALERTS + 4}"
 
+    def test_late_key_replaces_the_placeholder(self, fresh):
+        seen = []
+        siem_alerts.subscribe(seen.append)
+        assert siem_alerts.publish("!r", "$1", siem_alerts.UNDECRYPTABLE, 1_000_000)
+        siem_alerts.store().mark_read()
+        assert not siem_alerts.publish("!r", "$1", siem_alerts.UNDECRYPTABLE)  # still no key
+        assert siem_alerts.publish("!r", "$1", "the real alert", 2_000_000)
+        (only,) = siem_alerts.store().all()
+        assert (only["body"], only["ts"]) == ("the real alert", 1_000)  # same place, same time
+        assert siem_alerts.store().unread == 1 and seen[-1]["body"] == "the real alert"
+        assert not siem_alerts.publish("!r", "$1", "a different text")  # real text is final
+        assert not siem_alerts.publish("!r", "$1", siem_alerts.UNDECRYPTABLE)
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+    def test_store_is_owner_only(self, fresh):
+        siem_alerts.publish("!r", "$1", "hostnames and paths")
+        assert stat.S_IMODE(os.stat(siem_alerts.store().path).st_mode) == 0o600
+
     def test_a_failing_listener_does_not_stop_the_others(self, fresh):
         seen = []
         siem_alerts.subscribe(lambda a: 1 / 0)
@@ -118,6 +138,30 @@ class TestService:
         asyncio.run(svc._on_undecryptable(SimpleNamespace(room_id="!alerts:phoenix.exposed"),
                                           _ev(BOT, "$u")))
         assert siem_alerts.store().all()[0]["body"] == siem_alerts.UNDECRYPTABLE
+
+    def test_undecryptable_alert_is_retried_when_its_key_arrives(self, fresh):
+        svc = _service()
+        requested = []
+        decrypted = {"ok": False}
+
+        async def request_room_key(event):
+            requested.append(event.event_id)
+
+        def decrypt_event(event):
+            if not decrypted["ok"]:
+                raise mt.MatrixTransportError("no key")  # nio: EncryptionError
+            return SimpleNamespace(body="the real alert")
+
+        svc._client = SimpleNamespace(request_room_key=request_room_key, decrypt_event=decrypt_event)
+        asyncio.run(svc._on_undecryptable(SimpleNamespace(room_id="!alerts:phoenix.exposed"),
+                                          _ev(BOT, "$u")))
+        assert requested == ["$u"]
+        svc._retry_pending_alerts()
+        assert siem_alerts.store().all()[0]["body"] == siem_alerts.UNDECRYPTABLE
+        decrypted["ok"] = True
+        svc._retry_pending_alerts()
+        assert [a["body"] for a in siem_alerts.store().all()] == ["the real alert"]
+        assert svc._pending_alerts == {}
 
 
 # --------------------------------------------------------------------------- rooms joined elsewhere
