@@ -944,7 +944,27 @@ class Plugin(BasePlugin):
             pass
 
     def on_screen_shown(self):
+        self._show_tiles()
         self.refresh()
+
+    def _show_tiles(self) -> None:
+        """Back to the tiles: the sidebar's Dashboard button always opens the
+        Dashboard itself, not a detail page left open before (no slide: the
+        screen is changing anyway)."""
+        if self._views is None:
+            return
+        pages = [self._mitigation_page, self._detail[0] if self._detail is not None else None]
+        self._mitigation_page = None
+        self._detail = None
+        self._recheck_btn = None
+        try:
+            self._views.home()
+            for page in pages:
+                if page is not None:
+                    self._views.removeWidget(page)
+                    page.deleteLater()
+        except RuntimeError:  # screen rebuilt meanwhile
+            self._views = None
 
     def destroy(self):
         if self._timer is not None:

@@ -490,6 +490,13 @@ class SlideStack(QStackedWidget):
     def push(self, page: QWidget) -> None:
         self._slide_to(page, forward=True)
 
+    def home(self) -> None:
+        """Show the first page at once (no slide), ending any slide."""
+        if self._anim is not None:
+            self._anim.stop()
+            self._finish()
+        self.setCurrentIndex(0)
+
     def back(self, page: QWidget | None = None) -> None:
         self._slide_to(page if page is not None else self.widget(0),
                        forward=False)
