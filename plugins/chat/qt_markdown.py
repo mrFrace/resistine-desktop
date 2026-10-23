@@ -34,23 +34,80 @@ _LIST_RE = re.compile(r"^\s*([-*+]|\d+\.)\s+")
 _HEADING_PX = {1: 18, 2: 16, 3: 15, 4: 14, 5: 14, 6: 14}
 
 
+_FENCE_RE = re.compile(r"^(\s*)(```|~~~)")
+
+
+def _normalize_lists(md: str) -> str:
+    """Re-indent lists and the code fences inside them for python-markdown.
+
+    Models indent sub-items by 2 or 3 spaces; python-markdown wants 4 per
+    level, or the items fold into the parent's paragraph as "- foo" lines.
+    And it only knows fences at the left margin: one inside a list item
+    became inline code, its lines run together. So list lines are put on a
+    4-space grid, and a fence in a list becomes an indented code block
+    (8 spaces past its item's text), which python-markdown does nest.
+    """
+    out: list[str] = []
+    stack: list[int] = []      # source indents of the open list levels
+    fence = None               # (marker, source indent, output indent) in a list fence
+    top_fence = None           # marker of a fence at the left margin
+    for ln in md.split("\n"):
+        if top_fence:
+            out.append(ln)
+            if ln.strip().startswith(top_fence):
+                top_fence = None
+            continue
+        if fence:
+            marker, src, dst = fence
+            if ln.strip().startswith(marker) and not ln.strip().strip(marker[0]):
+                fence = None
+                out.append("")
+            else:
+                body = ln[src:] if ln[:src].strip() == "" else ln.lstrip()
+                out.append(" " * dst + body if body.strip() else "")
+            continue
+        if not ln.strip():
+            out.append(ln)
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        m = _FENCE_RE.match(ln)
+        if m:
+            if stack and indent > 0:
+                depth = sum(1 for i in stack if i < indent)
+                fence = (m.group(2), indent, 4 * depth + 4)
+                out.append("")
+                continue
+            stack.clear()
+            top_fence = m.group(2)
+            out.append(ln)
+            continue
+        if _LIST_RE.match(ln):
+            # python-markdown + nl2br needs a blank line before a list or the
+            # items fold into the previous paragraph as <br> lines.
+            if out and out[-1].strip() and not _LIST_RE.match(out[-1]):
+                out.append("")
+            while stack and stack[-1] > indent:
+                stack.pop()
+            if not stack or stack[-1] < indent:
+                stack.append(indent)
+            out.append(" " * (4 * (len(stack) - 1)) + ln.lstrip())
+            continue
+        if indent and stack:
+            # Continuation text of the innermost item that starts left of it.
+            depth = sum(1 for i in stack if i < indent)
+            out.append(" " * (4 * depth) + ln.lstrip())
+            continue
+        stack.clear()
+        out.append(ln)
+    return "\n".join(out)
+
+
 def _preprocess(md: str) -> str:
     """Fix up model markdown before parsing."""
     # The backend injects tool status as a blockquote ("> Running foo…"),
     # which Qt renders indented — strip the quote marker on those lines only.
     md = re.sub(r"(?m)^\s*>\s*(?=Running\b)", "", md)
-
-    # python-markdown + nl2br needs a blank line before a list or the items
-    # fold into the previous paragraph as <br> lines. Insert one when a list
-    # starts right after a non-list, non-blank line.
-    out: list[str] = []
-    for ln in md.split("\n"):
-        if _LIST_RE.match(ln) and out:
-            prev = out[-1]
-            if prev.strip() and not _LIST_RE.match(prev):
-                out.append("")
-        out.append(ln)
-    return "\n".join(out)
+    return _normalize_lists(md)
 
 
 def _demote_headings(html: str) -> str:
