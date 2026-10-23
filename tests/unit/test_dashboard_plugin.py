@@ -398,7 +398,7 @@ class TestScreen:
 
 
 # ===========================================================================
-# Movable panels: gapless masonry grid, drag to reorder
+# Movable panels: unit grid, drag to move, right edge to resize
 # ===========================================================================
 
 @pytest.mark.unit
@@ -408,42 +408,46 @@ class TestPanelLayout:
         assert dash.panel_order(None) == dash.DEFAULT_ORDER
         assert dash.panel_order("junk") == dash.DEFAULT_ORDER
 
-    def test_masonry_fills_the_shortest_column(self):
-        # The screenshot case: posture tall, endpoint/ai short, system tall.
-        assert dash.masonry_columns([360, 260, 220, 330], 3) == [0, 1, 2, 2]
-        assert dash.masonry_columns([100, 100, 100, 100], 2) == [0, 1, 0, 1]
-        assert dash.masonry_columns([100, 100], 1) == [0, 0]
-
-    @pytest.mark.parametrize("key,target,after,expect", [
-        ("system", "posture", False, ["system", "posture", "alerts", "antivirus", "vpn", "endpoint", "ai"]),
-        ("posture", "ai", True, ["alerts", "antivirus", "vpn", "endpoint", "ai", "posture", "system"]),
-        ("posture", None, False, ["alerts", "antivirus", "vpn", "endpoint", "ai", "system", "posture"]),
-        ("ai", "ai", False, dash.DEFAULT_ORDER),
-        ("nope", "ai", False, dash.DEFAULT_ORDER),
-    ])
-    def test_move_panel(self, key, target, after, expect):
-        assert dash.move_panel(dash.DEFAULT_ORDER, key, target, after) == expect
-
-    def test_grid_packs_and_reorders(self, qapp):
+    def test_grid_places_tiles_and_drop_moves_one(self, qapp):
         from PyQt6.QtCore import QMimeData, QPointF, Qt
         from PyQt6.QtGui import QDropEvent
 
         panels = {k: dash._Panel(k, "/nonexistent.png", key=k) for k in dash.DEFAULT_ORDER}
         saved = []
-        grid = dash._PanelGrid(panels, list(dash.DEFAULT_ORDER), saved.append)
-        grid.resize(1300, 900)
-        grid.relayout()
-        assert len(grid._cols) == 3  # 1300 px -> 3 columns
+        grid = dash._PanelGrid(panels, list(dash.DEFAULT_ORDER), lambda order, lay: saved.append((order, lay)))
+        grid.resize(1500, 900)
+        grid.relayout(animate=False)
+        assert grid._units == 6  # 1500 px -> 6 units of ~237 px
+        assert panels["posture"].width() > panels["vpn"].width()  # wide by default
         grid.show()
         qapp.processEvents()
-        target = panels["posture"].geometry()
         mime = QMimeData()
         mime.setData(dash._PANEL_MIME, b"system")
-        drop = QDropEvent(QPointF(target.center().x(), target.top() + 5), Qt.DropAction.MoveAction,
+        panels["system"].grab_offset = dash.QPoint(0, 0)
+        drop = QDropEvent(QPointF(1, 1), Qt.DropAction.MoveAction,
                           mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
         grid.dropEvent(drop)
-        assert saved == [["system", "posture", "alerts", "antivirus", "vpn", "endpoint", "ai"]]
+        order, layout = saved[-1]
+        assert order[0] == "system" and layout == {"system": {"col": 0}}
+        assert grid._placed["system"][:3] == (0, 2, 0)
         grid.hide()
+
+    def test_resize_by_the_right_edge(self, qapp):
+        panels = {k: dash._Panel(k, "/nonexistent.png", key=k) for k in dash.DEFAULT_ORDER}
+        saved = []
+        grid = dash._PanelGrid(panels, list(dash.DEFAULT_ORDER), lambda order, lay: saved.append((order, lay)))
+        grid.resize(1500, 900)
+        grid.relayout(animate=False)
+        key = next(k for k, (c, s, _, _) in grid._placed.items() if s == 2 and c + s < grid._units)
+        col, span = grid._placed[key][:2]
+        step = grid._unit_w() + dash._GAP
+        right = int((col + span + 1) * step)  # drag one unit wider
+        grid._resize_from(key, right, False)
+        assert grid._placed[key][1] == span + 1 and grid._overlay.chip is not None
+        grid._resize_from(key, right, True)
+        assert saved[-1][1][key] == {"span": span + 1, "col": col} and grid._overlay.chip is None
+        grid._resize_from(key, None, True)  # double-click: default width
+        assert "span" not in saved[-1][1].get(key, {})
 
     def test_saved_order_is_used_and_reset_shows(self, qapp, isolated_settings, dashboard_plugin, monkeypatch):
         monkeypatch.setattr(dash.Plugin, "refresh", lambda self: None)
@@ -452,7 +456,8 @@ class TestPanelLayout:
         screen = dashboard_plugin.create_main_screen()
         assert dashboard_plugin._grid._order == ["system", "ai", "posture", "alerts", "antivirus", "vpn", "endpoint"]
         assert not dashboard_plugin._reset_layout.isHidden()
-        dashboard_plugin._save_order(list(dash.DEFAULT_ORDER))
+        dashboard_plugin._save_layout(list(dash.DEFAULT_ORDER), {})
         assert isolated_settings.get("dashboard", "panel_order") == dash.DEFAULT_ORDER
+        assert isolated_settings.get("dashboard", "panel_layout") == {}
         assert dashboard_plugin._reset_layout.isHidden() and screen is not None
         dashboard_plugin.destroy()

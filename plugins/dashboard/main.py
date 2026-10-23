@@ -21,7 +21,8 @@ import time
 import webbrowser
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import (QEasingCurve, QMimeData, QPoint, QPointF, QPropertyAnimation, QRect,
+                          QRectF, QSize, Qt, QTimer)
 from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -44,7 +45,7 @@ from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
-from plugins.dashboard import mitigations, posture, protection
+from plugins.dashboard import mitigations, posture, protection, tile_layout
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -212,13 +213,21 @@ _PANEL_MIME = "application/x-phoenix-dashboard-panel"
 
 class _Panel(QFrame):
     """Card with an icon tile, title, status pill and key/value rows. Drag
-    it by its header to move it (the grid re-aligns)."""
+    it by its header to move it; drag its right edge to make it wider or
+    narrower (the grid, _PanelGrid, places it)."""
+
+    _EDGE = 10  # px at the right edge that resize instead of drag
 
     def __init__(self, title: str, icon_path: str, on_open=None, key: str = "", on_row=None):
         super().__init__()
         self.key = key
+        self.title = title
         self._on_row = on_row  # on_row(id) for rows listed in data["ids"]
         self._press: QPoint | None = None
+        self._resizing = False
+        self._edge_hover = False
+        self.on_resize = None  # grid callback: on_resize(key, x in the grid, done)
+        self.grab_offset = QPoint(0, 0)  # where the drag picked the panel up
         self.setMouseTracking(True)  # open-hand cursor over the header
         self.setObjectName("Surface")
         self.setMinimumWidth(260)
@@ -282,22 +291,57 @@ class _Panel(QFrame):
         self._head.insertWidget(self._controls_at + 1, widget, 0, Qt.AlignmentFlag.AlignVCenter)
         return widget
 
-    # ---- drag by the header ------------------------------------------------
+    # ---- drag by the header, resize by the right edge ----------------------
+    def _on_edge(self, pos: QPoint) -> bool:
+        return self.on_resize is not None and pos.x() >= self.width() - self._EDGE
+
     def _in_header(self, pos: QPoint) -> bool:
-        return pos.y() <= 64
+        return pos.y() <= 64 and not self._on_edge(pos)
+
+    def _set_edge_hover(self, on: bool) -> None:
+        if on != self._edge_hover:
+            self._edge_hover = on
+            self.update()
+
+    def _grid_x(self, e) -> int:
+        return self.mapToParent(e.position().toPoint()).x()
 
     def mousePressEvent(self, e):  # noqa: N802
-        if e.button() == Qt.MouseButton.LeftButton and self._in_header(e.position().toPoint()):
-            self._press = e.position().toPoint()
+        pos = e.position().toPoint()
+        if e.button() == Qt.MouseButton.LeftButton and self._on_edge(pos):
+            self._resizing = True
+            self.update()
+            return
+        if e.button() == Qt.MouseButton.LeftButton and self._in_header(pos):
+            self._press = pos
         super().mousePressEvent(e)
 
+    def mouseDoubleClickEvent(self, e):  # noqa: N802
+        if self._on_edge(e.position().toPoint()):
+            self.on_resize(self.key, None, True)  # back to the default width
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        if not self._resizing:
+            self._set_edge_hover(False)
+        super().leaveEvent(e)
+
     def mouseMoveEvent(self, e):  # noqa: N802
+        pos = e.position().toPoint()
+        if self._resizing:
+            self.on_resize(self.key, self._grid_x(e), False)
+            return
         if self._press is None or not (e.buttons() & Qt.MouseButton.LeftButton):
-            self.setCursor(Qt.CursorShape.OpenHandCursor if self._in_header(e.position().toPoint())
+            edge = self._on_edge(pos)
+            self._set_edge_hover(edge)
+            self.setCursor(Qt.CursorShape.SizeHorCursor if edge
+                           else Qt.CursorShape.OpenHandCursor if self._in_header(pos)
                            else Qt.CursorShape.ArrowCursor)
             return super().mouseMoveEvent(e)
-        if (e.position().toPoint() - self._press).manhattanLength() < QApplication.startDragDistance():
+        if (pos - self._press).manhattanLength() < QApplication.startDragDistance():
             return
+        self.grab_offset = self._press
         self._press = None
         drag = QDrag(self)
         mime = QMimeData()
@@ -314,8 +358,26 @@ class _Panel(QFrame):
             self.setEnabled(True)
 
     def mouseReleaseEvent(self, e):  # noqa: N802
+        if self._resizing:
+            self._resizing = False
+            self._set_edge_hover(self._on_edge(e.position().toPoint()))
+            self.on_resize(self.key, self._grid_x(e), True)
+            self.update()
+            return
         self._press = None
         super().mouseReleaseEvent(e)
+
+    def paintEvent(self, e):  # noqa: N802
+        super().paintEvent(e)
+        if not (self._edge_hover or self._resizing):
+            return
+        # The resize grip: a short accent bar in the middle of the right edge.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.color("sidebar_active_text")))
+        p.drawRoundedRect(QRectF(self.width() - 7, self.height() / 2 - 22, 4, 44), 2, 2)
+        p.end()
 
     def set_data(self, data: dict | None) -> None:
         for lay in (self._grid, self._extras):
@@ -499,7 +561,8 @@ class _AlertText(QTextBrowser):
 
 
 DEFAULT_ORDER = ["posture", "alerts", "antivirus", "vpn", "endpoint", "ai", "system"]
-_GAP = 16
+_GAP = tile_layout.GAP
+_MOVE_MS = 160  # tiles glide to a new place instead of jumping
 
 
 def panel_order(saved, keys=DEFAULT_ORDER) -> list:
@@ -508,120 +571,221 @@ def panel_order(saved, keys=DEFAULT_ORDER) -> list:
     return list(dict.fromkeys(saved)) + [k for k in keys if k not in saved]
 
 
-def masonry_columns(heights: list, n_cols: int) -> list:
-    """Column per panel, in order: each goes into the shortest column so far
-    (ties: leftmost). Gapless however tall the panels are."""
-    totals = [0] * max(1, n_cols)
-    cols = []
-    for h in heights:
-        i = totals.index(min(totals))
-        cols.append(i)
-        totals[i] += h + _GAP
-    return cols
+class _DropOverlay(QWidget):
+    """Over the grid: the dashed outline where a dragged tile will land, and
+    the width chip while a tile is resized."""
 
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.target: QRect | None = None
+        self.chip: QRect | None = None
+        self.chip_text = ""
 
-def move_panel(order: list, key: str, target: str | None, after: bool) -> list:
-    """Move ``key`` before/after ``target`` (None: to the end)."""
-    if key not in order or key == target:
-        return list(order)
-    rest = [k for k in order if k != key]
-    if target is None or target not in rest:
-        return rest + [key]
-    i = rest.index(target) + (1 if after else 0)
-    return rest[:i] + [key] + rest[i:]
+    def paintEvent(self, e):  # noqa: N802
+        if self.target is None and self.chip is None:
+            return
+        accent = QColor(theme.color("sidebar_active_text"))
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.target is not None:
+            fill = QColor(accent)
+            fill.setAlpha(28)
+            p.setBrush(fill)
+            p.setPen(QPen(accent, 2, Qt.PenStyle.DashLine))
+            p.drawRoundedRect(QRectF(self.target).adjusted(1, 1, -1, -1), 14, 14)
+        if self.chip is not None:
+            fill = QColor(accent)
+            fill.setAlpha(60)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(QRectF(self.chip), 11, 11)
+            p.setPen(accent)
+            p.drawText(QRectF(self.chip), Qt.AlignmentFlag.AlignCenter, self.chip_text)
+        p.end()
 
 
 class _PanelGrid(QWidget):
-    """Gapless grid: 1-4 columns by width, panels in the user's order, each
-    placed in the shortest column. Accepts panel drops to reorder."""
+    """The Dashboard's tiles on a unit grid (tile_layout.py): each tile as
+    wide as its span, as tall as its content, in the user's order. A tile is
+    moved by dragging its header (a dashed outline shows where it lands) and
+    resized by dragging its right edge; tiles glide to new places."""
 
-    # Width per column: a panel needs ~420 px for its title, pill and Open
-    # link and for unbreakable values (hostnames, paths) without clipping.
-    _CARD_STEP = 420
-
-    def __init__(self, panels: dict, order: list, on_reorder):
+    def __init__(self, panels: dict, order: list, on_change, layout: dict | None = None):
         super().__init__()
         self.setObjectName("Transparent")
         self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._panels = panels
         self._order = order
-        self._on_reorder = on_reorder
-        self._placed: tuple | None = None
-        self._row = QHBoxLayout(self)
-        self._row.setContentsMargins(0, 0, 0, 0)
-        self._row.setSpacing(_GAP)
-        self._cols: list = []
+        self._layout = tile_layout.clean_layout(layout or {}, list(panels))
+        self._on_change = on_change  # on_change(order, layout)
+        self._units: int | None = None
+        self._placed: dict = {}
+        self._anims: dict = {}
+        self._drop = None  # (order, layout) the current drag would make
+        for p in panels.values():
+            p.setParent(self)
+            p.on_resize = self._resize_from
+            p.show()
+        self._overlay = _DropOverlay(self)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(60)
         self._debounce.timeout.connect(self.relayout)
-        self.relayout()
+        self.relayout(animate=False)
+
+    @property
+    def layout_state(self) -> dict:
+        return {k: dict(v) for k, v in self._layout.items()}
 
     def schedule(self) -> None:
         self._debounce.start()
 
-    def set_order(self, order: list) -> None:
+    def set_order(self, order: list, layout: dict | None = None) -> None:
         self._order = order
-        self._placed = None
+        if layout is not None:
+            self._layout = tile_layout.clean_layout(layout, list(self._panels))
         self.relayout()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        self.schedule()
+        self._overlay.setGeometry(self.rect())
+        if e.size().width() != e.oldSize().width():  # our own height changes don't count
+            self.schedule()
 
-    def _n_cols(self) -> int:
-        return max(1, min(4, len(self._order), max(1, self.width()) // self._CARD_STEP))
+    # ---- placement --------------------------------------------------------------
+    def _unit_w(self) -> float:
+        return tile_layout.unit_width(self.width(), self._units or tile_layout.MIN_UNITS)
 
-    def relayout(self) -> None:
-        n = self._n_cols()
-        col_w = max(1, (self.width() - _GAP * (n - 1)) // n)
-        panels = [self._panels[k] for k in self._order]
-        heights = [p.heightForWidth(col_w) if p.hasHeightForWidth() else p.sizeHint().height()
-                   for p in panels]
-        cols = masonry_columns(heights, n)
-        placed = (n, tuple(self._order), tuple(cols))
-        if placed == self._placed:
+    def _span_w(self, span: int) -> int:
+        return int(span * self._unit_w() + (span - 1) * _GAP)
+
+    def _height(self, key: str, span: int) -> int:
+        p = self._panels[key]
+        w = self._span_w(span)
+        lay = p.layout()
+        h = lay.totalHeightForWidth(w) if lay is not None and lay.hasHeightForWidth() else -1
+        return max(h, p.minimumSizeHint().height())
+
+    def _place(self, order: list, layout: dict) -> tuple[dict, int]:
+        return tile_layout.place(order, layout, self._units, self._height)
+
+    def _rect(self, col: int, span: int, top: int, h: int) -> QRect:
+        x = int(round(col * (self._unit_w() + _GAP)))
+        return QRect(x, top, self._span_w(span), h)
+
+    def relayout(self, animate: bool = True) -> None:
+        if self._drop is not None:
+            return  # a drag preview is showing; the drop or leave lays out
+        self._units = tile_layout.units_for(max(1, self.width()), self._units)
+        self._placed, total = self._place(self._order, self._layout)
+        self.setFixedHeight(max(1, total))
+        visible = animate and self.isVisible()
+        for key, spot in self._placed.items():
+            self._move(self._panels[key], self._rect(*spot), visible)
+
+    def _move(self, panel, rect: QRect, animate: bool) -> None:
+        old = self._anims.pop(panel.key, None)
+        if old is not None:
+            old.stop()
+        if not animate or panel.geometry() == rect or panel.geometry().isEmpty():
+            panel.setGeometry(rect)
             return
-        self._placed = placed
-        for col in self._cols:
-            for p in panels:
-                col.removeWidget(p)
-        while len(self._cols) < n:
-            col = QVBoxLayout()
-            col.setSpacing(_GAP)
-            col.addStretch(1)
-            self._row.addLayout(col, 1)
-            self._cols.append(col)
-        while len(self._cols) > n:
-            col = self._cols.pop()
-            self._row.removeItem(col)
-            col.deleteLater()
-        for p, c in zip(panels, cols):
-            col = self._cols[c]
-            col.insertWidget(col.count() - 1, p)
+        anim = QPropertyAnimation(panel, b"geometry", self)
+        anim.setDuration(_MOVE_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(panel.geometry())
+        anim.setEndValue(rect)
+        anim.start()
+        self._anims[panel.key] = anim
+
+    # ---- resize by the right edge ------------------------------------------------
+    def _resize_from(self, key: str, x: int | None, done: bool) -> None:
+        col, span = self._placed[key][0], self._placed[key][1]
+        if x is None:  # double-click: back to the default width
+            layout = {k: dict(v) for k, v in self._layout.items()}
+            layout.get(key, {}).pop("span", None)
+            self._layout = {k: v for k, v in layout.items() if v}
+        else:
+            step = self._unit_w() + _GAP
+            left = col * step
+            want = int(round((x - left + _GAP) / step))
+            want = max(tile_layout.MIN_SPAN, min(want, self._units - col))
+            if want != span:
+                self._layout = tile_layout.resize(self._layout, key, want, col)
+        self.relayout()
+        if done:
+            self._overlay.chip = None
+            self._on_change(list(self._order), self.layout_state)
+        else:
+            r = self._rect(*self._placed[key])
+            self._overlay.chip = QRect(r.right() - 78, r.bottom() - 34, 58, 22)
+            self._overlay.chip_text = tile_layout.width_label(self._placed[key][1]) + "  ↔"
+        self._overlay.raise_()
+        self._overlay.update()
 
     # ---- drops ----------------------------------------------------------------
+    def _drop_at(self, key: str, pos: QPoint) -> tuple[list, dict]:
+        panel = self._panels.get(key)
+        left = pos.x() - (panel.grab_offset.x() if panel is not None else 0)
+        top = pos.y() - (panel.grab_offset.y() if panel is not None else 0)
+        col = int(round(left / (self._unit_w() + _GAP)))
+        span = self._placed[key][1] if key in self._placed else tile_layout.MIN_SPAN
+        col = max(0, min(col, self._units - span))
+        return tile_layout.drop(self._order, self._layout, key, col, top, self._placed)
+
+    def _key_of(self, e) -> str | None:
+        if not e.mimeData().hasFormat(_PANEL_MIME):
+            return None
+        key = bytes(e.mimeData().data(_PANEL_MIME)).decode()
+        return key if key in self._panels else None
+
     def dragEnterEvent(self, e):  # noqa: N802
-        if e.mimeData().hasFormat(_PANEL_MIME):
+        if self._key_of(e):
             e.acceptProposedAction()
 
     def dragMoveEvent(self, e):  # noqa: N802
-        if e.mimeData().hasFormat(_PANEL_MIME):
-            e.acceptProposedAction()
+        key = self._key_of(e)
+        if not key:
+            return
+        e.acceptProposedAction()
+        drop = self._drop_at(key, e.position().toPoint())
+        if drop == self._drop:
+            return
+        # Preview: the others glide aside and the (dimmed) tile sits where it
+        # would land, under the outline. The drop point is worked out against
+        # the committed layout, so the preview can't chase the mouse.
+        self._drop = drop
+        placed, total = self._place(*drop)
+        self.setFixedHeight(max(1, total, self.height()))
+        for k, spot in placed.items():
+            self._move(self._panels[k], self._rect(*spot), True)
+        self._overlay.target = self._rect(*placed[key])
+        self._overlay.raise_()
+        self._overlay.update()
+
+    def dragLeaveEvent(self, e):  # noqa: N802
+        self._drop = None
+        self._overlay.target = None
+        self._overlay.update()
+        self.relayout()  # back to the committed layout
 
     def dropEvent(self, e):  # noqa: N802
-        key = bytes(e.mimeData().data(_PANEL_MIME)).decode()
-        pos = e.position().toPoint()
-        target, after = None, False
-        for k, p in self._panels.items():
-            if p.geometry().contains(pos):
-                target, after = k, pos.y() > p.geometry().center().y()
-                break
-        order = move_panel(self._order, key, target, after)
+        key = self._key_of(e)
+        self._drop = None  # the preview ends either way
+        self._overlay.target = None
+        self._overlay.update()
+        if not key:
+            self.relayout()
+            return
+        order, layout = self._drop_at(key, e.position().toPoint())
         e.acceptProposedAction()
-        if order != self._order:
-            self.set_order(order)
-            self._on_reorder(order)
+        changed = order != self._order or layout != self._layout
+        self._order, self._layout = order, layout
+        self.relayout()
+        if changed:
+            self._on_change(list(order), self.layout_state)
 
 
 class Plugin(BasePlugin):
@@ -702,8 +866,9 @@ class Plugin(BasePlugin):
         self._reset_layout = QPushButton("Reset layout")
         self._reset_layout.setObjectName("Link")
         self._reset_layout.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reset_layout.setToolTip("Drag panels by their header to move them")
-        self._reset_layout.clicked.connect(lambda: self._save_order(list(DEFAULT_ORDER)))
+        self._reset_layout.setToolTip("Drag panels by their header to move them, "
+                                      "and by their right edge to resize them")
+        self._reset_layout.clicked.connect(lambda: self._save_layout(list(DEFAULT_ORDER), {}))
         head.addWidget(self._reset_layout, 0, Qt.AlignmentFlag.AlignVCenter)
         site = QPushButton("phoenix.exposed ↗")
         site.setObjectName("Link")
@@ -754,8 +919,9 @@ class Plugin(BasePlugin):
             panel.set_data(self._data.get(key))
         self._subscribe_alerts()
         order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
-        self._grid = _PanelGrid(self._panels, order, self._save_order)
-        self._reset_layout.setVisible(order != DEFAULT_ORDER)
+        self._grid = _PanelGrid(self._panels, order, self._save_layout,
+                                app_settings.get("dashboard", "panel_layout"))
+        self._reset_layout.setVisible(order != DEFAULT_ORDER or bool(self._grid.layout_state))
         v.addWidget(self._grid)
         v.addStretch(1)
 
@@ -1121,13 +1287,16 @@ class Plugin(BasePlugin):
     def _refresh_after_toggle(self) -> None:
         self.refresh()
 
-    def _save_order(self, order: list) -> None:
+    def _save_layout(self, order: list, layout: dict) -> None:
+        """Keep the tiles' order and their spans/columns (Reset passes the
+        default order and no layout)."""
         from utils import settings as app_settings
         app_settings.set("dashboard", "panel_order", order)
+        app_settings.set("dashboard", "panel_layout", layout)
         try:
             if self._grid is not None:
-                self._grid.set_order(order)
-            self._reset_layout.setVisible(order != DEFAULT_ORDER)
+                self._grid.set_order(order, layout)
+            self._reset_layout.setVisible(order != DEFAULT_ORDER or bool(layout))
         except RuntimeError:  # screen rebuilt meanwhile
             pass
 
