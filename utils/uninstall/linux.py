@@ -197,12 +197,14 @@ def _remove_keyring_master_key():
         return
 
     from utils.settings import (LEGACY_MASTER_KEY_SERVICE, MASTER_KEY_SERVICE,
-                                MASTER_KEY_USERNAME)
+                                MASTER_KEY_USERNAME, MATRIX_STORE_KEY_SERVICE,
+                                MATRIX_STORE_KEY_USERNAME)
 
     from utils.encryption import KEYRING_SERVICE, LEGACY_KEYRING_SERVICE
 
     entries = [(service, MASTER_KEY_USERNAME)
                for service in (MASTER_KEY_SERVICE, LEGACY_MASTER_KEY_SERVICE)]
+    entries.append((MATRIX_STORE_KEY_SERVICE, MATRIX_STORE_KEY_USERNAME))
     entries += [(service, name)
                 for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE)
                 for name in ("encryption_key", "encrypted_data")]

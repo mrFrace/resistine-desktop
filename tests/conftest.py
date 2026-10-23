@@ -270,6 +270,17 @@ def allow_subprocess():
 # ---------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _isolate_settings_dir(request, tmp_path_factory, monkeypatch):
+    # An in-memory keyring for every test: code under test that keeps a key
+    # there (the master key, the chat store key) must not write the real
+    # one, where the app would then find a key its files were not written
+    # with. Tests that want to inspect it use the mock_keyring fixture.
+    store: dict = {}
+    kr = MagicMock()
+    kr.get_password.side_effect = lambda s, u: store.get((s, u))
+    kr.set_password.side_effect = lambda s, u, p: store.__setitem__((s, u), p)
+    kr.delete_password.side_effect = lambda s, u: store.pop((s, u), None)
+    monkeypatch.setattr("utils.settings.keyring", kr)
+    monkeypatch.setattr("utils.encryption.keyring", kr, raising=False)
     if request.node.get_closest_marker("real_config_dir"):
         yield  # tests of get_config_dir itself mock platform/env instead
         return

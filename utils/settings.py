@@ -11,6 +11,7 @@ It uses a hybrid approach:
 import json
 import os
 import platform
+import time
 from threading import RLock
 from typing import Any, Dict, List, Optional
 
@@ -28,6 +29,12 @@ MASTER_KEY_USERNAME = "master-key"
 # Pre-rebrand names. Read once to migrate existing installs, never written.
 LEGACY_APP_NAME = "Resistine"
 LEGACY_MASTER_KEY_SERVICE = "resistine-master-key"
+# The chat's E2EE store key (plugins/chat/matrix_transport.py) has its own
+# keyring entry: chat.json, where it used to live alone, is rewritten by
+# other code, and a value encrypted under another master key there locked
+# the store for good.
+MATRIX_STORE_KEY_SERVICE = "phoenix-matrix-store-key"
+MATRIX_STORE_KEY_USERNAME = "pickle-key"
 ENCRYPTED_PREFIX = "ENC:"
 
 # Thread-safe lock for file operations.
@@ -285,15 +292,24 @@ def _save_json(namespace: str, data: Dict[str, Any]) -> bool:
     file_path = _get_file_path(namespace)
     try:
         with _lock:
-            with open(file_path, "w", encoding="utf-8") as f:
+            # Write a temp file and rename it over: another process (or a
+            # crash) must never see a half-written file, which reads as empty
+            # and is saved back without the keys it held.
+            tmp = f"{file_path}.{os.getpid()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
-
-            # Ensure secure permissions on the file
+                f.flush()
+                os.fsync(f.fileno())
             if platform.system() != "Windows":
-                os.chmod(file_path, 0o600)
+                os.chmod(tmp, 0o600)
+            os.replace(tmp, file_path)
         return True
     except OSError as e:
         logger.error(f"Failed to save settings to {file_path}: {e}")
+        try:
+            os.remove(tmp)
+        except (OSError, UnboundLocalError):
+            pass
         return False
 
 
@@ -380,8 +396,22 @@ def get_secret(namespace: str, key: str) -> Optional[str]:
         f = _get_fernet()
         return f.decrypt(encrypted_data.encode()).decode()
     except Exception as e:
-        logger.error(f"Failed to decrypt secret for {namespace}.{key}: {e}")
+        logger.error(f"Failed to decrypt secret for {namespace}.{key}: {str(e) or type(e).__name__}"
+                     f"{_written_at(stored_value)}")
         return None
+
+
+def _written_at(stored_value: str) -> str:
+    """When an ENC: value was encrypted (a Fernet token carries the time in
+    clear), to tell which run wrote a value that no longer decrypts."""
+    import base64
+    import struct
+    try:
+        raw = base64.urlsafe_b64decode(stored_value[len(ENCRYPTED_PREFIX):] + "==")
+        ts = struct.unpack(">Q", raw[1:9])[0]
+        return f" (written {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))})"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def list_keys(namespace: str) -> List[str]:

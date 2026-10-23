@@ -211,6 +211,11 @@ class TestStoreFileNames:
                          "@me:phoenix.exposed_PHX_DEV.ignored_devices"]
 
 
+from cryptography.fernet import Fernet  # noqa: E402
+
+_FERNET = Fernet(Fernet.generate_key())
+
+
 @pytest.mark.unit
 class TestStoreKey:
     """A store key that won't decrypt must not be replaced while the keyring
@@ -234,6 +239,35 @@ class TestStoreKey:
         isolated_settings.set("chat", "matrix_store_key", "ENC:written-under-another-master-key")
         key = mt._store_key()
         assert key and isolated_settings.get_secret("chat", "matrix_store_key") == key
+
+    def test_key_lives_in_the_keyring(self, isolated_settings, mock_keyring):
+        _, kr = mock_keyring
+        key = mt._store_key()
+        assert kr[(isolated_settings.MATRIX_STORE_KEY_SERVICE,
+                   isolated_settings.MATRIX_STORE_KEY_USERNAME)] == key
+
+    def test_clobbered_chat_json_copy_does_not_lose_the_key(self, isolated_settings, mock_keyring):
+        """What reset the store: chat.json's copy turned up encrypted under
+        another master key. The keyring entry still has the key."""
+        isolated_settings.set_secret("auth", "refresh_token", "rt")
+        key = mt._store_key()
+        isolated_settings.set("chat", "matrix_store_key", "ENC:written-under-another-master-key")
+        assert mt._store_key() == key
+        assert isolated_settings.get_secret("chat", "matrix_store_key") == key  # copy repaired
+
+    def test_older_versions_key_moves_to_the_keyring(self, isolated_settings, mock_keyring):
+        _, kr = mock_keyring
+        isolated_settings.set_secret("chat", "matrix_store_key", "old-key")
+        assert mt._store_key() == "old-key"
+        assert "old-key" in kr.values()
+
+    def test_no_keyring_falls_back_to_chat_json(self, isolated_settings, monkeypatch):
+        kr = isolated_settings.keyring
+        monkeypatch.setattr(kr, "get_password", lambda *a: (_ for _ in ()).throw(RuntimeError("no dbus")))
+        monkeypatch.setattr(kr, "set_password", lambda *a: (_ for _ in ()).throw(RuntimeError("no dbus")))
+        monkeypatch.setattr(isolated_settings, "_get_fernet", lambda: _FERNET)  # the master key
+        key = mt._store_key()
+        assert key and mt._store_key() == key
 
     def test_store_key_mismatch_is_recognised(self):
         class LibolmPickleException(Exception):
