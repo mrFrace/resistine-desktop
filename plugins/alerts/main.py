@@ -78,19 +78,35 @@ class _AlertText(QTextBrowser):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
+        # padding: 0 overrides the app-wide QTextEdit padding (7px 10px), which
+        # took the space the height below makes for the text (as in chat).
+        self.setStyleSheet("QTextBrowser { background: transparent; border: none; padding: 0; }")
         self.document().setDocumentMargin(0)
         self.document().setDefaultStyleSheet(
             stylesheet(theme.color("text_primary")) + "pre { white-space: pre-wrap; }")
         self.setHtml(markdown_to_html(md, allow_html=False))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Refit whenever the text lays out again, not only on a resize.
+        self.document().documentLayout().documentSizeChanged.connect(lambda _s: self._fit())
+
+    def _fit(self) -> None:
+        width = self.viewport().width()
+        if width <= 0:
+            return
+        if self.document().textWidth() != width:
+            self.document().setTextWidth(width)
+        chrome = self.height() - self.viewport().height()  # frame, padding, margins
+        h = int(self.document().size().height()) + 4 + max(0, chrome)
+        if h != self.height():
+            self.setFixedHeight(h)
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        self.document().setTextWidth(self.viewport().width())
-        h = int(self.document().size().height()) + 4
-        if h != self.height():
-            self.setFixedHeight(h)
+        self._fit()
+
+    def showEvent(self, e):  # noqa: N802
+        super().showEvent(e)
+        self._fit()
 
 
 class Plugin(BasePlugin):

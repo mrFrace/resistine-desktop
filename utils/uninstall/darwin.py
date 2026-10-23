@@ -738,6 +738,7 @@ def _remove_keychain_items():
     entries = [
         ("phoenix-master-key", "master-key"),
         ("resistine-master-key", "master-key"),  # pre-rebrand
+        ("phoenix-matrix-store-key", "pickle-key"),  # chat E2EE store key
         # utils/encryption.py (and its pre-rebrand service name)
         ("phoenix", "encryption_key"),
         ("phoenix", "encrypted_data"),
