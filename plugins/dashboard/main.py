@@ -38,7 +38,8 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.page_kit import (
-    MenuRow, Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon, muted)
+    KVList, MenuRow, Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon,
+    muted)
 from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
@@ -650,6 +651,9 @@ class Plugin(BasePlugin):
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
+        self._posture_cards = (None, [])  # (this machine's card, others) as shown
+        self._recheck_btn = None
+        self._mitigation_page = None  # one posture item's page while open
         self._timer: QTimer | None = None
         self._busy = False
         self._alert_pages: list = []  # alert list/detail pages pushed over the panels
@@ -761,6 +765,8 @@ class Plugin(BasePlugin):
         self._views = SlideStack(fit_height=False)
         self._views.addWidget(scroll_page(inner))
         self._detail = None
+        self._recheck_btn = None
+        self._mitigation_page = None
         self._alert_pages = []
         self._alerts_list = None
         return self._views
@@ -1066,6 +1072,12 @@ class Plugin(BasePlugin):
         return row
 
     def _ask_ai(self, body: str, ts=None) -> None:
+        self._start_chat(lambda chat: chat.ask_about_alert(body, ts))
+
+    def _ask_ai_text(self, text: str) -> None:
+        self._start_chat(lambda chat: chat.ask(text))
+
+    def _start_chat(self, send) -> None:
         chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)
         if chat is None or getattr(chat, "client", None) is None:
             self.app.show_notification(
@@ -1075,7 +1087,7 @@ class Plugin(BasePlugin):
 
         def go():
             try:
-                if not chat.ask_about_alert(body, ts):
+                if not send(chat):
                     self.app.show_notification("The chat isn't ready yet. Try again.", type="warning")
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard: Ask AI failed: {e}")
@@ -1140,6 +1152,7 @@ class Plugin(BasePlugin):
         again = icon_button("refresh-cw", "Check again")
         again.clicked.connect(self._recheck_mitigations)
         header.add_control(again)
+        self._recheck_btn = again
         page.add(header)
         rows = RowList()
         page.spacing(18)
@@ -1162,22 +1175,46 @@ class Plugin(BasePlugin):
             return
         page = self._detail[0]
         self._detail = None
+        self._recheck_btn = None
         self._views.back()
         QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
                           if self._views is not None else None)
 
     def _recheck_mitigations(self) -> None:
-        if self._posture_view is None:
-            return
-        st, names = self._posture_view
+        """Fetch the posture again and re-check this machine's items."""
+        if self._recheck_btn is not None:
+            self._recheck_btn.setEnabled(False)
+        if self._detail is not None:
+            self._detail[2].set_subtitle("Checking…")
 
         def work():
-            mine, _ = posture.split_cards(st["cards"], names)
-            if mine:
-                mitigations.check(mine, True, force=True)
-            self.app.after(0, self._fill_posture_detail)
+            note = None
+            try:
+                st, names = posture.fetch(force=True), posture.local_names()
+                mine, _ = posture.split_cards(st["cards"], names)
+                if mine:
+                    mitigations.check(mine, True, force=True)
+                self._posture_view = (st, names)
+                if st.get("status") == "error":
+                    note = st.get("error") or "The Phoenix service is unavailable."
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Dashboard posture re-check failed: {e}")
+                note = str(e)
+            self.app.after(0, lambda: self._rechecked(note))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _rechecked(self, note) -> None:
+        try:
+            if self._recheck_btn is not None:
+                self._recheck_btn.setEnabled(True)
+        except RuntimeError:  # page closed meanwhile
+            self._recheck_btn = None
+        self._fill_posture_detail()
+        if note:
+            self.app.show_notification(f"Couldn't refresh the posture: {note}", type="warning")
+        else:
+            self.app.show_notification("Security posture checked.", type="info")
 
     def _fill_posture_detail(self) -> None:
         if self._detail is None:
@@ -1190,6 +1227,7 @@ class Plugin(BasePlugin):
             return
         st, names = self._posture_view or (posture.state(), posture.local_names(include_agent=False))
         mine, others = posture.split_cards(st.get("cards") or [], names)
+        self._posture_cards = (mine, others)
         if mine is None and not others:
             header.set_subtitle("No posture yet. It appears after the first daily scan.")
             header.set_status(None)
@@ -1200,16 +1238,16 @@ class Plugin(BasePlugin):
                 f"{mine.get('score')}/100 · computed {str(mine.get('computed_at', ''))[:16].replace('T', ' ')}")
             header.set_status(*posture.panel_data(st, names)["badge"])
             items = mitigations.cached(mine, True)
-            self._add_section(rows, "THIS MACHINE", items, "Nothing to fix on this machine.")
+            self._add_section(rows, "THIS MACHINE", items, "Nothing to fix on this machine.", mine)
         else:
             header.set_subtitle("No posture for this machine yet.")
             header.set_status("info", "No data for this machine")
         for card in others:
             self._add_section(rows, f"{str(card.get('hostname') or card.get('agent_id')).upper()} · "
                                     f"GRADE {card.get('grade')}",
-                              mitigations.cached(card, False), "Nothing to fix.")
+                              mitigations.cached(card, False), "Nothing to fix.", card)
 
-    def _add_section(self, rows, title: str, items: list, empty: str) -> None:
+    def _add_section(self, rows, title: str, items: list, empty: str, card: dict) -> None:
         heading = QLabel(title)
         heading.setObjectName("Section")
         heading.setTextFormat(Qt.TextFormat.PlainText)
@@ -1219,35 +1257,100 @@ class Plugin(BasePlugin):
             rows.add_row(muted(empty))
             return
         for item, state in items:
-            rows.add_row(self._item_row(item, state))
+            rows.add_row(self._item_row(item, state, card))
 
-    def _item_row(self, item: dict, state) -> QWidget:
-        row = QWidget()
-        row.setObjectName("Transparent")
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 10, 4, 10)
-        h.setSpacing(14)
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        title = QLabel(item["title"] or item["kind"])
-        title.setObjectName("RowTitle")
-        title.setTextFormat(Qt.TextFormat.PlainText)
-        text.addWidget(title)
-        hint = QLabel(mitigations.detail_line(item))
-        hint.setObjectName("Hint")
-        hint.setTextFormat(Qt.TextFormat.PlainText)
-        hint.setWordWrap(True)
-        hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        text.addWidget(hint)
-        h.addLayout(text, 1)
-        if state != mitigations.REMOTE:
-            kind, label = self._PILLS.get(state, self._PILLS[None])
-            if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
-                kind = "warning"
-            pill = QLabel()
-            set_pill(pill, kind, label)
-            h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+    _ITEM_ICON = {"package_update": "package", "cis_checks": "shield-check",
+                  "agent_connection": "activity"}
+
+    def _item_pill(self, item: dict, state) -> tuple | None:
+        if state == mitigations.REMOTE:
+            return None
+        kind, label = self._PILLS.get(state, self._PILLS[None])
+        if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
+            kind = "warning"
+        return kind, label
+
+    def _item_row(self, item: dict, state, card: dict) -> QWidget:
+        row = MenuRow(self._ITEM_ICON.get(item["kind"], "info"), item["title"] or item["kind"],
+                      mitigations.detail_line(item),
+                      on_click=lambda: self._open_mitigation(item, state, card))
+        row._title.setTextFormat(Qt.TextFormat.PlainText)
+        row._hint.setTextFormat(Qt.TextFormat.PlainText)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        pill = self._item_pill(item, state)
+        if pill:
+            label = QLabel()
+            set_pill(label, *pill)
+            row.layout().insertWidget(2, label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
+
+    def _open_mitigation(self, item: dict, state, card: dict) -> None:
+        """One posture item: its evidence, how to fix it, and Ask AI."""
+        if self._views is None or self._detail is None:
+            return
+        this_machine = card is self._posture_cards[0]
+        host = str(card.get("hostname") or card.get("agent_id") or "")
+        page = Page()
+        page.add(back_link("Security posture", self._close_mitigation))
+        header = PageHeader(item["title"] or item["kind"],
+                            ("This machine: " if this_machine else "") + host,
+                            status=self._item_pill(item, state))
+        header.title.setTextFormat(Qt.TextFormat.PlainText)
+        header.wrap_title()
+        ask = QPushButton("Ask AI")
+        ask.setIcon(QIcon(line_icon("message-circle", "#ffffff", 18)))
+        ask.setCursor(Qt.CursorShape.PointingHandCursor)
+        ask.setToolTip("Start a chat with Phoenix AI about this item")
+        ask.clicked.connect(lambda: self._ask_ai_text(
+            mitigations.question(item, host, this_machine)))
+        header.add_control(ask)
+        page.add(header)
+        page.section("Status")
+        page.spacing(6)
+        page.add(muted(mitigations.state_text(state)))
+        facts = self._mitigation_facts(item)
+        if facts:
+            page.section("Evidence")
+            page.add(KVList(facts))
+        steps = mitigations.fix_steps(item)
+        if steps:
+            page.section("How to fix")
+            page.spacing(6)
+            for step in steps:
+                line = muted(step)
+                line.setTextFormat(Qt.TextFormat.PlainText)
+                line.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                page.add(line)
+        page.stretch()
+        self._views.addWidget(page.widget)
+        self._mitigation_page = page.widget
+        self._views.push(page.widget)
+
+    @staticmethod
+    def _mitigation_facts(item: dict) -> list:
+        ev, c = item["evidence"], item["check"]
+        facts = [("Severity", item["severity"].capitalize())]
+        if item["kind"] == "package_update":
+            facts.append(("Package", c["package"] + (f" ({c['package_type']})" if c["package_type"] else "")))
+            facts.append(("Installed", c["version"]))
+            if ev["fixed_version"]:
+                facts.append(("Fixed in", ev["fixed_version"]))
+            elif ev["fix_available"] is False:
+                facts.append(("Fixed in", "No fix released yet"))
+            facts.append(("Vulnerabilities", f"{ev['critical']} critical · {ev['high']} high"))
+            if ev["cves"]:
+                facts.append(("CVEs", ", ".join(ev["cves"])))
+        elif item["kind"] == "cis_checks":
+            facts.append(("Failed checks", f"{ev['failed_checks']} of {ev['checks']}"))
+        return facts
+
+    def _close_mitigation(self) -> None:
+        page, self._mitigation_page = self._mitigation_page, None
+        if self._views is None or page is None:
+            return
+        self._views.back(self._detail[0] if self._detail is not None else None)
+        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
+                          if self._views is not None else None)
 
     def _set_protection(self, kind: str) -> None:
         # Endpoint badge kind -> logo glow: ok = green, info (unsupported

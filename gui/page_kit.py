@@ -191,7 +191,7 @@ class PageHeader(QWidget):
         row.setSpacing(12)
         text = QVBoxLayout()
         text.setSpacing(4)
-        line = QHBoxLayout()
+        line = self._line = QHBoxLayout()
         line.setSpacing(12)
         self.title = QLabel(title)
         self.title.setObjectName("H1")
@@ -218,6 +218,12 @@ class PageHeader(QWidget):
             return
         set_pill(self.pill, kind, text)
         self.pill.show()
+
+    def wrap_title(self) -> None:
+        """Wrap a long title across the header's width (not its minimum)."""
+        self.title.setWordWrap(True)
+        self._line.setStretch(self._line.count() - 1, 0)
+        self._line.setStretchFactor(self.title, 1)
 
     def set_subtitle(self, text: str) -> None:
         self.subtitle.setText(text)
