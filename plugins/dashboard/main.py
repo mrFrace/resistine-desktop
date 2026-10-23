@@ -26,7 +26,6 @@ from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPainterPath, QPen, QPix
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
-    QTextBrowser,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -55,9 +54,6 @@ WEBSITE_URL = "https://phoenix.exposed"
 _REFRESH_MS = 20_000
 # Alert notifications: only alerts sent after the app started pop up, each
 # once (module level, so a rebuilt plugin instance doesn't repeat them).
-_STARTED_AT = time.time()
-_NOTIFIED: set = set()
-_notified_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -468,37 +464,6 @@ class _Sparkline(QWidget):
         p.end()
 
 
-class _AlertText(QTextBrowser):
-    """An alert's text as rich text, as tall as its content (the page
-    scrolls, not this). Raw HTML in the alert is escaped and links never
-    open: the text quotes the monitored system and is not ours."""
-
-    def __init__(self, md: str):
-        super().__init__()
-        from plugins.chat.qt_markdown import markdown_to_html, stylesheet
-
-        self.setObjectName("Transparent")
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setOpenLinks(False)
-        self.setOpenExternalLinks(False)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
-        self.document().setDocumentMargin(0)
-        self.document().setDefaultStyleSheet(
-            stylesheet(theme.color("text_primary")) + "pre { white-space: pre-wrap; }")
-        self.setHtml(markdown_to_html(md, allow_html=False))
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def resizeEvent(self, e):  # noqa: N802
-        super().resizeEvent(e)
-        self.document().setTextWidth(self.viewport().width())
-        h = int(self.document().size().height()) + 4
-        if h != self.height():
-            self.setFixedHeight(h)
-
-
 DEFAULT_ORDER = ["posture", "alerts", "antivirus", "vpn", "endpoint", "ai", "system"]
 _GAP = 16
 
@@ -656,8 +621,6 @@ class Plugin(BasePlugin):
         self._mitigation_page = None  # one posture item's page while open
         self._timer: QTimer | None = None
         self._busy = False
-        self._alert_pages: list = []  # alert list/detail pages pushed over the panels
-        self._alerts_list = None      # (RowList, PageHeader) while the list is open
         self._subscribe_alerts()  # notify even before the Dashboard is opened
 
     # ---- screen -----------------------------------------------------------
@@ -767,8 +730,6 @@ class Plugin(BasePlugin):
         self._detail = None
         self._recheck_btn = None
         self._mitigation_page = None
-        self._alert_pages = []
-        self._alerts_list = None
         return self._views
 
     def on_theme_changed(self) -> None:
@@ -886,49 +847,19 @@ class Plugin(BasePlugin):
             pass
 
     def _alert_arrived(self, alert: dict) -> None:
-        # Matrix thread: repaint on the Qt thread.
+        # Matrix thread: repaint on the Qt thread. The Alerts plugin
+        # (plugins/alerts) shows the alerts and sends the notification.
         try:
             self.app.after(0, self._repaint_alerts)
         except Exception:  # noqa: BLE001
             pass
-        self._notify_alert(alert)
 
-    def _notify_alert(self, alert: dict) -> None:
-        """A desktop notification for a new high or critical alert."""
-        from utils import settings as app_settings
-
-        if not app_settings.get("dashboard", "alert_notifications", True):
-            return
-        note = recent_alerts.notification(alert, _STARTED_AT)
-        with _notified_lock:
-            if note is None or note["event_id"] in _NOTIFIED:
-                return
-            _NOTIFIED.add(note["event_id"])
-        eid = note["event_id"]
-        try:
-            from utils import notifications
-            notifications.send(note["title"], note["body"], urgency=note["urgency"],
-                               on_click=(lambda: self.app.after(0, self._show_alert, eid))
-                               if eid else None)
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Alert notification failed: {e}")
-
-    def _show_alert(self, event_id: str) -> None:
-        """Clicked notification: bring the window up on that alert."""
-        try:
-            win = self.app
-            win.showNormal()
-            win.raise_()
-            win.activateWindow()
-            win.navigate(self.get_name())
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Could not show the window for an alert: {e}")
-        if self._views is not None:
-            self._open_alert(event_id)
+    def repaint_alerts(self) -> None:
+        """Refresh the Recent alerts panel (Qt thread; the Alerts screen
+        calls it after marking alerts read)."""
+        self._repaint_alerts()
 
     def _repaint_alerts(self) -> None:
-        if self._alerts_list is not None:
-            self._fill_alerts_list()  # open list: the new alert is seen
         self._data["alerts"] = self._alerts_data()
         panel = self._panels.get("alerts")
         if panel is None:
@@ -940,139 +871,19 @@ class Plugin(BasePlugin):
         except RuntimeError:  # panel deleted by a rebuild
             pass
 
-    # ---- alert list and detail (slide in over the panels) ------------------
-    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "unknown": "warning",
-                 "low": "info", "info": "ok"}
-    _KIND_ICON = {"triage": "activity", "hunt": "folder-search", "result": "shield-check"}
-
-    def _push_page(self, page: Page) -> None:
-        if self._views is None:
-            return
-        self._views.addWidget(page.widget)
-        self._alert_pages.append(page.widget)
-        self._views.push(page.widget)
-
-    def _pop_page(self) -> None:
-        if self._views is None or not self._alert_pages:
-            return
-        page = self._alert_pages.pop()
-        if not self._alert_pages:
-            self._alerts_list = None
-        self._views.back(self._alert_pages[-1] if self._alert_pages else None)
-        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
-                          if self._views is not None else None)
+    # ---- alerts: shown by the Alerts screen (plugins/alerts) -----------------
+    def _alerts_plugin(self):
+        return next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Alerts"), None)
 
     def _open_alerts(self) -> None:
-        """The panel's Open: every stored alert, newest first."""
-        if self._views is None or self._alerts_list is not None:
-            return
-        page = Page()
-        page.add(back_link("Dashboard", self._pop_page))
-        header = PageHeader("Recent alerts")
-        page.add(header)
-        rows = RowList()
-        page.spacing(18)
-        page.add(rows)
-        page.spacing(14)
-        page.add(muted("Alerts come from Phoenix's SIEM about the machines you own. "
-                       "Triage sums up a batch of alerts, Investigating means a hunt "
-                       "started, and the hunt result says whether it was a real threat."))
-        page.stretch()
-        self._alerts_list = (rows, header)
-        self._fill_alerts_list()
-        self._push_page(page)
-
-    def _fill_alerts_list(self) -> None:
-        from plugins.chat import siem_alerts
-        rows, header = self._alerts_list
-        try:
-            rows.clear()
-        except RuntimeError:  # page deleted by a rebuild
-            self._alerts_list = None
-            return
-        st = siem_alerts.store()
-        alerts = recent_alerts.newest_first(st.all())
-        header.set_subtitle(f"{len(alerts)} alert{'s' if len(alerts) != 1 else ''}, newest first"
-                            if alerts else "No alerts yet. Alerts about machines you own appear here.")
-        for a in alerts:
-            info = recent_alerts.parse(a.get("body", ""))
-            hint = " · ".join(p for p in (info["host"], recent_alerts.ago(a.get("ts"))) if p)
-            row = MenuRow(self._KIND_ICON.get(info["kind"], "info"), info["title"], hint,
-                          on_click=lambda e=a.get("event_id"): self._open_alert(e))
-            row._title.setWordWrap(True)  # long file paths
-            row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            pill = QLabel()
-            set_pill(pill, *self._pill(info))
-            row.layout().insertWidget(2, pill, 0, Qt.AlignmentFlag.AlignVCenter)
-            rows.add_row(row)
-        if st.unread:
-            st.mark_read()
-            self._data["alerts"] = self._alerts_data()
-            panel = self._panels.get("alerts")
-            if panel is not None:
-                try:
-                    panel.set_data(self._data["alerts"])
-                except RuntimeError:
-                    pass
-
-    def _pill(self, info: dict) -> tuple:
-        if info["kind"] == "result" and info["verdict"]:
-            v = info["verdict"].lower()
-            return ("ok" if "false" in v else "error" if "true" in v else "warning"), info["verdict"]
-        return self._SEV_PILL[info["severity"]], info["severity"].capitalize()
+        plugin = self._alerts_plugin()
+        if plugin is not None:
+            plugin.show()
 
     def _open_alert(self, event_id: str) -> None:
-        """One alert, in full: what it is about, its findings and the text."""
-        from plugins.chat import siem_alerts
-        alert = next((a for a in siem_alerts.store().all() if a.get("event_id") == event_id), None)
-        if alert is None or self._views is None:
-            return
-        body = alert.get("body", "")
-        info = recent_alerts.parse(body)
-        page = Page()
-        page.add(back_link("Recent alerts" if self._alerts_list else "Dashboard", self._pop_page))
-        header = PageHeader(info["title"], recent_alerts.subtitle(info, alert.get("ts")),
-                            status=self._pill(info))
-        header.title.setTextFormat(Qt.TextFormat.PlainText)
-        header.title.setWordWrap(True)
-        header.subtitle.setTextFormat(Qt.TextFormat.PlainText)
-        ask = QPushButton("Ask AI")
-        ask.setIcon(QIcon(line_icon("message-circle", "#ffffff", 18)))
-        ask.setCursor(Qt.CursorShape.PointingHandCursor)
-        ask.setToolTip("Start a chat with Phoenix AI about this alert")
-        ask.clicked.connect(lambda: self._ask_ai(body, alert.get("ts")))
-        header.add_control(ask)
-        page.add(header)
-        if info["findings"]:
-            page.section("Findings")
-            found = RowList()
-            for f in info["findings"]:
-                found.add_row(self._finding_row(f))
-            page.add(found)
-        page.section("Details")
-        page.spacing(6)
-        page.add(_AlertText(recent_alerts.detail_text(body) or body))
-        page.stretch()
-        self._push_page(page)
-
-    def _finding_row(self, finding: dict) -> QWidget:
-        row = QWidget()
-        row.setObjectName("Transparent")
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 8, 4, 8)
-        h.setSpacing(14)
-        name = QLabel(finding["name"])
-        name.setObjectName("RowTitle")
-        name.setTextFormat(Qt.TextFormat.PlainText)
-        name.setWordWrap(True)
-        h.addWidget(name, 1)
-        pill = QLabel()
-        set_pill(pill, self._SEV_PILL[finding["severity"]], finding["severity"].capitalize())
-        h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
-        return row
-
-    def _ask_ai(self, body: str, ts=None) -> None:
-        self._start_chat(lambda chat: chat.ask_about_alert(body, ts))
+        plugin = self._alerts_plugin()
+        if plugin is not None:
+            plugin.show(event_id)
 
     def _ask_ai_text(self, text: str) -> None:
         self._start_chat(lambda chat: chat.ask(text))

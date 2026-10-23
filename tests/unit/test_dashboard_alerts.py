@@ -333,85 +333,21 @@ def _plugin(qapp, monkeypatch, tmp_path, chat=None):
 
 
 @pytest.mark.unit
-def test_alert_list_and_detail_pages(qapp, isolated_settings, monkeypatch, tmp_path):
-    plugin, siem_alerts, _ = _plugin(qapp, monkeypatch, tmp_path)
-    siem_alerts.publish("!r", "$t", TRIAGE)
-    siem_alerts.publish("!r", "$h", HUNT)
-    assert siem_alerts.store().unread == 2
+def test_panel_opens_the_alerts_screen(qapp, isolated_settings, monkeypatch, tmp_path):
+    """The list and the alert pages live in the Alerts screen (plugins/alerts)."""
+    from plugins.dashboard.main import Plugin
+
+    monkeypatch.setattr(Plugin, "refresh", lambda self: None)
+    monkeypatch.setattr(Plugin, "_agent_installed", staticmethod(lambda: True))
+    alerts = MagicMock()
+    alerts.get_name.return_value = "Alerts"
+    app = MagicMock()
+    app.plugins = [alerts]
+    plugin = Plugin(app)
     plugin._open_alerts()
-    rows, header = plugin._alerts_list
-    assert rows.count() == 2 and siem_alerts.store().unread == 0  # seeing the list reads them
-    assert plugin._data["alerts"]["badge"] == ("ok", "No new alerts")
-    siem_alerts.publish("!r", "$r", RESULT_FP)  # arrives while the list is open
-    assert rows.count() == 3 and siem_alerts.store().unread == 0
+    alerts.show.assert_called_with()
     plugin._open_alert("$t")
-    assert len(plugin._alert_pages) == 2
-    page = plugin._alert_pages[-1]
-    texts = [w.text() for w in page.findChildren(type(header.title))]
-    assert "25 alerts on AnubisAI — File Modifications" in texts and "Config Changes" in texts
-    from plugins.dashboard.main import _AlertText
-    view = page.findChild(_AlertText)
-    assert "<b>" not in view.toPlainText() and "Verdict" in view.toPlainText()
-    plugin._pop_page()
-    plugin._pop_page()
-    assert plugin._alert_pages == [] and plugin._alerts_list is None
-    plugin._open_alert("$missing")  # gone from the store: nothing happens
-    assert plugin._alert_pages == []
-    plugin.destroy()
-
-
-@pytest.mark.unit
-def test_alert_html_is_escaped(qapp, isolated_settings, monkeypatch, tmp_path):
-    from plugins.dashboard.main import _AlertText
-    view = _AlertText('<img src="file:///etc/passwd"> <a href="https://evil">x</a> [y](https://evil)')
-    assert "<img" in view.toPlainText()  # shown as text, not loaded
-    assert not view.openLinks() and not view.openExternalLinks()
-
-
-@pytest.mark.unit
-def test_ask_ai(qapp, isolated_settings, monkeypatch, tmp_path):
-    from PyQt6.QtCore import QTimer
-    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda ms, fn: fn()))
-    chat = MagicMock()
-    chat.get_name.return_value = "Chat"
-    plugin, siem_alerts, app = _plugin(qapp, monkeypatch, tmp_path, chat)
-    plugin._ask_ai(HUNT)
-    app.select_frame_by_name.assert_called_with("frame_Chat")
-    chat.ask_about_alert.assert_called_once_with(HUNT, None)
-    chat.client = None
-    app.select_frame_by_name.reset_mock()
-    plugin._ask_ai(HUNT)
-    app.select_frame_by_name.assert_not_called()
-    assert "Settings" in app.show_notification.call_args[0][0]
-    plugin.destroy()
-
-
-@pytest.mark.unit
-def test_new_high_alert_notifies_once_and_opens_on_click(qapp, isolated_settings, monkeypatch, tmp_path):
-    import time
-    from plugins.dashboard import main as dash
-    from utils import notifications
-    sent = []
-    monkeypatch.setattr(notifications, "send", lambda *a, **kw: sent.append((a, kw)))
-    monkeypatch.setattr(dash, "_NOTIFIED", set())
-    plugin, siem_alerts, app = _plugin(qapp, monkeypatch, tmp_path)
-    monkeypatch.setattr(dash, "_STARTED_AT", time.time() - 10)
-    old_ms = int((time.time() - 3600) * 1000)
-    siem_alerts.publish("!r", "$old", "🚨 history from before start", old_ms)
-    siem_alerts.publish("!r", "$med", HUNT)
-    assert sent == []  # backlog and medium alerts stay quiet
-    siem_alerts.publish("!r", "$t", TRIAGE)
-    assert len(sent) == 1
-    (title, body), kw = sent[0]
-    assert title == "High alert on AnubisAI" and kw["urgency"] == "normal"
-    plugin._notify_alert(siem_alerts.store().all()[-1])  # same event again: no repeat
-    assert len(sent) == 1
-    kw["on_click"]()  # clicking opens the alert's page
-    app.navigate.assert_called_with("Dashboard")
-    assert len(plugin._alert_pages) == 1
-    isolated_settings.set("dashboard", "alert_notifications", False)
-    siem_alerts.publish("!r", "$c", "🚨 ransomware")
-    assert len(sent) == 1  # turned off in Settings
+    alerts.show.assert_called_with("$t")
     plugin.destroy()
 
 
