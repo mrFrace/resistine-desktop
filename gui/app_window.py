@@ -251,7 +251,7 @@ class AppWindow(QMainWindow):
         self.apply_theme(self._resolve_mode(saved_mode))
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
-        # When a system tray is active (Windows), closing the window hides it
+        # When a system tray is active (Windows, Linux), closing the window hides it
         # to the tray instead of quitting — only the tray's Quit truly exits.
         tray = getattr(self, "_tray", None)
         if tray is not None:
