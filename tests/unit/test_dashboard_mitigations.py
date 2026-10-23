@@ -235,3 +235,73 @@ def test_detail_view_lists_this_and_other_machines(qapp, isolated_settings, monk
     plugin._hide_posture_detail()
     assert plugin._detail is None and screen is not None
     plugin.destroy()
+
+
+@pytest.mark.unit
+def test_item_row_opens_its_page_and_asks_ai(qapp, isolated_settings, monkeypatch):
+    """The rows used to be inert labels: a click now opens the item, whose
+    Ask AI starts a chat about it; back returns to the posture list."""
+    from PyQt6.QtWidgets import QLabel, QPushButton
+    from gui.page_kit import MenuRow
+    from plugins.dashboard.main import Plugin
+
+    monkeypatch.setattr(Plugin, "refresh", lambda self: None)
+    monkeypatch.setattr(Plugin, "_agent_installed", staticmethod(lambda: True))
+    monkeypatch.setattr("plugins.dashboard.main.QTimer.singleShot", lambda _ms, fn: fn())
+    chat = MagicMock()
+    chat.get_name.return_value = "Chat"
+    app = MagicMock()
+    app.plugins = [chat]
+    plugin = Plugin(app)
+    mine = dict(card(PKG_ITEM, CIS_ITEM), grade="B", score=86, computed_at="2026-10-12T22:50:31",
+                schema="phoenix.posture.v1")
+    plugin._posture_view = ({"status": "ok", "cards": [mine], "error": None}, {"anubisai"})
+    screen = plugin.create_main_screen()
+    plugin._show_posture_detail()
+    rows = [r for r in plugin._detail[0].findChildren(MenuRow) if r.text() == "Update openssl"]
+    rows[0].clicked.emit()
+    page = plugin._mitigation_page
+    texts = [w.text() for w in page.findChildren(QLabel)]
+    assert "sudo apt update && sudo apt install --only-upgrade openssl" in texts
+    assert "CVE-2026-0001, CVE-2026-0002" in texts
+    ask = next(b for b in page.findChildren(QPushButton) if b.text() == "Ask AI")
+    ask.click()
+    question = chat.ask.call_args[0][0]
+    assert "this machine (anubisai)" in question and "openssl" in question
+    plugin._close_mitigation()
+    assert plugin._mitigation_page is None and plugin._views.currentWidget() is plugin._detail[0]
+    assert screen is not None
+    plugin.destroy()
+
+
+@pytest.mark.unit
+class TestDetailText:
+    def test_deb_fix_is_a_package_manager_line(self):
+        item = mit.items_of(card(PKG_ITEM))[0]
+        assert mit.fix_steps(item) == ["sudo apt update && sudo apt install --only-upgrade openssl"]
+
+    def test_kernel_fix_says_restart(self):
+        item = mit.items_of(card(with_check(package="linux-image-7.0.0-34-generic", version="7.0.0-34.34")))[0]
+        assert "Restart" in mit.fix_steps(item)[-1]
+
+    def test_unknown_source_is_not_given_a_command(self):
+        item = mit.items_of(card(with_check(package="aiohttp", package_type="")))[0]
+        assert "sudo" not in mit.fix_steps(item)[0]
+
+    def test_no_fix_released(self):
+        item = mit.items_of(card(dict(PKG_ITEM, evidence={"fix_available": False})))[0]
+        assert "No fixed version" in mit.fix_steps(item)[0]
+
+    def test_package_question_carries_the_evidence(self):
+        q = mit.question(mit.items_of(card(PKG_ITEM))[0], "anubisai", True)
+        assert "this machine (anubisai)" in q
+        assert "openssl" in q and "3.0.13-0ubuntu3.1" in q and "CVE-2026-0001" in q
+
+    def test_cis_question(self):
+        q = mit.question(mit.items_of(card(CIS_ITEM))[0], "francispc", False)
+        assert q.startswith("My machine (francispc) fails 35 of 103")
+
+    @pytest.mark.parametrize("state", [mit.OPEN, mit.FIXED_HERE, mit.UNKNOWN,
+                                       mit.SERVER, mit.REMOTE, None])
+    def test_every_state_has_text(self, state):
+        assert mit.state_text(state)

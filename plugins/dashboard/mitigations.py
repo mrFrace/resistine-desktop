@@ -255,3 +255,80 @@ def detail_line(item: dict) -> str:
     if item["kind"] == "agent_connection":
         return "The Endpoint agent is not reporting to the Phoenix server."
     return ""
+
+
+# --------------------------------------------------------------------------
+# Detail view text and the "Ask AI" question
+# --------------------------------------------------------------------------
+
+_STATE_TEXT = {
+    OPEN: "The vulnerable version is still installed here.",
+    FIXED_HERE: "Fixed on this machine. The next daily scan confirms it and the item disappears.",
+    UNKNOWN: "Phoenix can't check this item on this machine.",
+    SERVER: "Only the next daily scan can tell whether this is fixed.",
+    REMOTE: "Fix this on that machine; its next daily scan confirms it.",
+    None: "Checking…",
+}
+
+
+def state_text(state) -> str:
+    return _STATE_TEXT.get(state, _STATE_TEXT[None])
+
+
+_DEB_KERNEL = re.compile(r"linux-(?:image(?:-unsigned)?|modules(?:-extra)?)-\d[A-Za-z0-9.+_~-]*")
+_RPM_KERNEL = {"kernel", "kernel-core", "kernel-modules", "kernel-modules-core",
+               "kernel-modules-extra", "kernel-default", "kernel-uek"}
+
+
+def _is_kernel(c: dict) -> bool:
+    return bool(_DEB_KERNEL.fullmatch(c.get("package", ""))) or c.get("package") in _RPM_KERNEL
+
+
+def fix_steps(item: dict) -> list:
+    """How to fix an item, as short plain lines (never run by Phoenix)."""
+    c, ev = item["check"], item["evidence"]
+    if item["kind"] == "package_update":
+        pkg = c["package"]
+        if ev["fix_available"] is False and not ev["fixed_version"]:
+            steps = [f"No fixed version of {pkg} is released yet. Remove it if you don't need it, "
+                     "or limit what can reach it until a fix ships."]
+        elif c["package_type"] == "deb":
+            steps = [f"sudo apt update && sudo apt install --only-upgrade {pkg}"]
+        elif c["package_type"] == "rpm":
+            steps = [f"sudo dnf upgrade {pkg}"]
+        else:
+            steps = [f"Update {pkg} where it was installed from: the system's software updater, "
+                     "or the tool that installed it (pip, npm, a container image…)."]
+        if _is_kernel(c):
+            steps.append("Restart the machine afterwards to run the new kernel.")
+        return steps
+    if item["kind"] == "cis_checks":
+        return ["Ask Phoenix AI which checks fail and how to fix each one on this machine.",
+                "The next daily scan re-checks them."]
+    if item["kind"] == "agent_connection":
+        return ["Open Endpoint and check that the agent runs and is connected."]
+    return []
+
+
+def question(item: dict, hostname: str, this_machine: bool) -> str:
+    """The "Ask AI" message for one item."""
+    c, ev = item["check"], item["evidence"]
+    where = "this machine" if this_machine else "my machine"
+    host = f" ({hostname})" if hostname else ""
+    if item["kind"] == "package_update":
+        facts = [f"package {c['package']}, installed version {c['version']}"]
+        if c["package_type"]:
+            facts.append(f"{c['package_type']} package")
+        if ev["fixed_version"]:
+            facts.append(f"fixed in {ev['fixed_version']}")
+        if ev["critical"] or ev["high"]:
+            facts.append(f"{ev['critical']} critical and {ev['high']} high vulnerabilities")
+        if ev["cves"]:
+            facts.append("including " + ", ".join(ev["cves"]))
+        return (f"The security posture of {where}{host} says: {item['title']} "
+                f"({'; '.join(facts)}). How serious is this, and how do I fix it safely?")
+    if item["kind"] == "cis_checks":
+        return (f"{where[0].upper() + where[1:]}{host} fails {ev['failed_checks']} of "
+                f"{ev['checks']} CIS/SCA checks. Which checks fail, which matter most, "
+                "and how do I fix them? Skip checks that don't apply to this kind of machine.")
+    return f"The security posture of {where}{host} says: {item['title']}. What should I do?"
