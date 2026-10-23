@@ -133,3 +133,15 @@ def test_new_high_alert_notifies_once_and_opens_on_click(qapp, isolated_settings
     siem_alerts.publish("!r", "$c", "🚨 ransomware")
     assert len(sent) == 1  # turned off in Settings
     plugin.destroy()
+
+
+@pytest.mark.unit
+def test_sidebar_button_returns_to_the_list(qapp, isolated_settings, monkeypatch, tmp_path):
+    plugin, siem_alerts, _ = _plugin(monkeypatch, tmp_path)
+    siem_alerts.publish("!r", "$t", TRIAGE)
+    screen = plugin.create_main_screen()
+    plugin.open_alert("$t")
+    assert screen.count() == 2
+    plugin.on_screen_shown()
+    assert screen.currentIndex() == 0 and screen.count() == 1 and plugin._detail is None
+    plugin.destroy()

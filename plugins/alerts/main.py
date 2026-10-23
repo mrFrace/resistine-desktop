@@ -156,6 +156,9 @@ class Plugin(BasePlugin):
         return self._views
 
     def on_screen_shown(self):
+        # The sidebar's Alerts button opens the list, not an alert left open
+        # (show() opens one after this when a notification asked for it).
+        self._close_detail(animate=False)
         self._fill()
 
     def _visible(self) -> bool:
@@ -242,7 +245,7 @@ class Plugin(BasePlugin):
             QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
                               if self._views is not None else None)
         else:
-            self._views.setCurrentIndex(0)
+            self._views.home()
             self._views.removeWidget(page)
             page.deleteLater()
 
