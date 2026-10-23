@@ -17,6 +17,7 @@ Two Qt rich-text quirks drive the shape of this module:
 """
 from __future__ import annotations
 
+import html
 import re
 
 import markdown
@@ -102,12 +103,53 @@ def _normalize_lists(md: str) -> str:
     return "\n".join(out)
 
 
-def _preprocess(md: str) -> str:
+# The backend streams tool progress into the reply: "> Running **tool**...\n"
+# before each tool call, and a "⏳" every few seconds while a slow one runs.
+_STATUS_RE = re.compile(r"^\s*(?:>\s*)?Running \*\*([^*\n]+)\*\*\.{3}\s*$")
+# Hourglasses with text after them: the wait is over. A trailing one stays as
+# the live "still working" sign (the greedy run backtracks to leave one).
+_HOURGLASS_RE = re.compile(r"⏳+(?=\s*\S)")
+
+
+def _status_lines(md: str, allow_html: bool) -> str:
+    """Tool status lines as their own muted paragraph, apart from the reply.
+
+    Left as they come, the status line and the hourglasses ran into the
+    reply's first line. A tool is "Running" while nothing follows it, "Ran"
+    once the reply does."""
+    md = _HOURGLASS_RE.sub("", md)
+    lines = md.split("\n")
+    waiting = False
+    if lines and lines[-1].strip() == "⏳" and len(lines) > 1:
+        lines.pop()  # shown on the status line it belongs to
+        waiting = True
+    out: list[str] = []
+    for i, ln in enumerate(lines):
+        m = _STATUS_RE.match(ln)
+        if not m:
+            out.append(ln)
+            continue
+        done = any(t.strip() for t in lines[i + 1:])
+        text = f"{'Ran' if done else 'Running'} {m.group(1).strip()}{'' if done else '…'}"
+        if waiting and not done:
+            text += " ⏳"
+        if allow_html:
+            text = (f'<span style="color:{theme.color("text_secondary")}; font-size:12px;">'
+                    f"{html.escape(text)}</span>")
+        else:
+            text = f"*{text}*"
+        if out and out[-1].strip() and not _STATUS_RE.match(lines[i - 1]):
+            out.append("")
+        out.append(text)
+        nxt = next((t for t in lines[i + 1:] if t.strip()), None)
+        if nxt is not None and not _STATUS_RE.match(nxt):
+            out.append("")
+    return "\n".join(out)
+
+
+def _preprocess(md: str, allow_html: bool = True) -> str:
     """Fix up model markdown before parsing."""
-    # The backend injects tool status as a blockquote ("> Running foo…"),
-    # which Qt renders indented — strip the quote marker on those lines only.
-    md = re.sub(r"(?m)^\s*>\s*(?=Running\b)", "", md)
-    return _normalize_lists(md)
+    return _normalize_lists(_status_lines(md, allow_html))
 
 
 def _demote_headings(html: str) -> str:
@@ -134,8 +176,8 @@ def markdown_to_html(md: str, *, allow_html: bool = True) -> str:
     if not allow_html:
         conv.preprocessors.deregister("html_block")
         conv.inlinePatterns.deregister("html")
-    html = conv.convert(_preprocess(md))
-    return _demote_headings(html)
+    out = conv.convert(_preprocess(md, allow_html))
+    return _demote_headings(out)
 
 
 def stylesheet(fg: str) -> str:

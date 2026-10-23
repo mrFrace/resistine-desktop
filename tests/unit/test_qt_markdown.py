@@ -59,3 +59,40 @@ class TestLists:
     def test_plain_text_unchanged(self):
         md = "Hello\nworld\n\n**Summary:** done."
         assert _normalize_lists(md) == md
+
+
+# Tool progress the backend streams into the reply.
+@pytest.mark.unit
+def test_status_line_is_its_own_paragraph_and_hourglasses_go():
+    md = "> Running **calculate_risk_score**...\n⏳⏳⏳Risk score for AnubisAI: **63**"
+    out = markdown_to_html(md)
+    assert "⏳" not in out
+    assert "Ran calculate_risk_score</span></p>" in out
+    assert "<p>Risk score for AnubisAI: <strong>63</strong></p>" in out
+
+
+@pytest.mark.unit
+def test_running_tool_keeps_one_hourglass():
+    out = markdown_to_html("> Running **get_security_status**...\n⏳⏳")
+    assert "Running get_security_status… ⏳</span>" in out
+    assert out.count("⏳") == 1
+
+
+@pytest.mark.unit
+def test_hourglass_before_any_tool_stays():
+    assert "⏳" in markdown_to_html("⏳⏳⏳")
+
+
+@pytest.mark.unit
+def test_consecutive_tools_and_heading_after():
+    md = "> Running **a_tool**...\n> Running **b_tool**...\n## Security posture\nok"
+    out = markdown_to_html(md)
+    assert "Ran a_tool" in out and "Ran b_tool" in out
+    assert "Ran a_tool</span><br />" in out  # one muted block, one tool per line
+    assert "b_tool</span></p>\n<div" in out and "Security posture</div>" in out
+
+
+@pytest.mark.unit
+def test_status_without_html_is_plain_italics():
+    out = markdown_to_html("> Running **x_y**...\nDone", allow_html=False)
+    assert "<em>Ran x_y</em>" in out and "<p>Done</p>" in out
