@@ -343,3 +343,28 @@ class TestDetailText:
                                        mit.SERVER, mit.REMOTE, None])
     def test_every_state_has_text(self, state):
         assert mit.state_text(state)
+
+
+@pytest.mark.unit
+def test_sidebar_button_returns_to_the_tiles(qapp, isolated_settings, monkeypatch):
+    """Security posture (and an item in it) left open, another section, then
+    the sidebar's Dashboard button: the tiles, not the old page."""
+    from gui.page_kit import MenuRow
+    from plugins.dashboard.main import Plugin
+
+    monkeypatch.setattr(Plugin, "refresh", lambda self: None)
+    monkeypatch.setattr(Plugin, "_agent_installed", staticmethod(lambda: True))
+    app = MagicMock()
+    app.plugins = []
+    plugin = Plugin(app)
+    mine = dict(card(PKG_ITEM), grade="B", score=86, computed_at="2026-10-12T22:50:31",
+                schema="phoenix.posture.v1")
+    plugin._posture_view = ({"status": "ok", "cards": [mine], "error": None}, {"anubisai"})
+    screen = plugin.create_main_screen()
+    plugin._show_posture_detail()
+    next(r for r in plugin._detail[0].findChildren(MenuRow) if r.text() == "Update openssl").clicked.emit()
+    assert screen.count() == 3
+    plugin.on_screen_shown()  # what the shell calls when the Dashboard is shown again
+    assert screen.currentIndex() == 0 and screen.count() == 1
+    assert plugin._detail is None and plugin._mitigation_page is None
+    plugin.destroy()
