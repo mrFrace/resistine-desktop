@@ -48,6 +48,10 @@ pkgs.testers.runNixOSTest {
         machine.succeed("getent passwd wazuh")
         # The binaries are prebuilt; they only run through nix-ld.
         machine.succeed("/opt/phoenix-agent/bin/wazuh-agentd -V")
+        # The agent accepts the generated ossec.conf (-t: parse it and exit),
+        # including the rootcheck ignores for container storage.
+        machine.succeed("/opt/phoenix-agent/bin/wazuh-agentd -t")
+        machine.succeed("grep -q '<ignore>/var/lib/docker</ignore>' /opt/phoenix-agent/etc/ossec.conf")
 
     with subtest("VPN prerequisites"):
         machine.succeed("lsmod | grep -q '^wireguard'")
