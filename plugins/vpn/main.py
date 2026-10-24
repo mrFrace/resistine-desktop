@@ -373,14 +373,12 @@ class Plugin(BasePlugin):
             logger.warning(f"Extension activation request failed: {e}")
 
     def check_status(self):
-        """Dynamic check of the VPN status from cheap cached state."""
-        if IS_MACOS and not _safe_extension_enabled():
-            return "Error"
-        if my_vpn_status == "Running":
-            return "OK"
-        if my_vpn_status in ("Connecting", "Starting"):
-            return "Info"
-        return "Warning"
+        """Dynamic check of the VPN status from cheap cached state.
+
+        The VPN is optional: connected glows green, anything else leaves the
+        nav icon plain (None), never a warning.
+        """
+        return "OK" if my_vpn_status == "Running" else None
 
     def on_theme_changed(self):
         """Rebuild the VPN screen on theme toggle (icons bake in theme colours)."""
