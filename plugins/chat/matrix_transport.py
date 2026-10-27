@@ -603,7 +603,8 @@ class MatrixService:
             # Discovery reads two state events of every joined room (~40 KB
             # for ~50 rooms), so it runs at start and every _DISCOVER_EVERY
             # polls; in between only invites (stripped state) come back.
-            state = {"types": ["m.room.create", "m.room.encryption"]} if discover else {"not_types": ["*"]}
+            state = ({"types": ["m.room.create", "m.room.encryption", "m.room.name"]}
+                     if discover else {"not_types": ["*"]})
             return {"room": {"timeline": {"limit": 0}, "state": state,
                              "ephemeral": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}},
                     "presence": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}}
@@ -619,8 +620,8 @@ class MatrixService:
                         headers={"Authorization": f"Bearer {client.access_token}"}) as r:
                     data = await r.json() if r.status == 200 else {}
                 rooms = data.get("rooms") or {}
-                if discover:
-                    self._adopt_joined_alert_rooms(rooms.get("join") or {})
+                if discover and "rooms" in data:
+                    self._check_joined_alert_rooms(rooms.get("join") or {})
                 invites = rooms.get("invite") or {}
                 for room_id, inv in invites.items():
                     state = (inv.get("invite_state") or {}).get("events") or []
@@ -640,12 +641,27 @@ class MatrixService:
                 logger.warning(f"[CHAT-MATRIX] SIEM alerts invite check failed: {e}")
             await asyncio.sleep(_INVITE_POLL)
 
-    def _adopt_joined_alert_rooms(self, joined: dict) -> None:
+    def _check_joined_alert_rooms(self, joined: dict) -> None:
+        """Adopt this user's alert rooms joined elsewhere, and drop known ones
+        that are not theirs (shared into by their owner) or that they have
+        left or been removed from."""
+        for room_id in sorted(self._alert_rooms):
+            room = joined.get(room_id)
+            if room is not None:
+                state = ((room or {}).get("state") or {}).get("events") or []
+                if siem_alerts.is_alert_room(state, self.alerts_bot, self.user_id):
+                    continue
+                why = "it is another user's"
+            else:
+                why = "this account is no longer in it"
+            self._alert_rooms.discard(room_id)
+            siem_alerts.forget_alert_room(room_id)
+            logger.warning(f"[CHAT-MATRIX] dropped SIEM alerts room {room_id}: {why}")
         for room_id, room in joined.items():
             if room_id in self._alert_rooms:
                 continue
             state = ((room or {}).get("state") or {}).get("events") or []
-            if not siem_alerts.is_alert_room(state, self.alerts_bot):
+            if not siem_alerts.is_alert_room(state, self.alerts_bot, self.user_id):
                 continue
             self._alert_rooms.add(room_id)
             siem_alerts.add_alert_room(room_id, since=time.time())

@@ -166,35 +166,44 @@ class TestService:
 
 # --------------------------------------------------------------------------- rooms joined elsewhere
 
-def _state(creator=BOT, encrypted=True):
+def _state(creator=BOT, encrypted=True, name="SIEM dashboard.phoenix.exposed — francis", namer=None):
     evs = [{"type": "m.room.create", "state_key": "", "sender": creator, "content": {}}]
     if encrypted:
         evs.append({"type": "m.room.encryption", "state_key": "", "sender": creator,
                     "content": {"algorithm": "m.megolm.v1.aes-sha2"}})
+    if name is not None:
+        evs.append({"type": "m.room.name", "state_key": "", "sender": namer or creator,
+                    "content": {"name": name}})
     return evs
 
 
 @pytest.mark.unit
 class TestJoinedElsewhere:
-    def test_room_created_by_the_bot_and_encrypted_is_an_alert_room(self):
-        assert siem_alerts.is_alert_room(_state(), BOT)
+    def test_the_bots_encrypted_room_named_for_me_is_my_alert_room(self):
+        assert siem_alerts.is_alert_room(_state(), BOT, ME)
+        assert siem_alerts.is_alert_room(_state(name="SIEM — Francis"), BOT, ME)
 
     @pytest.mark.parametrize("state", [
         _state(creator="@mallory:phoenix.exposed"),   # someone else's room
         _state(encrypted=False),                       # plaintext: never trusted
+        _state(name="SIEM dashboard.phoenix.exposed — drake"),  # shared into by its owner
+        _state(name=None),
+        _state(name="SIEM — francis", namer="@drake:phoenix.exposed"),  # not named by the bot
+        _state(name="francis"),
         [{"type": "m.room.create", "state_key": "x", "sender": BOT}],  # not the create event
         [], None,
     ])
     def test_other_rooms_are_not(self, state):
-        assert not siem_alerts.is_alert_room(state, BOT)
+        assert not siem_alerts.is_alert_room(state, BOT, ME)
 
     def test_no_bot_configured_matches_nothing(self):
-        assert not siem_alerts.is_alert_room(_state(creator=""), "")
+        assert not siem_alerts.is_alert_room(_state(creator=""), "", ME)
 
-    def test_service_adopts_only_bot_rooms(self, fresh):
+    def test_service_adopts_only_my_bot_rooms(self, fresh):
         svc = mt.MatrixService("https://hs", ME, "DEV", None)
-        svc._adopt_joined_alert_rooms({
+        svc._check_joined_alert_rooms({
             "!alerts:hs": {"state": {"events": _state()}},
+            "!drakes:hs": {"state": {"events": _state(name="SIEM — drake")}},
             "!friends:hs": {"state": {"events": _state(creator="@alice:hs")}},
             "!weird:hs": None,
         })
@@ -202,6 +211,23 @@ class TestJoinedElsewhere:
         assert siem_alerts.alert_rooms() == ["!alerts:hs"]
         assert siem_alerts.alert_room_since("!alerts:hs") is not None
         assert svc._full_state_next
+
+    def test_rooms_not_mine_or_left_are_dropped_with_their_alerts(self, fresh):
+        """2026-10-12: a user invited colleagues into their own alerts DM, and
+        the colleagues' apps showed that user's alerts as their own."""
+        for room in ("!mine:hs", "!drakes:hs", "!left:hs"):
+            siem_alerts.add_alert_room(room, since=1.0)
+            siem_alerts.publish(room, f"$e{room}", "alert")
+        svc = mt.MatrixService("https://hs", ME, "DEV", None)
+        svc._check_joined_alert_rooms({
+            "!mine:hs": {"state": {"events": _state()}},
+            "!drakes:hs": {"state": {"events": _state(name="SIEM — drake")}},
+        })
+        assert svc._alert_rooms == {"!mine:hs"}
+        assert siem_alerts.alert_rooms() == ["!mine:hs"]
+        assert siem_alerts.alert_room_since("!left:hs") is None
+        assert [a["room_id"] for a in siem_alerts.store().all()] == ["!mine:hs"]
+        assert siem_alerts.store().unread == 1
 
     def test_since_is_kept_from_the_first_time(self, fresh):
         siem_alerts.add_alert_room("!a:hs", since=100.0)
