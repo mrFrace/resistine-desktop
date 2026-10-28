@@ -314,10 +314,11 @@ def find_certs_dir() -> str | None:
     bail out before ever invoking freshclam — on every Linux distro, not just
     ones with an unusual layout.
 
-    Distro packages ship the cert at <prefix>/share/clamav/certs, so derive
-    the prefix from the resolved binary rather than hardcoding /usr. That also
-    covers non-FHS prefixes (Nix store, /usr/local, custom builds), where the
-    path is not knowable ahead of time.
+    Most distro packages ship the cert at <prefix>/share/clamav/certs, so
+    derive the prefix from the resolved binary rather than hardcoding /usr.
+    That also covers non-FHS prefixes (Nix store, /usr/local, custom builds),
+    where the path is not knowable ahead of time. Arch keeps it at ClamAV's
+    own default, <sysconfdir>/certs (/etc/clamav/certs).
     """
     candidates: list[str] = []
 
@@ -335,6 +336,7 @@ def find_certs_dir() -> str | None:
         "/usr/share/clamav/certs",
         "/usr/local/share/clamav/certs",
         "/var/lib/clamav/certs",
+        "/etc/clamav/certs",
     ]
 
     for directory in candidates:
