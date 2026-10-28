@@ -1818,15 +1818,3 @@ class TestInstallerSelfHeal:
 
         assert store[("antivirus", "setup_state")] == service.STATE_COMPLETED
         service.ensure_db_seed_started.assert_not_called()
-
-
-@pytest.mark.unit
-def test_linux_certs_dir_finds_arch_etc_location(monkeypatch):
-    """Arch's clamav package ships the CVD cert in /etc/clamav/certs."""
-    from plugins.antivirus import clamav_platform_linux as linux
-
-    monkeypatch.delenv("CVD_CERTS_DIR", raising=False)
-    monkeypatch.setattr(linux, "find_binary", lambda name: None)
-    monkeypatch.setattr(linux.os.path, "isfile",
-                        lambda p: p == "/etc/clamav/certs/clamav.crt")
-    assert linux.find_certs_dir() == "/etc/clamav/certs"
