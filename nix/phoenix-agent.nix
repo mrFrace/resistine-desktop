@@ -25,7 +25,7 @@ stdenvNoCC.mkDerivation {
   # older nixpkgs' requireFile takes no meta argument.)
   src = (requireFile {
     name = "phoenix-agent_5.0.0-1_amd64.deb";
-    sha256 = "a7935b5f1f516e939c0b1bb75bac585541b755f06621b635b5fef0932ca87981";
+    sha256 = "54c4883f74589850da662f2bc71383c67b88f297472113889dfd88a3d57f7ee2";
     message = ''
       phoenix-agent_5.0.0-1_amd64.deb is not in the nix store. Get it from
       your Phoenix admin (or the manager host) and add it:
