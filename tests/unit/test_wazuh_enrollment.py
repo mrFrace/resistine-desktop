@@ -247,6 +247,68 @@ class TestMsiLog:
 
 
 @pytest.mark.unit
+@pytest.mark.security
+class TestAgentName:
+    """enrollment.agent_name_from / install_salt — the shared fallback that
+    stops two machines computing the same manager-global bare-hostname name."""
+
+    NAME_RE = __import__("re").compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+    def test_hardware_id_name_is_unchanged_legacy_format(self):
+        # Must stay byte-for-byte identical to the old per-platform logic so
+        # already-enrolled machines are not orphaned on the manager.
+        name = enrollment.agent_name_from(
+            "MacBook-Pro.local", "AABBCCDD-1234-5678-90AB-CDEF01234567")
+        assert name == "MacBook-Pro.local-CDEF01234567"
+
+    def test_fallback_uses_salt_not_bare_hostname(self):
+        name = enrollment.agent_name_from("MacBook-Air", None)
+        assert name != "MacBook-Air"
+        assert name == f"MacBook-Air-{enrollment.install_salt()}"
+        assert self.NAME_RE.match(name)
+
+    def test_salt_is_stable_and_persisted(self):
+        first = enrollment.install_salt()
+        assert enrollment.install_salt() == first          # same process
+        from utils import settings
+        assert settings.get("wazuh", "install_salt") == first  # persisted
+        # A later "restart" (fresh read) returns the stored value.
+        assert enrollment.agent_name_from("host", None) == f"host-{first}"
+
+    def test_two_machines_same_hostname_get_distinct_names(self):
+        from utils import settings
+        a = enrollment.agent_name_from("DESKTOP-XYZ", None)
+        settings.delete("wazuh", "install_salt")   # the other install's config
+        b = enrollment.agent_name_from("DESKTOP-XYZ", None)
+        assert a != b and a.startswith("DESKTOP-XYZ-") and b.startswith("DESKTOP-XYZ-")
+
+    def test_empty_or_all_special_hostname_falls_back_to_disambiguator(self):
+        for host in ("", "!@#$%^&*()"):
+            name = enrollment.agent_name_from(host, None)
+            assert name == enrollment.install_salt()
+            assert self.NAME_RE.match(name)
+
+    def test_long_hostname_trimmed_within_64_keeping_disambiguator(self):
+        name = enrollment.agent_name_from("A" * 200, "DEAD-BEEF-CAFE-0001-000000000002")
+        assert len(name) <= 64
+        assert self.NAME_RE.match(name)
+        assert name.endswith("000000000002")  # disambiguator survives the trim
+
+    def test_salt_is_within_name_charset(self):
+        assert __import__("re").match(r"^[A-Za-z0-9._-]{1,12}$", enrollment.install_salt())
+
+    @pytest.mark.parametrize("hw", ["----", ".", "-", ""])
+    def test_hardware_id_that_strips_to_empty_falls_back_to_salt(self, hw):
+        # A truthy-but-degenerate hardware id must NOT yield a name without a
+        # disambiguator (bare/colliding) or an empty name — it falls back to the
+        # salt, like a missing hardware id does.
+        salt = enrollment.install_salt()
+        assert enrollment.agent_name_from("host", hw) == f"host-{salt}"
+        assert enrollment.agent_name_from("", hw) == salt
+        assert self.NAME_RE.match(enrollment.agent_name_from("host", hw))
+
+
+@pytest.mark.unit
 class TestEnrolledForThisSignIn:
     """The enrollment is tied to the Matrix device + account it was made for:
     sign-out deletes the device's agent on the server, and the next sign-in is

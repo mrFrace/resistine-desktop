@@ -11,7 +11,6 @@ import socket
 import subprocess
 import tempfile
 import shutil
-import re
 
 from utils import settings
 from utils.logger import logger
@@ -124,15 +123,13 @@ def _get_machine_id():
     return None
 
 def get_agent_name():
-    """Return a stable, org-unique agent name."""
-    hostname = socket.gethostname()
-    machine_id = _get_machine_id()
-    if machine_id:
-        suffix = machine_id.replace("-", "")[-12:].upper()
-        name = f"{hostname}-{suffix}"
-    else:
-        name = hostname
-    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    """Return a stable, org-unique agent name (see enrollment.agent_name_from).
+
+    hostname + last 12 chars of the machine-id; when the machine-id can't be
+    read, a stable per-install salt stands in, so the name never degrades to a
+    bare hostname that collides across the manager.
+    """
+    return enrollment.agent_name_from(socket.gethostname(), _get_machine_id())
 
 def get_agent_group():
     """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
