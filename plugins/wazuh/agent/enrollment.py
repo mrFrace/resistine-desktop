@@ -40,6 +40,7 @@ import base64
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -73,6 +74,14 @@ def request(agent_name: str) -> Optional[Enrollment]:
     try:
         from plugins.vpn import provisioning
         r = provisioning._authorized_request("POST", ENROLL_PATH, json={"name": agent_name})
+        if r.status_code == 409:
+            # The name is taken on the manager, usually by an earlier attempt
+            # whose install then failed. Try once under a unique name, the
+            # way reenroll_agent() recovers a dead key.
+            retry_name = f"{agent_name[:57]}-{str(int(time.time()))[-6:]}"
+            logger.warning(f"[ENROLL] {agent_name!r} already exists on the manager; "
+                           f"retrying as {retry_name!r}")
+            r = provisioning._authorized_request("POST", ENROLL_PATH, json={"name": retry_name})
     except Exception as e:  # noqa: BLE001 - ProvisioningError, import problems
         logger.warning(f"[ENROLL] API enrollment unavailable: {e}")
         return None

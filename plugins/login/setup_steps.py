@@ -1163,6 +1163,13 @@ class _EndpointStepDirect(SetupStep):
     def _install_fail_message(self) -> str:
         """Classify a full_install() failure from its last progress line."""
         lp = (self._last_progress or "").lower()
+        if "restart" in lp:
+            return ("Windows needs to restart before the endpoint agent can be "
+                    "installed. Restart your PC, then run setup again.")
+        if lp.startswith("installation failed:"):
+            detail = self._last_progress.split(":", 1)[1].strip().rstrip(".")
+            return (f"Couldn't install the endpoint agent: {detail}. "
+                    "You can try again or skip.")
         if "download" in lp:
             return ("Couldn't download the endpoint agent. Check your connection "
                     "and try again.")

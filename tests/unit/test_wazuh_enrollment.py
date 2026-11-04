@@ -223,7 +223,11 @@ class TestMsiLog:
     def test_install_script_writes_a_verbose_msi_log(self):
         from plugins.wazuh.agent import wazuh_functions_windows as ww
         script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
-        assert r"'/l*v','C:\t\p-install.log'" in script
+        # Start-Process does not quote -ArgumentList elements, so the paths
+        # carry literal double quotes.
+        assert r"""'/l*v','"C:\t\p-install.log"'""" in script
+        assert r"""'/i','"C:\t\p.msi"'""" in script
+        assert "-PassThru" in script and 'MSI_EXIT=' in script
 
     def test_summary_names_the_exit_code_and_failing_action(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_windows as ww
