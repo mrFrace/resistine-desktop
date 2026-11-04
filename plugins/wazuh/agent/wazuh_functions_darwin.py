@@ -56,30 +56,16 @@ def _get_hardware_uuid():
 
 
 def get_agent_name():
-    """Return a stable, org-unique agent name: hostname + last 8 chars of hardware UUID.
+    """Return a stable, org-unique agent name: hostname + last 12 chars of the
+    hardware UUID (see enrollment.agent_name_from).
 
-    Using hostname alone causes collisions when multiple machines share a
-    default name (e.g. 'MacBook-Air.local').  Appending a short hardware UUID
-    suffix makes the name unique per physical device while keeping it
-    human-readable on the Wazuh dashboard.
-
-    The result is restricted to alphanumerics, hyphens, and dots to prevent
-    shell injection when the name is interpolated into privileged scripts.
+    Using the hostname alone causes collisions when multiple machines share a
+    default name (e.g. 'MacBook-Air.local'); the hardware-UUID suffix makes the
+    name unique per physical device. When the UUID can't be read, a stable
+    per-install salt stands in for it, so the name never degrades to a bare,
+    manager-globally-colliding hostname.
     """
-    import re
-    hostname = socket.gethostname()
-    hw_uuid = _get_hardware_uuid()
-    if hw_uuid:
-        suffix = hw_uuid.replace("-", "")[-12:].upper()
-        name = f"{hostname}-{suffix}"
-    else:
-        name = hostname
-    # Strip any character that isn't safe in a shell argument or Wazuh agent
-    # name.  Wazuh allows: alphanumerics, hyphens, underscores, dots.
-    name = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
-    if not name:
-        raise ValueError(f"Agent name is empty after sanitizing hostname: {hostname!r}")
-    return name
+    return enrollment.agent_name_from(socket.gethostname(), _get_hardware_uuid())
 
 
 def get_agent_group():
@@ -855,13 +841,16 @@ def full_install(progress_callback=None):
             progress_callback(f"Installation failed: {error}")
         return False
 
-    # Log enrollment outcome for diagnostics
-    enrollment = details.get("enrollment", "")
-    if enrollment == "restored":
+    # Log enrollment outcome for diagnostics. NB: do not name this local
+    # `enrollment` — that shadows the module-level `enrollment` import for the
+    # whole function, making the earlier enrollment.request() call at the top of
+    # full_install() raise UnboundLocalError.
+    enroll_outcome = details.get("enrollment", "")
+    if enroll_outcome == "restored":
         logger.info("[WAZUH] Existing enrollment key restored — agent will reconnect as same agent")
-    elif enrollment == "enrolled":
+    elif enroll_outcome == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
-    elif enrollment == "enroll_failed":
+    elif enroll_outcome == "enroll_failed":
         logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd

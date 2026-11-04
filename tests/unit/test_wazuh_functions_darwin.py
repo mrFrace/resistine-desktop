@@ -79,11 +79,32 @@ class TestGetAgentName:
 
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.subprocess.run")
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.socket.gethostname", return_value="host")
-    def test_fallback_when_uuid_unavailable(self, mock_host, mock_run):
+    def test_fallback_uses_salt_not_bare_hostname(self, mock_host, mock_run):
+        # When the hardware UUID can't be read the name must NOT degrade to the
+        # bare hostname (that collides manager-wide); it carries the persisted
+        # per-install salt instead, and is stable across calls.
         mock_run.side_effect = Exception("ioreg not found")
         from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_name
+        from plugins.wazuh.agent import enrollment
         name = get_agent_name()
-        assert name == "host"
+        assert name != "host"
+        assert name.startswith("host-")
+        assert name.endswith(enrollment.install_salt())
+        assert name == get_agent_name()  # stable across restarts
+        import re
+        assert re.match(r"^[A-Za-z0-9._-]{1,64}$", name)
+
+    @patch("plugins.wazuh.agent.wazuh_functions_darwin.subprocess.run")
+    @patch("plugins.wazuh.agent.wazuh_functions_darwin.socket.gethostname", return_value="MacBook-Pro.local")
+    def test_name_unchanged_when_uuid_available(self, mock_host, mock_run):
+        # The hw-UUID branch must keep the exact legacy format so machines that
+        # already enrolled under it are not orphaned on the manager.
+        mock_run.return_value = MagicMock(
+            stdout='"IOPlatformUUID" = "AABBCCDD-1234-5678-90AB-CDEF01234567"\n',
+            returncode=0,
+        )
+        from plugins.wazuh.agent.wazuh_functions_darwin import get_agent_name
+        assert get_agent_name() == "MacBook-Pro.local-CDEF01234567"
 
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.subprocess.run")
     @patch("plugins.wazuh.agent.wazuh_functions_darwin.socket.gethostname", return_value="A" * 200)

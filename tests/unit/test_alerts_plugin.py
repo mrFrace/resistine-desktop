@@ -30,7 +30,18 @@ def _plugin(monkeypatch, tmp_path, chat=None):
 
 
 def _titles(rows):
+    # RowList.clear() removes rows from the layout but deletes the widgets with
+    # deleteLater(), so a row stays a child of `rows` until the event loop
+    # processes the DeferredDelete. _fill() runs several times per test (build,
+    # on-shown, on-arrival), and findChildren() would otherwise count those not-
+    # yet-destroyed rows on top of the live ones — deterministic in isolation,
+    # but order-dependent under the full suite (3 rows counted as 7). Flush the
+    # pending deletions first so only the rows actually in the list are counted.
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtWidgets import QApplication
+
     from gui.page_kit import MenuRow
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     return [r.text() for r in rows.findChildren(MenuRow)]
 
 
