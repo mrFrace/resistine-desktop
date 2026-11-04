@@ -350,6 +350,33 @@ def isolated_settings(tmp_config_dir, mock_keyring):
 
 
 # ---------------------------------------------------------------------------
+# Isolate the module-global SIEM alert state between tests
+# ---------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _isolate_siem_alerts(tmp_path_factory):
+    """Give every test a fresh, empty SIEM alert store and no listeners.
+
+    ``plugins.chat.siem_alerts`` keeps the received alerts and the subscriber
+    list in module globals (``_store`` / ``_listeners``). Plugin tests that
+    publish alerts — or whose plugins subscribe — otherwise leak that state into
+    later tests, which made the alerts-screen tests order-dependent (a store
+    that should hold 3 alerts held 7 under the full suite, because alerts with
+    the same body but distinct event ids piled up across tests). Reset only when
+    the module is already imported, so tests that never touch it pay nothing and
+    no heavy import is forced.
+    """
+    sa = sys.modules.get("plugins.chat.siem_alerts")
+    if sa is not None:
+        sa._store = sa.AlertStore(str(tmp_path_factory.mktemp("siem_alerts") / "a.json"))
+        sa._listeners = []
+    yield
+    sa = sys.modules.get("plugins.chat.siem_alerts")
+    if sa is not None:
+        sa._store = None
+        sa._listeners = []
+
+
+# ---------------------------------------------------------------------------
 # Sample VPN config data
 # ---------------------------------------------------------------------------
 @pytest.fixture()

@@ -54,20 +54,34 @@ def alert_rooms() -> list[str]:
     return [r for r in rooms if isinstance(r, str) and r]
 
 
-def is_alert_room(state_events: list, bot: str) -> bool:
-    """True iff a room the user has ALREADY joined is an alerts DM: created by
-    *bot* and end-to-end encrypted. Covers rooms joined in another client
+def _localpart(user_id: str) -> str:
+    return (user_id or "").lstrip("@").split(":", 1)[0].lower()
+
+
+def is_alert_room(state_events: list, bot: str, user_id: str) -> bool:
+    """True iff a room the user has ALREADY joined is THEIR alerts DM:
+    created by *bot*, end-to-end encrypted, and named by *bot* for this user
+    ("SIEM <box> — <localpart>"). Covers rooms joined in another client
     (Element), whose invite this app never saw; a room's creator is as
-    trustworthy as an invite's sender (both are set by the homeserver)."""
-    created_by = encrypted = None
+    trustworthy as an invite's sender (both are set by the homeserver).
+
+    The name matters because a member can invite others into their own
+    alerts DM: those others then share the room, but it is not theirs, and
+    the alerts in it are about someone else's machines. Only the bot can
+    set the name (members lack the power level)."""
+    created_by = encrypted = named_for = None
     for ev in state_events or ():
-        if not isinstance(ev, dict):
+        if not isinstance(ev, dict) or ev.get("state_key") != "":
             continue
-        if ev.get("type") == "m.room.create" and ev.get("state_key") == "":
+        if ev.get("type") == "m.room.create":
             created_by = ev.get("sender")
-        elif ev.get("type") == "m.room.encryption" and ev.get("state_key") == "":
+        elif ev.get("type") == "m.room.encryption":
             encrypted = (ev.get("content") or {}).get("algorithm") == "m.megolm.v1.aes-sha2"
-    return bool(bot) and created_by == bot and bool(encrypted)
+        elif ev.get("type") == "m.room.name" and ev.get("sender") == bot:
+            name = str((ev.get("content") or {}).get("name") or "")
+            named_for = name.rpartition("—")[2].strip().lower() if "—" in name else None
+    return (bool(bot) and created_by == bot and bool(encrypted)
+            and bool(_localpart(user_id)) and named_for == _localpart(user_id))
 
 
 def add_alert_room(room_id: str, since: Optional[float] = None) -> None:
@@ -81,6 +95,18 @@ def add_alert_room(room_id: str, since: Optional[float] = None) -> None:
         sinces = settings.get(_NS, "alert_rooms_since") or {}
         if room_id not in sinces:
             settings.set(_NS, "alert_rooms_since", {**sinces, room_id: float(since)})
+
+
+def forget_alert_room(room_id: str) -> None:
+    """Stop treating *room_id* as an alerts room and delete its stored alerts
+    (it was not, or is no longer, this user's)."""
+    rooms = alert_rooms()
+    if room_id in rooms:
+        settings.set(_NS, "alert_rooms", [r for r in rooms if r != room_id])
+    sinces = settings.get(_NS, "alert_rooms_since") or {}
+    if room_id in sinces:
+        settings.set(_NS, "alert_rooms_since", {k: v for k, v in sinces.items() if k != room_id})
+    store().drop_room(room_id)
 
 
 def alert_room_since(room_id: str) -> Optional[float]:
@@ -145,6 +171,17 @@ class AlertStore:
             self._unread += 1
             self._save()
             return True
+
+    def drop_room(self, room_id: str) -> int:
+        """Delete every alert from *room_id*; returns how many."""
+        with self._lock:
+            keep = [a for a in self._alerts if a.get("room_id") != room_id]
+            dropped = len(self._alerts) - len(keep)
+            if dropped:
+                self._alerts = keep
+                self._unread = min(self._unread, len(keep))
+                self._save()
+            return dropped
 
     def all(self) -> list[dict]:
         with self._lock:
