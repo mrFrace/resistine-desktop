@@ -416,8 +416,11 @@ def _sysmon_install_ps(sysmon):
         f"-Destination {_ps_quote(_SYSMON_DIR)} -Force\n"
         "if ((Get-Service -Name SysmonDrv -ErrorAction SilentlyContinue) -and "
         "-not (Get-Service -Name Sysmon64,Sysmon -ErrorAction SilentlyContinue)) "
-        f"{{ & {dest_exe} -u force | Out-Null }}\n"
-        f"& {dest_exe} -accepteula -i {dest_cfg} | Out-Null\n"
+        f"{{ & {dest_exe} -u force 2>$null | Out-Null }}\n"
+        # Sysmon prints its banner on stderr even on success; PowerShell would
+        # report that as NativeCommandError noise, so drop stderr and keep the
+        # exit code as the signal.
+        f"& {dest_exe} -accepteula -i {dest_cfg} 2>$null | Out-Null\n"
         'Write-Output "SYSMON_EXIT=$LASTEXITCODE"'
     )
 
