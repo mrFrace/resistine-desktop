@@ -114,15 +114,19 @@ class TestConfigPathInterop:
 class TestIPCRoundTrip:
     def test_status_request_response(self):
         """Simulate a full IPC status request → handler → response."""
-        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request
 
+        # IPC_TOKEN is only populated when the service starts; an empty token
+        # is rejected, so the test installs a real one.
+        token = "t" * 64
         request = {
-            "token": IPC_TOKEN,
+            "token": token,
             "command": "status",
             "tunnel": "wg0",
         }
 
-        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN", token), \
+             patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             response = handle_request(request)
 
         assert response["status"] == "ok"
@@ -131,16 +135,18 @@ class TestIPCRoundTrip:
         json.dumps(response)
 
     def test_connect_request_response(self):
-        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request
 
+        token = "t" * 64
         request = {
-            "token": IPC_TOKEN,
+            "token": token,
             "command": "connect",
             "tunnel": "wg0",
             "config_path": r"C:\Users\Test\AppData\Roaming\Resistine\wireguard\wg0.conf",
         }
 
-        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN", token), \
+             patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
             with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")):

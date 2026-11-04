@@ -8,24 +8,51 @@ accordingly. It also auto-starts a default tunnel if present in ProgramData.
 
 from __future__ import annotations
 
-import win32serviceutil
-import win32service
-import win32event
-import servicemanager
-import win32con
-
 import hmac
+import json
+import logging
+import os
 import re
 import secrets as _secrets
-import socket
-import threading
-import json
-import subprocess
-import os
-import logging
-import time
-import sys
 import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+import servicemanager
+import win32con
+import win32event
+import win32service
+import win32serviceutil
+
+# Tunnel-name allowlist. The installer deploys this file on its own under
+# {app}\plugins\vpn\wireguard and the SYSTEM service runs it with the machine
+# Python, so the package-relative import that works in-repo and under pytest
+# is not available there. Prefer the shared validator (the build script copies
+# config_validation.py next to this file); fall back to an identical inline
+# rule so a bare deployment still rejects separators, "..", and flag-like names
+# instead of failing every request with a NameError.
+try:
+    from .config_validation import (  # package import
+        SCRIPT_HOOK_KEYS,
+        is_valid_config_name,
+    )
+except ImportError:
+    try:
+        from config_validation import (  # sibling file
+            SCRIPT_HOOK_KEYS,
+            is_valid_config_name,
+        )
+    except ImportError:
+        # Keep in sync with config_validation._CONFIG_NAME_RE / SCRIPT_HOOK_KEYS.
+        _CONFIG_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]*$")
+        SCRIPT_HOOK_KEYS = frozenset({"preup", "postup", "predown", "postdown"})
+
+        def is_valid_config_name(name) -> bool:
+            """Return True if ``name`` is a safe config/tunnel name."""
+            return isinstance(name, str) and _CONFIG_NAME_RE.fullmatch(name) is not None
 
 
 # ---------------- Configuration ----------------
@@ -492,7 +519,11 @@ def _validated_config_path(tunnel: str, config_path) -> str | None:
 
 
 def handle_request(request: dict) -> dict:
-    if request.get("token") != IPC_TOKEN:
+    # Constant-time comparison; a non-string token or an unset IPC_TOKEN is
+    # rejected outright (compare_digest raises TypeError on non-strings).
+    supplied = request.get("token")
+    if (not isinstance(supplied, str) or not IPC_TOKEN
+            or not hmac.compare_digest(supplied, IPC_TOKEN)):
         return {"status": "error", "message": "Unauthorized"}
 
     cmd         = request.get("command")
