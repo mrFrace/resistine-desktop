@@ -51,6 +51,7 @@ import hashlib
 import hmac
 import os
 import re
+import secrets
 import tempfile
 from dataclasses import dataclass
 from typing import Optional
@@ -63,9 +64,77 @@ LINK_PATH = "/v1/agent/link"
 _NS = "wazuh"
 GROUP_PREFIX = "u_"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Wazuh agent names are unique across the WHOLE manager and capped at 64 chars.
+AGENT_NAME_MAX = 64
+_SALT_KEY = "install_salt"
 # "<id> <name> <ip|any> <64 hex>" -- the same pattern is used by the root step.
 KEY_LINE_PATTERN = r"[0-9]{3,8} [A-Za-z0-9._-]{1,64} (any|[0-9A-Fa-f.:/]{2,64}) [0-9a-f]{64}"
 _KEY_LINE_RE = re.compile(f"^{KEY_LINE_PATTERN}$")
+
+
+def _sanitize(value: str) -> str:
+    """Strip every character Wazuh agent names (and shell/PowerShell args) can't
+    safely hold, leaving only the AGENT_NAME_RE set [A-Za-z0-9._-]."""
+    return re.sub(r"[^A-Za-z0-9.\-_]", "", value or "")
+
+
+def install_salt() -> str:
+    """Return this install's stable fallback disambiguator for the agent name.
+
+    A random token generated once and persisted in the config dir, mirroring
+    ``oidc.get_device_id()``'s ``PHX_`` device id. It is used ONLY when no
+    per-machine hardware id is readable (see ``agent_name_from``): the agent
+    name must still carry a disambiguator, because Wazuh agent names are unique
+    across the whole manager — two machines that both fall back to a bare
+    default hostname (``MacBook-Air``, ``DESKTOP-XYZ``) would compute the same
+    name, and the manager rejects the second with error 1705 (HTTP 409).
+
+    Generated once and reused, so the name stays stable across restarts. 12
+    base32 chars (A-Z2-7), well within AGENT_NAME_RE.
+    """
+    cached = settings.get(_NS, _SALT_KEY)
+    if cached:
+        return cached
+    salt = base64.b32encode(secrets.token_bytes(8)).decode().rstrip("=")[:12]
+    settings.set(_NS, _SALT_KEY, salt)
+    return salt
+
+
+def agent_name_from(hostname: Optional[str], hardware_id: Optional[str]) -> str:
+    """Build the manager-unique Wazuh agent name for this device.
+
+    ``hardware_id`` present -> ``<hostname>-<last 12 chars, uppercased>``: the
+    good, stable name. This branch is byte-for-byte UNCHANGED from the old
+    per-platform logic, so machines that already enrolled under it keep their
+    manager agent and are not orphaned.
+
+    ``hardware_id`` missing/empty -> ``<hostname>-<install_salt()>``. The old
+    code degraded here to a BARE hostname, which collides manager-wide; the
+    persisted per-install salt restores a stable disambiguator without reusing
+    a value shared by cloned-VM / golden-image fleets.
+
+    The result is sanitized to AGENT_NAME_RE's character set, trimmed to 64
+    chars (keeping the disambiguator-bearing tail), and never empty — an empty
+    or over-long name would fail enrollment.
+    """
+    # The disambiguator is what makes the name manager-globally unique, so it
+    # must carry real (alphanumeric) content: a hardware id that sanitizes to
+    # nothing or to separators only (all dashes, non-ASCII) is treated as
+    # "unavailable" and falls back to the salt, exactly like a missing one.
+    disambiguator = _sanitize(hardware_id.replace("-", "")[-12:].upper()) if hardware_id else ""
+    if not disambiguator.strip("-."):
+        disambiguator = _sanitize(install_salt())
+    host = _sanitize(hostname or "")
+    # Join only when the hostname survived sanitizing; otherwise the
+    # disambiguator stands alone (no leading separator, still unique). For a
+    # real hostname this is byte-for-byte the old ``<host>-<suffix>`` output.
+    name = f"{host}-{disambiguator}" if host else disambiguator
+    if len(name) > AGENT_NAME_MAX:
+        # Over the cap -> such a name never enrolled (the server and _NAME_RE
+        # reject >64), so keeping only the tail can't orphan a real agent, and
+        # the tail is where the disambiguator lives.
+        name = name[-AGENT_NAME_MAX:]
+    return name
 
 
 @dataclass(frozen=True)

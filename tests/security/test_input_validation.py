@@ -92,11 +92,16 @@ class TestAgentNameSanitization:
         name = self._get_name_with_hostname("hôst-名前")
         assert self.SAFE_PATTERN.match(name)
 
-    def test_empty_result_rejected(self):
-        """A hostname of only special chars (and no hardware UUID) sanitizes to
-        an empty name; get_agent_name must fail closed rather than return ''."""
-        with pytest.raises(ValueError, match="empty after sanitizing"):
-            self._get_name_with_hostname("@#$%^&*()")
+    def test_unsanitizable_hostname_falls_back_to_safe_nonempty_name(self):
+        """A hostname of only special chars (and no hardware UUID) sanitizes
+        away, but get_agent_name must never return an empty or unsafe name: it
+        now falls back to the persisted per-install salt (which also prevents
+        the manager-wide bare-hostname collision the salt was added for), rather
+        than failing closed as the old code did."""
+        name = self._get_name_with_hostname("@#$%^&*()")
+        assert name, "agent name must not be empty"
+        assert self.SAFE_PATTERN.match(name)
+        assert not any(c in name for c in "@#$%^&*()")
 
     def test_special_char_hostname_with_uuid_is_safe(self):
         """With a hardware UUID the suffix alone keeps the name non-empty."""

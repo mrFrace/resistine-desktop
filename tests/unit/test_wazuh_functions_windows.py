@@ -19,6 +19,7 @@ Covers plugins/wazuh/agent/wazuh_functions_windows.py:
 All subprocess, network, registry, and ctypes calls are mocked — safe to run anywhere.
 """
 import os
+import re
 import sys
 import json
 import pytest
@@ -161,15 +162,34 @@ class TestGetAgentName:
         assert name.startswith("DESKTOP-TEST-")
         assert "123456789ABC" in name  # last 12 chars of GUID (no dashes), uppercased
 
-    def test_hostname_only_when_no_guid(self):
+    def test_fallback_uses_salt_not_bare_hostname(self):
+        # No MachineGuid -> the name must NOT be the bare hostname (collides
+        # manager-wide); it carries the persisted per-install salt and is stable.
         from plugins.wazuh.agent.wazuh_functions_windows import get_agent_name
+        from plugins.wazuh.agent import enrollment
 
         with patch("plugins.wazuh.agent.wazuh_functions_windows.socket.gethostname",
                    return_value="MYPC"):
             with patch("plugins.wazuh.agent.wazuh_functions_windows._get_machine_guid",
                        return_value=None):
                 name = get_agent_name()
-        assert name == "MYPC"
+                name2 = get_agent_name()
+        assert name != "MYPC"
+        assert name.startswith("MYPC-")
+        assert name.endswith(enrollment.install_salt())
+        assert name == name2  # stable across restarts
+        assert re.match(r"^[A-Za-z0-9._-]{1,64}$", name)
+
+    def test_name_unchanged_when_guid_available(self):
+        # The GUID branch keeps the exact legacy format (no orphaned agents).
+        from plugins.wazuh.agent.wazuh_functions_windows import get_agent_name
+
+        with patch("plugins.wazuh.agent.wazuh_functions_windows.socket.gethostname",
+                   return_value="DESKTOP-TEST"):
+            with patch("plugins.wazuh.agent.wazuh_functions_windows._get_machine_guid",
+                       return_value="12345678-1234-1234-1234-123456789abc"):
+                name = get_agent_name()
+        assert name == "DESKTOP-TEST-123456789ABC"
 
     def test_sanitizes_special_characters(self):
         """Name must only contain safe chars: [A-Za-z0-9.\\-_]"""
