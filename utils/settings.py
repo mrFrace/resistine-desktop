@@ -376,8 +376,10 @@ def get_secret(namespace: str, key: str) -> Optional[str]:
         return None
 
     if not stored_value.startswith(ENCRYPTED_PREFIX):
-        logger.warning(f"Value for {namespace}.{key} is not encrypted.")
-        return stored_value  # Return as-is if not marked encrypted (legacy support?)
+        # Fail closed: a plaintext value where a secret is expected is either a
+        # legacy leftover or a tampered config file; never hand it out as a secret.
+        logger.error(f"Value for {namespace}.{key} is not encrypted; refusing to return it as a secret.")
+        return None
 
     try:
         encrypted_data = stored_value[len(ENCRYPTED_PREFIX) :]

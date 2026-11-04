@@ -310,6 +310,9 @@ class PluginManager:
                 return False, "Refused: plugin downloads must use HTTPS."
             logger.info(f"Downloading plugin from: {url}")
             response = self._fetch_plugin_archive(url)
+            if len(response.content) > 50 * 1024 * 1024:
+                logger.error("Refusing plugin download over 50 MB")
+                return False, "Refused: plugin archive too large."
 
             # Verify integrity when a hash is available
             if not expected_sha256:

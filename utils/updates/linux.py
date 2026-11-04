@@ -256,23 +256,13 @@ def _download_worker(item: AppcastItem, dialog):
                 _cleanup(tmp_path)
                 return
         else:
-            logger.warning(
-                "[UPDATE-LINUX] No signature in appcast entry, skipping "
-                "verification"
+            logger.error(
+                "[UPDATE-LINUX] Appcast entry has no edSignature — refusing "
+                "unsigned update."
             )
             _app.after(
                 0, dialog.show_error,
                 "Update refused: the update feed entry is unsigned.", None,
-            )
-            _cleanup(tmp_path)
-            return
-        if not _verify_signature(tmp_path, item.signature):
-            _app.after(
-                0,
-                dialog.show_error,
-                "Signature verification failed. The download may be "
-                "corrupted or tampered with.",
-                lambda: _start_download(item, dialog),
             )
             _cleanup(tmp_path)
             return

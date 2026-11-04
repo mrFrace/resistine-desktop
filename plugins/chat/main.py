@@ -413,7 +413,10 @@ class _Bubble(QFrame):
         if self._thinking and text:
             self._end_thinking()
         try:
-            self._view.setHtml(markdown_to_html(text) if text else "")
+            # Alert bubbles quote monitored-host data: never render raw HTML there.
+            self._view.setHtml(
+                markdown_to_html(text, allow_html=not self._untrusted)
+                if text else "")
         except RuntimeError:
             # Browser deleted mid-stream (session switched / chat torn down).
             return
@@ -1262,7 +1265,7 @@ class Plugin(BasePlugin):
                 md="**🚨 SIEM alerts**\n\nNo alerts yet. Alerts about machines you own "
                    "will appear here.")
         for alert in alerts:
-            self._add_assistant_bubble(md=_alert_markdown(alert))
+            self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
         siem_alerts.store().mark_read()
         self._refresh_sidebar()
         self._sync_input_enabled()
@@ -1296,7 +1299,7 @@ class Plugin(BasePlugin):
             pass
         try:
             if self._viewing_alerts and getattr(self, "_messages_lay", None) is not None:
-                self._add_assistant_bubble(md=_alert_markdown(alert))
+                self._add_assistant_bubble(md=_alert_markdown(alert), untrusted=True)
                 siem_alerts.store().mark_read()
             self._refresh_sidebar()
         except RuntimeError:
