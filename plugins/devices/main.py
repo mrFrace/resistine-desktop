@@ -156,7 +156,7 @@ class _ClickRow(QFrame):
             wrap = QWidget()
             wrap.setObjectName("Transparent")
             wrap.setLayout(col)
-            wrap.setFixedWidth(76)
+            wrap.setFixedWidth(88)
             h.addWidget(wrap)
         chev = QLabel()
         chev.setPixmap(line_icon("chevron-right", theme.color("text_secondary"), 18))
