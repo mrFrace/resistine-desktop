@@ -17,6 +17,7 @@ Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import contextlib
 import os
 import platform
 import subprocess
@@ -38,12 +39,11 @@ AGENT_TCP_PORT = 1514
 def manager_ports() -> tuple:
     """Ports an ESTABLISHED session to the manager may use, configured first."""
     ports = [AGENT_TCP_PORT]
-    try:
+    # Config unavailable or unparsable: fall back to the 4.x port alone.
+    with contextlib.suppress(ImportError, ValueError, TypeError):
         from plugins.wazuh.config import WAZUH_MANAGER_PORT
 
         ports.insert(0, int(WAZUH_MANAGER_PORT))
-    except Exception:  # noqa: BLE001 - config unavailable: fall back to 4.x port
-        pass
     return tuple(dict.fromkeys(ports))
 
 
