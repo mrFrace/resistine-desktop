@@ -888,14 +888,16 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback(msg)
 
-    # The MSI refuses to install while Windows has a restart pending; say so
-    # before downloading anything or asking for elevation.
+    # Agent MSIs built before the pending-reboot launch condition was stripped
+    # (upstream Wazuh 5.0 wazuh-installer.wxs) refuse to install while Windows
+    # has a restart pending. Log it for support, but don't block: the fixed
+    # package installs regardless, and with an old package msiexec's own
+    # "restart is pending" line in the (now readable) log produces the
+    # restart message below.
     reason = pending_reboot_reason()
     if reason:
         logger.warning(f"[WAZUH] Windows restart pending ({reason}); "
-                       "the agent MSI will not install until the PC restarts")
-        _p(RESTART_REQUIRED_MSG)
-        return False
+                       "an agent MSI with the pending-reboot launch condition will refuse")
 
     # --- Unprivileged downloads (no prompt) ---
     sysmon = _prepare_sysmon_download(progress_callback)
