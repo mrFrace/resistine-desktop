@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -50,15 +51,17 @@ from gui.page_kit import (
     RowList,
     SlideStack,
     back_link,
+    hairline,
     icon_button,
     line_icon,
     muted,
 )
-from gui.qt_widgets import Card, CardGrid, set_pill
+from gui.qt_widgets import Card, CardGrid, scroll_page, set_pill
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture
-from plugins.devices import data
+from plugins.devices import data, remote
+from plugins.devices.tabs import EventsTab, InventoryTab, VulnerabilitiesTab
 from plugins.devices.widgets import DailyBars, GradeBadge, SeverityBar, StatCard
 from utils import settings
 from utils.i18n import get_text
@@ -176,6 +179,28 @@ class _ClickRow(QFrame):
         super().keyPressEvent(e)
 
 
+class _Ctx:
+    """What a tab (plugins/devices/tabs.py) needs from the plugin."""
+
+    def __init__(self, plugin):
+        self._p = plugin
+        self.app = plugin.app
+        self.store = plugin._store
+        self.t = _t
+
+    def rows(self) -> list:
+        return self._p._rows(posture.state())
+
+    def scope(self):
+        return self._p.scope_host()
+
+    def scoped_rows(self) -> list:
+        return data.scope_rows(self.rows(), self._p._scope)
+
+    def alerts(self, hosts) -> list:
+        return self._p._parsed_alerts(hosts)
+
+
 class Plugin(BasePlugin):
     """Security posture, alerts and agents across the account's devices."""
 
@@ -201,10 +226,23 @@ class Plugin(BasePlugin):
         self._scope = str(
             settings.get(_NS, "scope", data.ALL_DEVICES) or data.ALL_DEVICES
         )
+        self._scope_changed = False
         self._loading = False
         self._rebuild_pending = False
         self._subscribed = False
         self._poll_armed = False
+        self._remote_kicked = False
+        self._store = remote.store()
+        # Shell: fixed header + tab strip over a stack (overview | tabs).
+        self._shell: QWidget | None = None
+        self._header: PageHeader | None = None
+        self._combo_holder: QWidget | None = None
+        self._note: QLabel | None = None
+        self._stack: QStackedWidget | None = None
+        self._overview: QWidget | None = None
+        self._tabs: dict = {}
+        self._tab_buttons: dict = {}
+        self._active_tab = "overview"
 
     # ── Status (cheap: cached posture only) ─────────────────────────────
 
@@ -238,9 +276,12 @@ class Plugin(BasePlugin):
     def create_main_screen(self):
         self._destroyed = False
         self._pages = []
+        self._tabs = {}
+        self._tab_buttons = {}
         stack = SlideStack(fit_height=False)
-        self._main_page = self._build_main_page()
-        stack.addWidget(self._main_page)
+        self._shell = self._build_shell()
+        self._main_page = self._shell
+        stack.addWidget(self._shell)
         self.main_container = stack
         self._subscribe()
         self._kick_fetch()
@@ -259,6 +300,7 @@ class Plugin(BasePlugin):
                 siem_alerts.unsubscribe(self._alert_arrived)
             except Exception as e:  # noqa: BLE001
                 logger.debug(f"[DEVICES] unsubscribe: {e}")
+            self._store.unsubscribe(self._remote_changed)
             self._subscribed = False
         if self.main_container is not None:
             try:
@@ -276,13 +318,18 @@ class Plugin(BasePlugin):
             from plugins.chat import siem_alerts
 
             siem_alerts.subscribe(self._alert_arrived)
-            self._subscribed = True
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[DEVICES] alert subscription unavailable: {e}")
+        self._store.subscribe(self._remote_changed)
+        self._subscribed = True
 
     def _alert_arrived(self, _alert: dict) -> None:
         # Called on the Matrix thread; coalesce into one repaint.
         self._schedule_rebuild(400)
+
+    def _remote_changed(self, _slot: str) -> None:
+        # Called on a loader thread; coalesce into one repaint.
+        self._schedule_rebuild(150)
 
     def _arm_poll(self):
         if self._poll_armed:
@@ -319,6 +366,16 @@ class Plugin(BasePlugin):
                 if mine is not None:
                     mitigations.check(mine, True, force=force)
                     posture.record_score(mine)
+                # The tabs' datasets, once per screen (and on explicit refresh).
+                if force or not self._remote_kicked:
+                    self._remote_kicked = True
+                    self._store.refresh(
+                        [
+                            {"agent_id": r["agent_id"], "agent_name": r["hostname"]}
+                            for r in rows
+                            if r.get("agent_id")
+                        ]
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[DEVICES] refresh failed: {e}")
             finally:
@@ -340,23 +397,22 @@ class Plugin(BasePlugin):
             self._rebuild_pending = False
 
     def _rebuild_main(self):
+        """Refresh the header, rebuild the Overview, refresh the built tabs."""
         self._rebuild_pending = False
-        stack = self.main_container
-        if self._destroyed or stack is None:
+        if self._destroyed or self.main_container is None or self._stack is None:
             return
-        old = self._main_page
+        scope_changed, self._scope_changed = self._scope_changed, False
         try:
-            new = self._build_main_page()
+            self._refresh_header()
+            self._replace_overview()
+            for tab in self._tabs.values():
+                if scope_changed:
+                    tab.set_scope()
+                else:
+                    tab.refresh()
         except Exception as e:  # noqa: BLE001
             logger.error(f"[DEVICES] rebuild failed: {e}")
             return
-        stack.insertWidget(0, new)
-        if stack.currentWidget() is old:
-            stack.setCurrentWidget(new)
-        if old is not None:
-            stack.removeWidget(old)
-            old.deleteLater()
-        self._main_page = new
         try:
             new_status = self.check_status()
             if new_status != self.status:
@@ -394,30 +450,153 @@ class Plugin(BasePlugin):
 
     # ── Main page ───────────────────────────────────────────────────────
 
-    def _build_main_page(self) -> QWidget:
+    # ---- shell: header, tab strip, stack ---------------------------------------
+
+    _TABS = (
+        ("overview", "tab_overview"),
+        ("vulns", "tab_vulns"),
+        ("events", "tab_events"),
+        ("inventory", "tab_inventory"),
+    )
+
+    def _build_shell(self) -> QWidget:
+        shell = QWidget()
+        shell.setObjectName("Transparent")
+        v = QVBoxLayout(shell)
+        v.setContentsMargins(48, 36, 48, 0)
+        v.setSpacing(0)
+        self._header = PageHeader(_t("title"), "", ("info", _t("loading_pill")))
+        self._header.subtitle.setTextFormat(Qt.TextFormat.PlainText)
+        self._combo_holder = QWidget()
+        self._combo_holder.setObjectName("Transparent")
+        ch = QHBoxLayout(self._combo_holder)
+        ch.setContentsMargins(0, 0, 0, 0)
+        self._header.add_control(self._combo_holder)
+        refresh = icon_button("refresh-cw", _t("refresh"))
+        refresh.clicked.connect(self._refresh)
+        self._header.add_control(refresh)
+        v.addWidget(self._header)
+        self._note = _plain(muted(""))
+        self._note.hide()
+        v.addSpacing(6)
+        v.addWidget(self._note)
+        v.addSpacing(10)
+        v.addWidget(self._tab_strip())
+        v.addWidget(hairline())
+        self._stack = QStackedWidget()
+        self._overview = self._build_overview()
+        self._stack.addWidget(self._overview)
+        v.addWidget(self._stack, 1)
+        self._refresh_header()
+        self._style_tabs()
+        return shell
+
+    def _tab_strip(self) -> QWidget:
+        strip = QWidget()
+        strip.setObjectName("Transparent")
+        h = QHBoxLayout(strip)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(24)
+        for key, label in self._TABS:
+            btn = QPushButton(_t(label))
+            btn.setFlat(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, k=key: self._switch_tab(k))
+            h.addWidget(btn)
+            self._tab_buttons[key] = btn
+        h.addStretch(1)
+        return strip
+
+    def _style_tabs(self) -> None:
+        accent = theme.color("sidebar_active_text")
+        for key, btn in self._tab_buttons.items():
+            try:
+                if key == self._active_tab:
+                    btn.setStyleSheet(
+                        "QPushButton { background: transparent; border: none; border-radius: 0; "
+                        f"color: {accent}; font-size: 14px; font-weight: 700; "
+                        f"padding: 9px 2px 7px 2px; border-bottom: 2px solid {accent}; }}"
+                    )
+                else:
+                    btn.setStyleSheet(
+                        "QPushButton { background: transparent; border: none; border-radius: 0; "
+                        f"color: {theme.color('text_secondary')}; font-size: 14px; "
+                        "padding: 9px 2px 9px 2px; }"
+                        f"QPushButton:hover {{ color: {theme.color('text_primary')}; }}"
+                    )
+            except RuntimeError:
+                pass
+
+    def _switch_tab(self, key: str) -> None:
+        if self._stack is None:
+            return
+        self._active_tab = key
+        self._style_tabs()
+        if key == "overview":
+            self._stack.setCurrentWidget(self._overview)
+            return
+        tab = self._tabs.get(key)
+        if tab is None:
+            cls = {
+                "vulns": VulnerabilitiesTab,
+                "events": EventsTab,
+                "inventory": InventoryTab,
+            }[key]
+            try:
+                tab = cls(_Ctx(self))
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"[DEVICES] building the {key} tab failed: {e}")
+                return
+            tab.page = scroll_page(tab.widget)
+            self._tabs[key] = tab
+            self._stack.addWidget(tab.page)
+        self._stack.setCurrentWidget(tab.page)
+
+    def _refresh_header(self) -> None:
+        if self._header is None or self._combo_holder is None or self._note is None:
+            return
         st = posture.state()
         rows = self._rows(st)
+        if self._scope != data.ALL_DEVICES and not data.scope_rows(rows, self._scope):
+            self._scope = data.ALL_DEVICES  # the device is gone from the account
         summary = data.header_summary(
             st.get("status"), rows, st.get("fetched_at"), st.get("error")
         )
-        if self._scope != data.ALL_DEVICES and not data.scope_rows(rows, self._scope):
-            self._scope = data.ALL_DEVICES  # the device is gone from the account
-
-        page = Page()
-        header = PageHeader(_t("title"), summary["subtitle"], summary["pill"])
-        header.subtitle.setTextFormat(Qt.TextFormat.PlainText)
+        self._header.set_status(*summary["pill"])
+        self._header.set_subtitle(summary["subtitle"])
+        self._note.setText(summary["note"])
+        self._note.setVisible(bool(summary["note"]))
+        lay = self._combo_holder.layout()
+        while lay.count():
+            item = lay.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
         if rows:
-            header.add_control(self._scope_combo(rows))
-        refresh = icon_button("refresh-cw", _t("refresh"))
-        refresh.clicked.connect(self._refresh)
-        header.add_control(refresh)
-        page.add(header)
-        if summary["note"]:
-            page.spacing(8)
-            page.add(_plain(muted(summary["note"])))
+            lay.addWidget(self._scope_combo(rows))
+
+    def _replace_overview(self) -> None:
+        if self._stack is None:
+            return
+        old = self._overview
+        new = self._build_overview()
+        self._stack.insertWidget(0, new)
+        if old is not None:
+            if self._stack.currentWidget() is old:
+                self._stack.setCurrentWidget(new)
+            self._stack.removeWidget(old)
+            old.deleteLater()
+        self._overview = new
+
+    # ---- overview tab ------------------------------------------------------------
+
+    def _build_overview(self) -> QWidget:
+        st = posture.state()
+        rows = self._rows(st)
+        page = Page()
+        # The shell already carries the page's side margins and the header.
+        page.widget.widget().layout().setContentsMargins(0, 20, 0, 32)
 
         if not rows:
-            page.spacing(24)
             page.add(self._empty_card(st.get("status")))
             page.stretch()
             return page.widget
@@ -427,7 +606,6 @@ class Plugin(BasePlugin):
             scoped[0] if len(scoped) == 1 else (data.this_machine_row(rows) or rows[0])
         )
 
-        page.spacing(20)
         page.add(self._device_card(focus, fleet_view=self._scope == data.ALL_DEVICES))
         page.spacing(16)
         page.add(self._stat_grid(scoped))
@@ -474,8 +652,13 @@ class Plugin(BasePlugin):
         if scope == self._scope:
             return
         self._scope = scope
+        self._scope_changed = True
         settings.set(_NS, "scope", scope)
         self._schedule_rebuild(0)
+
+    def scope_host(self) -> str | None:
+        """The selected device's hostname, or None for all devices."""
+        return None if self._scope == data.ALL_DEVICES else self._scope
 
     def _empty_card(self, status) -> QWidget:
         card = Card()

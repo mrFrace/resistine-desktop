@@ -239,6 +239,16 @@ class TestCatalogKeys:
         ) as f:
             src = f.read()
         used = set(re.findall(r'_t\("([a-z_]+)"', src))
+        with open(
+            os.path.join(_REPO, "plugins", "devices", "tabs.py"), encoding="utf-8"
+        ) as f:
+            used |= set(re.findall(r'self\.t\("([a-z_]+)"', f.read()))
+        # Keys built from the inventory view names at runtime.
+        for view in ("devices", "processes", "ports", "network", "packages"):
+            used |= {f"inv_view_{view}", f"inv_lead_{view}"}
+            if view != "devices":
+                used.add(f"inv_word_{view}")
+        used |= {f"tab_{k}" for k in ("overview", "vulns", "events", "inventory")}
         assert used, "no keys found"
         with open(
             os.path.join(_REPO, "utils", "i18n", "en.json"), encoding="utf-8"
