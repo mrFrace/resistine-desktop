@@ -841,13 +841,16 @@ def full_install(progress_callback=None):
             progress_callback(f"Installation failed: {error}")
         return False
 
-    # Log enrollment outcome for diagnostics
-    enrollment = details.get("enrollment", "")
-    if enrollment == "restored":
+    # Log enrollment outcome for diagnostics. NB: do not name this local
+    # `enrollment` — that shadows the module-level `enrollment` import for the
+    # whole function, making the earlier enrollment.request() call at the top of
+    # full_install() raise UnboundLocalError.
+    enroll_outcome = details.get("enrollment", "")
+    if enroll_outcome == "restored":
         logger.info("[WAZUH] Existing enrollment key restored — agent will reconnect as same agent")
-    elif enrollment == "enrolled":
+    elif enroll_outcome == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
-    elif enrollment == "enroll_failed":
+    elif enroll_outcome == "enroll_failed":
         logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd
