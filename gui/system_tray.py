@@ -13,12 +13,14 @@ Menu: a (disabled) VPN status line, Open Phoenix, VPN Settings, and Quit.
 Single/double-click on the icon restores the window. VPN status is polled so
 the line and tooltip stay current.
 
-Windows-only for now (that's where a tray is expected and where the old one
-was wired). The code itself is platform-neutral, so enabling it on
-macOS/Linux is just a matter of calling ``install()`` there too.
+Installed on Windows and Linux (main.py). On Linux Qt shows it through the
+StatusNotifierItem D-Bus protocol (KDE, Hyprland/Sway bars with a tray,
+GNOME with the AppIndicator extension) or the X11 tray. macOS is not wired
+up yet.
 """
 
 import os
+import sys
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
@@ -85,7 +87,16 @@ class SystemTray(QObject):
         return True
 
     def _load_icon(self) -> QIcon:
-        for name in ("icon.ico", "app_icon.ico", "app_icon.png"):
+        if sys.platform == "linux":
+            # The installed hicolor "phoenix" icon (deb/rpm/Nix), so panels
+            # get a theme name; the bundled PNG otherwise.
+            themed = QIcon.fromTheme("phoenix")
+            if not themed.isNull():
+                return themed
+            names = ("app_icon.png", "icon.ico")
+        else:
+            names = ("icon.ico", "app_icon.ico", "app_icon.png")
+        for name in names:
             path = resource("resources", "icons", name)
             if os.path.isfile(path):
                 return QIcon(path)

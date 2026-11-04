@@ -14,6 +14,7 @@ Licensed under the GNU General Public License v2 or later
 import glob
 import os
 import sys
+import threading
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -58,6 +59,25 @@ def _label(key, fallback):
     """A translated row title, minus the trailing colon some strings carry."""
     return _t(key, fallback).rstrip(": ")
 
+
+
+def update_check_text(result) -> str:
+    """Status line for a utils.updates.channel.check() result."""
+    if result is None:
+        return "This copy of Phoenix isn't updated from the Phoenix update channel"
+    if result.available and str(result.os_key).startswith("linux"):
+        # The package set up the Phoenix apt/dnf/pacman repository.
+        text = (f"Phoenix build {result.latest.build} is available: your system's "
+                "software updates install it (or phoenix.exposed/apps)")
+    elif result.available:
+        text = (f"Phoenix build {result.latest.build} is available: "
+                "download it from phoenix.exposed/apps")
+    else:
+        text = "Phoenix is up to date"
+    if result.stale:
+        text += (f". The update channel expired on {result.latest.expires}: "
+                 "newer releases may be held back")
+    return text
 
 class _StatusLine(QLabel):
     """A small muted line for transient status text; hidden while empty so
@@ -390,25 +410,20 @@ class Plugin(BasePlugin):
             logger.error(f"Theme switch failed: {e}")
 
     def _check_for_updates(self):
+        # The signed update channel (utils/updates/channel.py) is asked off
+        # the GUI thread; the answer comes back through app.after.
+        self.update_status_label.setText("Checking for updates…")
+        threading.Thread(target=self._update_check_worker, name="update-check",
+                         daemon=True).start()
+
+    def _update_check_worker(self):
         try:
-            from utils import updates
-            if not updates.is_available():
-                self.update_status_label.setText(
-                    "Updates not available in this build")
-                self.app.after(
-                    5000,
-                    lambda: self._safe_set_text(self.update_status_label, ""))
-                return
-            self.update_status_label.setText("Checking for updates…")
-            result = updates.check_for_updates()
-            if result == "error":
-                self.update_status_label.setText("Update check failed")
-            self.app.after(
-                4000,
-                lambda: self._safe_set_text(self.update_status_label, ""))
-        except Exception as e:
-            logger.error(f"Update check error: {e}")
-            self.update_status_label.setText(f"Error: {e}")
+            from utils.updates import channel
+            text = update_check_text(channel.check())
+        except Exception as e:  # noqa: BLE001  PackageError messages are user-safe
+            logger.warning(f"Update check failed: {e}")
+            text = f"Update check failed: {e}"
+        self.app.after(0, lambda: self._safe_set_text(self.update_status_label, text))
 
     def _get_app_version(self):
         try:
@@ -423,9 +438,9 @@ class Plugin(BasePlugin):
         except Exception:
             pass
         try:
-            from utils.updates.version import get_current_version
-            version = get_current_version()
-            if version != "0.0.0":
+            from utils.updates.version import get_display_version
+            version = get_display_version()
+            if not version.startswith("0.0.0"):
                 return version
         except Exception:
             pass
@@ -631,4 +646,9 @@ class Plugin(BasePlugin):
         settings.clear_namespace("chat_history")
         settings.delete("chat", "openai_api_key")
         settings.delete("chat", "openai_base_url")
+        # Whether this app installed the agent outlives the sign-in: without
+        # it the next sign-in would treat the agent as someone else's.
+        app_installed = settings.get("wazuh", "app_installed", False)
         settings.clear_namespace("wazuh")
+        if app_installed:
+            settings.set("wazuh", "app_installed", True)

@@ -12,6 +12,7 @@ import os
 import signal
 import sys
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from utils import functions as functions
@@ -124,6 +125,11 @@ def _build_app() -> tuple[QApplication, object]:
         else:
             logger.info("✅ User already logged in.")
         window.create_dashboard()
+        try:
+            from plugins.wazuh.agent import sign_in
+            sign_in.ensure_in_background()
+        except Exception as e:
+            logger.warning(f"Agent check at startup failed: {e}")
         if sys.platform == "darwin":
             _resume_macos_installs()
     else:
@@ -151,21 +157,46 @@ def _build_app() -> tuple[QApplication, object]:
     # except Exception as e:
     #     logger.warning(f"Failed to start auto-updater: {e}")
 
-    # Native system tray (Windows). Replaces the old standalone pystray tray
-    # that the packaged build never launched. Closing the window then hides to
-    # the tray; only the tray's Quit exits. See gui/system_tray.py.
-    if sys.platform == "win32":
-        try:
-            from gui.system_tray import SystemTray
-            tray = SystemTray(window)
-            if tray.install():
-                window._tray = tray  # window.closeEvent hides to it
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to start system tray: {e}")
+    # Native system tray (Windows, Linux). Closing the window then hides to
+    # the tray; only the tray's Quit exits. See gui/system_tray.py. A Linux
+    # desktop without a tray (GNOME without the AppIndicator extension) has
+    # none, and closing quits as before.
+    if sys.platform in ("win32", "linux"):
+        _start_tray(window)
 
     single_instance.listen(lambda: _bring_forward(window))
 
     return qt_app, window
+
+
+_TRAY_RETRY_MS = 5000
+_TRAY_RETRIES = 12  # a minute: the bar may start after an autostarted app
+
+
+def _start_tray(window) -> None:
+    """Install the tray icon; on Linux keep trying for a minute, since Qt
+    checks for the tray host once and the panel may not be up yet."""
+    try:
+        from gui.system_tray import SystemTray
+        tray = SystemTray(window)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to start system tray: {e}")
+        return
+    tries = {"left": _TRAY_RETRIES if sys.platform == "linux" else 0}
+
+    def attempt():
+        try:
+            if tray.install():
+                window._tray = tray  # window.closeEvent hides to it
+                return
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to start system tray: {e}")
+            return
+        if tries["left"] > 0:
+            tries["left"] -= 1
+            QTimer.singleShot(_TRAY_RETRY_MS, attempt)
+
+    attempt()
 
 
 def _bring_forward(window) -> None:
@@ -242,6 +273,8 @@ def main() -> int:
     parser.add_argument("-l", "--log-level",
                         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
                         default="INFO", help="Set logging level (default: INFO)")
+    parser.add_argument("--trace", action="store_true",
+                        help="Write every HTTP exchange (secrets masked) to logs/trace-*.log")
     args = parser.parse_args()
 
     if args.debug or functions.is_running_in_ide():
@@ -259,6 +292,10 @@ def main() -> int:
     # Before the file log sink creates the new config dir.
     settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
+    if args.trace or os.environ.get("PHOENIX_TRACE") == "1":
+        from utils import http_trace
+        trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))
+        logger.info(f"HTTP trace enabled: {trace_file}")
     _install_excepthook()
     if sys.platform == "darwin":
         from utils.functions import remove_legacy_bundle

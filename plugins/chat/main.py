@@ -30,7 +30,6 @@ import os
 
 from PyQt6.QtCore import (
     QEasingCurve,
-    QObject,
     QPropertyAnimation,
     QSize,
     Qt,
@@ -57,7 +56,6 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.page_kit import line_icon
 from plugins.base_plugin import BasePlugin
-from plugins.chat import siem_alerts
 from plugins.chat.history import ChatHistoryManager
 from plugins.chat.qt_markdown import markdown_to_html, stylesheet
 from plugins.chat.streaming import StreamController
@@ -564,13 +562,6 @@ class _ChatInput(QTextEdit):
 # Plugin
 # ---------------------------------------------------------------------------
 
-class _AlertBridge(QObject):
-    """Carries a SIEM alert from the Matrix thread to the Qt thread (the
-    signal is emitted there and delivered queued to the GUI-thread slot)."""
-
-    arrived = pyqtSignal(dict)
-
-
 # The AI server recognises this opening and answers from the pasted alert
 # without looking anything up (Resistine-LLMAgent-api, alert_explain.py).
 ALERT_QUESTION = ("Explain this Phoenix SIEM alert in plain words: what happened, "
@@ -605,12 +596,6 @@ def alert_question(body: str, ts=None, limit: int = 8000) -> str:
     )
 
 
-def _alert_markdown(alert: dict) -> str:
-    import time as _time
-    when = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(alert.get("ts") or 0))
-    return f"**🚨 SIEM alert** · {when}\n\n{alert.get('body', '')}"
-
-
 class Plugin(BasePlugin):
     """Chat plugin -- lets users talk to an OpenAI-compatible AI assistant."""
 
@@ -641,12 +626,6 @@ class Plugin(BasePlugin):
         self._gate_timer = None
         self._current_asst_bubble: _Bubble | None = None
         self._welcome_widget: QWidget | None = None
-        # SIEM alerts view (plugins/chat/siem_alerts.py): a read-only list of
-        # the alerts siemgent sent this user, shown in place of a chat.
-        self._viewing_alerts = False
-        self._alerts_bridge = _AlertBridge()
-        self._alerts_bridge.arrived.connect(self._on_alert_arrived)
-        siem_alerts.subscribe(self._alerts_bridge.arrived.emit)
         self.reinitialize_client()
         self.status = self.get_status()
         active_id = self._history.get_active_id()
@@ -1136,16 +1115,14 @@ class Plugin(BasePlugin):
             w = item.widget()
             if w is not None:
                 w.deleteLater()
-        lay.insertWidget(0, self._alerts_sidebar_item())
         sessions = self._history.list_sessions()
-        active_id = (None if getattr(self, "_viewing_alerts", False)
-                     else self._history.get_active_id())
+        active_id = self._history.get_active_id()
         if not sessions:
             empty = QLabel("No conversations")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(
                 "color: #6B7280; font-size: 12px; background: transparent;")
-            lay.insertWidget(1, empty)
+            lay.insertWidget(0, empty)
             return
         for s in sessions:
             lay.insertWidget(
@@ -1212,81 +1189,21 @@ class Plugin(BasePlugin):
         rl.addWidget(del_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
 
-    def _alerts_sidebar_item(self) -> QWidget:
-        is_dark = theme.is_dark()
-        active_bg = "#1A2F45" if is_dark else "#D6E4F0"
-        row = QFrame()
-        row.setObjectName("ChatAlertsItem")
-        bgrule = f"background-color: {active_bg};" if self._viewing_alerts else ""
-        row.setStyleSheet(
-            f"#ChatAlertsItem {{ {bgrule} border-radius: 8px; }}"
-            f"#ChatAlertsItem:hover {{ background-color: {theme.color('sidebar_hover_bg')}; }}")
-        row.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        row.mousePressEvent = lambda _e: self._show_alerts()
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(8, 6, 8, 6)
-        unread = siem_alerts.store().unread
-        lbl = QLabel("🚨  SIEM alerts")
-        lbl.setStyleSheet(
-            f"color: {theme.color('text_primary')}; font-size: 12px; "
-            f"font-weight: 700; background: transparent;")
-        rl.addWidget(lbl, 1)
-        if unread:
-            badge = QLabel(str(unread))
-            badge.setStyleSheet(
-                f"background-color: {_STOP_RED}; color: #fff; border-radius: 8px; "
-                "padding: 1px 6px; font-size: 10px; font-weight: 700;")
-            rl.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
-        return row
-
-    def _show_alerts(self) -> None:
-        """Replace the conversation with the read-only SIEM alerts list."""
-        self._finalize_in_flight_response(persist=True)
-        self._save_current_session()
-        self._viewing_alerts = True
-        self._clear_messages()
-        alerts = siem_alerts.store().all()
-        if not alerts:
-            self._add_assistant_bubble(
-                md="**🚨 SIEM alerts**\n\nNo alerts yet. Alerts about machines you own "
-                   "will appear here.")
-        for alert in alerts:
-            self._add_assistant_bubble(md=_alert_markdown(alert))
-        siem_alerts.store().mark_read()
-        self._refresh_sidebar()
-        self._sync_input_enabled()
-
     _ASK_LIMIT = 8000  # characters of alert text sent with "Ask AI"
 
     def ask_about_alert(self, body: str, ts=None) -> bool:
         """Start a new chat asking Phoenix AI about one SIEM alert (the
-        Dashboard's alert page). False when the AI is not set up."""
-        if self.client is None:
-            return False
-        if getattr(self, "chat_entry", None) is None:
+        Alerts screen). False when the AI is not set up."""
+        return self.ask(alert_question(body, ts, self._ASK_LIMIT))
+
+    def ask(self, text: str) -> bool:
+        """Start a new chat with *text* as the first message (the Dashboard's
+        "Ask AI" buttons). False when the AI is not set up."""
+        if self.client is None or getattr(self, "chat_entry", None) is None:
             return False
         self._new_chat()
-        self._use_suggestion(alert_question(body, ts, self._ASK_LIMIT))
+        self._use_suggestion(text)
         return True
-
-    def _on_alert_arrived(self, alert: dict) -> None:
-        """GUI thread: a new SIEM alert was received."""
-        try:  # the parsed one-line title, not the raw markdown
-            from plugins.dashboard import alerts as recent_alerts
-            first = recent_alerts.parse(alert.get("body") or "")["title"]
-        except Exception:  # noqa: BLE001
-            first = ""
-        try:
-            self.app.show_notification(f"🚨 SIEM alert: {first}", type="warning")
-        except Exception:
-            pass
-        try:
-            if self._viewing_alerts and getattr(self, "_messages_lay", None) is not None:
-                self._add_assistant_bubble(md=_alert_markdown(alert))
-                siem_alerts.store().mark_read()
-            self._refresh_sidebar()
-        except RuntimeError:
-            pass  # the chat screen was torn down; the store still has the alert
 
     def _toggle_sidebar(self) -> None:
         self._sidebar_visible = not self._sidebar_visible
@@ -1578,8 +1495,7 @@ class Plugin(BasePlugin):
         self._rebuild_chat()
 
     def _select_chat(self, session_id: str) -> None:
-        if (session_id == self._history.get_active_id()
-                and not getattr(self, "_viewing_alerts", False)):
+        if session_id == self._history.get_active_id():
             return
         self._finalize_in_flight_response(persist=True)
         self._save_current_session()
@@ -1606,7 +1522,6 @@ class Plugin(BasePlugin):
 
     def _rebuild_chat(self) -> None:
         """Clear and repopulate the message area for the active session."""
-        self._viewing_alerts = False
         self._clear_messages()
         self._restore_history()
         self._refresh_sidebar()
@@ -1848,11 +1763,7 @@ class Plugin(BasePlugin):
         btn = getattr(self, "send_button", None)
         if entry is None or btn is None:
             return
-        if getattr(self, "_viewing_alerts", False):
-            entry.setEnabled(False)
-            entry.setPlaceholderText("SIEM alerts are read-only — pick a chat to talk to Phoenix AI")
-            btn.setEnabled(False)
-        elif self.client is None:
+        if self.client is None:
             entry.setEnabled(False)
             if getattr(self, "transport", "openai") != "matrix":
                 hint = "API key required — see Settings"
@@ -1899,9 +1810,6 @@ class Plugin(BasePlugin):
 
     def destroy(self) -> None:
         """Plugin teardown — cancel any in-flight stream and flush state."""
-        bridge = getattr(self, "_alerts_bridge", None)
-        if bridge is not None:
-            siem_alerts.unsubscribe(bridge.arrived.emit)
         try:
             self._finalize_in_flight_response(persist=True)
         except Exception:

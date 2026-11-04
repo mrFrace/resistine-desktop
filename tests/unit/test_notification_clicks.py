@@ -99,3 +99,35 @@ def test_tray_message_click_runs_callback(qapp):
     cb.assert_called_once()
     tray._message_clicked()  # a later click without a callback just shows the window
     cb.assert_called_once()
+
+
+@pytest.mark.unit
+def test_no_tray_host_means_close_quits(qapp, monkeypatch):
+    """GNOME without the AppIndicator extension: no tray, the window closes."""
+    from PyQt6.QtWidgets import QSystemTrayIcon, QWidget
+
+    from gui.system_tray import SystemTray
+    monkeypatch.setattr(QSystemTrayIcon, "isSystemTrayAvailable", staticmethod(lambda: False))
+    tray = SystemTray(QWidget())
+    assert tray.install() is False
+    assert tray.on_window_close() is False
+
+
+@pytest.mark.unit
+def test_linux_tray_waits_for_a_late_panel(qapp, monkeypatch):
+    """The bar can start after an autostarted app: install is retried."""
+    import main as app_main
+    from gui import system_tray
+
+    monkeypatch.setattr(app_main.sys, "platform", "linux")
+    timers = []
+    monkeypatch.setattr(app_main.QTimer, "singleShot", staticmethod(lambda ms, fn: timers.append(fn)))
+    answers = iter([False, False, True])
+    monkeypatch.setattr(system_tray.SystemTray, "install", lambda self: next(answers))
+    from PyQt6.QtWidgets import QWidget
+    window = QWidget()
+    app_main._start_tray(window)
+    assert not hasattr(window, "_tray") and len(timers) == 1
+    timers.pop()()
+    timers.pop()()
+    assert isinstance(window._tray, system_tray.SystemTray) and timers == []

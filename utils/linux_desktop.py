@@ -64,10 +64,23 @@ def _desktop_contents() -> str:
     )
 
 
+def _system_entry() -> str | None:
+    """A packaged entry (Nix, .deb, .rpm) on XDG_DATA_DIRS, if there is one."""
+    dirs = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+    for d in dirs.split(":"):
+        path = os.path.join(d, "applications", f"{DESKTOP_ID}.desktop")
+        if d and os.path.isfile(path):
+            return path
+    return None
+
+
 def ensure_desktop_entry():
     """Create/refresh ~/.local/share/applications/<DESKTOP_ID>.desktop.
 
     Idempotent: only rewrites when the contents change, and never raises.
+    When a package already ships the entry, ours would shadow it and launch
+    the bare interpreter past the package's wrapper (no Qt plugin path, no
+    wg/clamscan on PATH), so it is removed instead.
     """
     if not sys.platform.startswith("linux"):
         return
@@ -82,6 +95,17 @@ def ensure_desktop_entry():
             os.remove(os.path.join(apps_dir, f"{_LEGACY_DESKTOP_ID}.desktop"))
         except OSError:
             pass
+
+        if _system_entry():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    ours = "Comment=Phoenix Security Desktop" in f.read()
+                if ours:
+                    os.remove(path)
+                    logger.info(f"Removed per-user desktop entry: {path}")
+            except OSError:
+                pass
+            return
 
         desired = _desktop_contents()
         try:

@@ -181,22 +181,14 @@ def _get_machine_guid():
 
 
 def get_agent_name():
-    """Return a stable, unique agent name: hostname + last 12 chars of MachineGuid."""
-    hostname = socket.gethostname()
-    guid = _get_machine_guid()
-    if guid:
-        suffix = guid.replace("-", "")[-12:].upper()
-        name = f"{hostname}-{suffix}"
-    else:
-        name = hostname
-    sanitized = re.sub(r"[^A-Za-z0-9.\-_]", "", name)
-    if sanitized:
-        return sanitized
-    # Hostname was entirely non-ASCII or special chars. Fall back to a name
-    # derived from the GUID so Wazuh enrollment still gets a unique value.
-    if guid:
-        return f"agent-{guid.replace('-', '')[-12:].upper()}"
-    return "phoenix-agent"
+    """Return a stable, unique agent name (see enrollment.agent_name_from).
+
+    hostname + last 12 chars of the MachineGuid; when the GUID can't be read, a
+    stable per-install salt stands in, so the name never degrades to a bare
+    hostname that collides across the manager. The helper also guarantees a
+    non-empty, <=64-char result when the hostname sanitizes down to nothing.
+    """
+    return enrollment.agent_name_from(socket.gethostname(), _get_machine_guid())
 
 
 def get_agent_group():

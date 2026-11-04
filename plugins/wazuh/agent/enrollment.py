@@ -24,14 +24,34 @@ with the server's rule (wazuh_group in phoenix-provisioning), so an agent-auth
 fallback lands in the same group. The email-derived groups of the old OTP
 sign-in (alice-example.com) are no longer used.
 
-Contract: matrix repo, packages/phoenix-provisioning (enroll_agent).
+The enrollment is also remembered against the Matrix device and account it
+was made for (enrolled_for_this_sign_in()). Signing out deletes the device's
+agent on the server and clears this record, and the next sign-in is a new
+Matrix device, so the setup wizard enrolls again instead of trusting an agent
+that is still installed and running locally. The server's device -> agent
+mapping is what LLMAgent-api's Matrix bridge uses for "this machine".
+
+An agent installed some other way (the NixOS module, an upstream package)
+enrolled with the manager's password, so the server has no device for it.
+link() records it for this device instead:
+
+    POST /v1/agent/link {"agent_id", "proof"} -> {"agent_id", "agent_name", "group"}
+
+proof is HMAC-SHA256 keyed by the secret of the agent's client.keys line
+over link_message(); the secret never leaves this machine. The agent stays as
+it is, and signing out only drops the record.
+
+Contract: matrix repo, packages/phoenix-provisioning (enroll_agent, link_agent).
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import os
 import re
+import secrets
 import tempfile
 from dataclasses import dataclass
 from typing import Optional
@@ -40,12 +60,81 @@ from utils import settings
 from utils.logger import logger
 
 ENROLL_PATH = "/v1/agent/enroll"
+LINK_PATH = "/v1/agent/link"
 _NS = "wazuh"
 GROUP_PREFIX = "u_"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+# Wazuh agent names are unique across the WHOLE manager and capped at 64 chars.
+AGENT_NAME_MAX = 64
+_SALT_KEY = "install_salt"
 # "<id> <name> <ip|any> <64 hex>" -- the same pattern is used by the root step.
 KEY_LINE_PATTERN = r"[0-9]{3,8} [A-Za-z0-9._-]{1,64} (any|[0-9A-Fa-f.:/]{2,64}) [0-9a-f]{64}"
 _KEY_LINE_RE = re.compile(f"^{KEY_LINE_PATTERN}$")
+
+
+def _sanitize(value: str) -> str:
+    """Strip every character Wazuh agent names (and shell/PowerShell args) can't
+    safely hold, leaving only the AGENT_NAME_RE set [A-Za-z0-9._-]."""
+    return re.sub(r"[^A-Za-z0-9.\-_]", "", value or "")
+
+
+def install_salt() -> str:
+    """Return this install's stable fallback disambiguator for the agent name.
+
+    A random token generated once and persisted in the config dir, mirroring
+    ``oidc.get_device_id()``'s ``PHX_`` device id. It is used ONLY when no
+    per-machine hardware id is readable (see ``agent_name_from``): the agent
+    name must still carry a disambiguator, because Wazuh agent names are unique
+    across the whole manager — two machines that both fall back to a bare
+    default hostname (``MacBook-Air``, ``DESKTOP-XYZ``) would compute the same
+    name, and the manager rejects the second with error 1705 (HTTP 409).
+
+    Generated once and reused, so the name stays stable across restarts. 12
+    base32 chars (A-Z2-7), well within AGENT_NAME_RE.
+    """
+    cached = settings.get(_NS, _SALT_KEY)
+    if cached:
+        return cached
+    salt = base64.b32encode(secrets.token_bytes(8)).decode().rstrip("=")[:12]
+    settings.set(_NS, _SALT_KEY, salt)
+    return salt
+
+
+def agent_name_from(hostname: Optional[str], hardware_id: Optional[str]) -> str:
+    """Build the manager-unique Wazuh agent name for this device.
+
+    ``hardware_id`` present -> ``<hostname>-<last 12 chars, uppercased>``: the
+    good, stable name. This branch is byte-for-byte UNCHANGED from the old
+    per-platform logic, so machines that already enrolled under it keep their
+    manager agent and are not orphaned.
+
+    ``hardware_id`` missing/empty -> ``<hostname>-<install_salt()>``. The old
+    code degraded here to a BARE hostname, which collides manager-wide; the
+    persisted per-install salt restores a stable disambiguator without reusing
+    a value shared by cloned-VM / golden-image fleets.
+
+    The result is sanitized to AGENT_NAME_RE's character set, trimmed to 64
+    chars (keeping the disambiguator-bearing tail), and never empty — an empty
+    or over-long name would fail enrollment.
+    """
+    # The disambiguator is what makes the name manager-globally unique, so it
+    # must carry real (alphanumeric) content: a hardware id that sanitizes to
+    # nothing or to separators only (all dashes, non-ASCII) is treated as
+    # "unavailable" and falls back to the salt, exactly like a missing one.
+    disambiguator = _sanitize(hardware_id.replace("-", "")[-12:].upper()) if hardware_id else ""
+    if not disambiguator.strip("-."):
+        disambiguator = _sanitize(install_salt())
+    host = _sanitize(hostname or "")
+    # Join only when the hostname survived sanitizing; otherwise the
+    # disambiguator stands alone (no leading separator, still unique). For a
+    # real hostname this is byte-for-byte the old ``<host>-<suffix>`` output.
+    name = f"{host}-{disambiguator}" if host else disambiguator
+    if len(name) > AGENT_NAME_MAX:
+        # Over the cap -> such a name never enrolled (the server and _NAME_RE
+        # reject >64), so keeping only the tail can't orphan a real agent, and
+        # the tail is where the disambiguator lives.
+        name = name[-AGENT_NAME_MAX:]
+    return name
 
 
 @dataclass(frozen=True)
@@ -90,6 +179,7 @@ def request(agent_name: str) -> Optional[Enrollment]:
         return None
     logger.info(f"[ENROLL] agent {agent_id} {name} in group {group}")
     _remember_group(group)
+    mark_enrolled(agent_id)
     return Enrollment(agent_id, name, group, line, _write_private(line))
 
 
@@ -97,9 +187,81 @@ def _account() -> str:
     return settings.get("auth", "user_id", "") or settings.get("auth", "email", "") or ""
 
 
+def link_message(user_id: str, device_id: str) -> bytes:
+    """What the proof signs (phoenix-provisioning link_message)."""
+    return f"phoenix-agent-link\n{user_id}\n{device_id}".encode()
+
+
+def link(key_line: str) -> bool:
+    """Record the installed agent whose client.keys line is *key_line* as this
+    device's agent. True when the server did. Never raises."""
+    line = (key_line or "").strip()
+    if not _KEY_LINE_RE.match(line):
+        logger.error("[ENROLL] the agent's client.keys line is not usable for a link")
+        return False
+    agent_id, _name, _ip, secret = line.split(" ")
+    user, device = settings.get("auth", "user_id", "") or "", _device()
+    if not user or not device:
+        return False
+    proof = hmac.new(secret.encode(), link_message(user, device), hashlib.sha256).hexdigest()
+    try:
+        from plugins.vpn import provisioning
+        r = provisioning._authorized_request(
+            "POST", LINK_PATH, json={"agent_id": agent_id, "proof": proof})
+    except Exception as e:  # noqa: BLE001 - ProvisioningError, import problems
+        logger.warning(f"[ENROLL] agent link unavailable: {e}")
+        return False
+    if r.status_code != 200:
+        logger.warning(f"[ENROLL] agent link answered HTTP {r.status_code}: "
+                       f"{provisioning._error_detail(r)}")
+        return False
+    try:
+        body = r.json()
+        group = str(body["group"])
+        linked = str(body["agent_id"])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[ENROLL] malformed link answer: {e}")
+        return False
+    if linked != agent_id:
+        logger.error("[ENROLL] the link answer names another agent")
+        return False
+    logger.info(f"[ENROLL] linked agent {agent_id} in group {group}")
+    if _NAME_RE.match(group):
+        _remember_group(group)
+    mark_enrolled(agent_id)
+    return True
+
+
 def _remember_group(group: str) -> None:
     settings.set(_NS, "enrolled_group", group)
     settings.set(_NS, "enrolled_group_account", _account())
+
+
+def _device() -> str:
+    """The Matrix device signed in now (set from /whoami at sign-in)."""
+    return settings.get("auth", "device_id", "") or ""
+
+
+def mark_enrolled(agent_id: str = "") -> None:
+    """Remember that this device's agent was enrolled for the current sign-in.
+
+    request() calls it with the server's agent ID; the setup wizard calls it
+    without one after an agent-auth fallback, so a server it couldn't reach
+    doesn't send the wizard round in circles."""
+    settings.set(_NS, "enrolled_agent_id", agent_id or "")
+    settings.set(_NS, "enrolled_device", _device())
+    settings.set(_NS, "enrolled_device_account", _account())
+
+
+def enrolled_for_this_sign_in() -> bool:
+    """Whether this device's agent was enrolled for the Matrix device and
+    account signed in now. True when there is no Matrix sign-in to compare
+    with (nothing on the server is keyed by a device then)."""
+    device, account = _device(), _account()
+    if not device or not account:
+        return True
+    return (settings.get(_NS, "enrolled_device", "") == device
+            and settings.get(_NS, "enrolled_device_account", "") == account)
 
 
 def enrolled_group() -> Optional[str]:

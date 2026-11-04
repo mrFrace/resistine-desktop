@@ -3,7 +3,7 @@
 # build tools first: Python 3.13 (the installer download-windows-deps.ps1
 # fetches for the setup anyway) and Inno Setup 6. Then it runs the normal
 # build-windows-installer.ps1 (PyInstaller + Inno Setup).
-param ([Parameter(Mandatory)] [string]$Zip)
+param ([Parameter(Mandatory)] [string]$Zip, [string]$Build)
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
@@ -35,5 +35,6 @@ Install-Quiet $inno @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", 
 Remove-Item $inno
 
 Write-Host "== PyInstaller + installer"
+if ($Build) { $env:PHOENIX_BUILD = $Build }
 & .\scripts\build\build-windows-installer.ps1
 Get-ChildItem .\dist\installers\*.exe | Select-Object Name, Length

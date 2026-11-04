@@ -72,11 +72,15 @@ class SetupStep:
     def _run_bg(self, fn):
         """Run fn() on a daemon thread, capturing exceptions to _failed."""
         def _worker():
+            from utils import http_trace
+            http_trace.event(f"setup step '{self.key}' ({type(self).__name__}) begins")
             try:
                 fn()
             except Exception as e:  # noqa: BLE001 — surface, never crash the UI
                 logger.error(f"[SETUP] Step '{self.key}' failed: {e}")
                 self._failed = "Something went wrong. You can try again or skip."
+            http_trace.event(f"setup step '{self.key}' work finished",
+                             {"failed": self._failed, "activated": self._activated})
         threading.Thread(target=_worker, daemon=True).start()
 
 
@@ -799,6 +803,49 @@ def _wazuh_reenroll(on_status) -> bool:
     return _wazuh_running()
 
 
+def _enrolled_for_sign_in() -> bool:
+    """Was the agent enrolled for the Matrix device signed in now? After a
+    sign-out the server has deleted the old agent, while the local one may
+    still be installed and running (with a key the manager no longer has)."""
+    try:
+        from plugins.wazuh.agent import enrollment
+        return enrollment.enrolled_for_this_sign_in()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] enrollment record unreadable: {e}")
+        return True
+
+
+def _enroll_for_sign_in(on_status) -> bool:
+    """Give the server the agent for this sign-in: re-enroll this app's agent,
+    or link one installed some other way. An agent this app didn't install
+    keeps working when the link fails (only the assistant lacks "this
+    machine"), so that never fails the step. Worker thread only."""
+    try:
+        from plugins.wazuh.agent import sign_in
+        if not sign_in.app_managed():
+            if not sign_in.enroll_for_sign_in(on_status):
+                logger.warning("[EP-SETUP] could not link the agent for this sign-in")
+            return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] agent link failed: {e}")
+        return True
+    return _wazuh_reenroll(on_status)
+
+
+def _mark_enrolled() -> None:
+    """Record the enrollment for this sign-in. Already done by a successful
+    API enrollment or link; this covers the agent-auth fallback. An agent
+    this app didn't install is only ever recorded by a link."""
+    try:
+        from plugins.wazuh.agent import enrollment, sign_in
+        if not sign_in.app_managed():
+            return
+        if not enrollment.enrolled_for_this_sign_in():
+            enrollment.mark_enrolled()
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[EP-SETUP] could not record the enrollment: {e}")
+
+
 # Human-readable messages for Wazuh installer failure reasons. Mirrors the
 # mapping the Endpoint plugin's own UI uses (plugins/wazuh/main.py) so the
 # wizard explains failures the same clear way instead of "didn't finish".
@@ -894,7 +941,8 @@ class _EndpointStepMac(SetupStep):
         # pending/unknown are treated as OK so the step never hangs on a slow or
         # unreadable state file.
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def check_failed(self):
         if self._failed:
@@ -1020,6 +1068,16 @@ class _EndpointStepMac(SetupStep):
                     # dead-key). Recover by re-enrolling under a fresh identity.
                     logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                     _wazuh_reenroll(on_status)
+                elif not _enrolled_for_sign_in():
+                    # Running, but enrolled for an earlier sign-in, whose agent
+                    # the server deleted at sign-out.
+                    logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                    if not _enroll_for_sign_in(on_status):
+                        self._failed = (
+                            "Couldn't enroll the endpoint agent with the monitoring "
+                            "server. Check your internet connection and try again.")
+                        return
+            _mark_enrolled()
 
             # Phase 5: link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(on_status)
@@ -1041,12 +1099,19 @@ class _EndpointStepDirect(SetupStep):
     )
     primary_label = "Install Endpoint Agent"
     working_label = "Installing endpoint agent…"
+    _working = False  # begin()'s worker is still installing/enrolling
 
     def is_complete(self) -> bool:
         # Installed AND running AND not a confirmed disconnect (dead key) — see
-        # _EndpointStepMac.is_complete for the reasoning.
+        # _EndpointStepMac.is_complete for the reasoning. Never while the
+        # worker runs: the package's postinst starts the service before the
+        # root script has written the enrollment key and restarted it, so
+        # "installed + running" turns true mid-install.
+        if self._working:
+            return False
         return (_wazuh_installed() and _wazuh_running()
-                and _wazuh_connection() != "disconnected")
+                and _wazuh_connection() != "disconnected"
+                and _enrolled_for_sign_in())
 
     def begin(self, on_status):
         # Windows/Linux full_install() returns only a bool, so classify the
@@ -1059,6 +1124,12 @@ class _EndpointStepDirect(SetupStep):
             on_status(str(msg))
 
         def _work():
+            try:
+                _install()
+            finally:
+                self._working = False
+
+        def _install():
             if not _wazuh_installed():
                 if _PLATFORM == "Linux":
                     from plugins.wazuh.agent.wazuh_functions_linux import full_install
@@ -1092,8 +1163,21 @@ class _EndpointStepDirect(SetupStep):
                 # re-enroll under a fresh identity to recover.
                 logger.info("[EP-SETUP] running but disconnected — re-enrolling")
                 _wazuh_reenroll(_status)
+            elif not _enrolled_for_sign_in():
+                # Running, but enrolled for an earlier sign-in, whose agent the
+                # server deleted at sign-out.
+                logger.info("[EP-SETUP] enrolled for an earlier sign-in — re-enrolling")
+                if not _enroll_for_sign_in(_status):
+                    self._failed = (
+                        "Couldn't enroll the endpoint agent with the monitoring "
+                        "server. Check your internet connection and try again."
+                    )
+                    return
+            _mark_enrolled()
             # Link ClamAV → Wazuh if antivirus is also set up.
             _maybe_forward_clamav(_status)
+
+        self._working = True
         self._run_bg(_work)
 
     def _install_fail_message(self) -> str:

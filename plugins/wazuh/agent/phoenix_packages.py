@@ -1,5 +1,10 @@
 """Phoenix agent packages: signed downloads for signed-in users.
 
+The same store also carries Phoenix Desktop's own releases (platform
+"desktop", see parse_desktop_manifest and utils/updates/channel.py): one
+manifest per build listing every OS's package, signed with a separate desktop
+key, so neither key can stand in for the other.
+
 The agent packages are built by Resistine-Server-install CI and served at
 https://auth.phoenix.exposed/packages/<platform>/current/ to anyone holding a
 MAS access token (matrix repo, modules/services/phoenix-packages.nix):
@@ -35,6 +40,16 @@ PACKAGES_URL = "https://auth.phoenix.exposed/packages"
 # 0EB5393A52A7533F). Its secret half is the protected MINISIGN_KEY CI variable.
 MINISIGN_PUBLIC_KEY = "RWQ/U6dSOjm1DsQR44jVW5YMhrPoSvAdCYphPZJWrKqrGwMFbP2d3aPc"
 
+# packaging/phoenix-desktop-minisign.pub (key id BEA7ECA1B610B3A0): signs
+# Phoenix Desktop releases. Its secret half is password-protected on the
+# release machine (scripts/build/publish-desktop.sh).
+DESKTOP_MINISIGN_PUBLIC_KEY = "RWSgsxC2oeynvutf13Lmgaqf29dX8MAKKtaEV21w4HEfsB3wXq71XjFT"
+
+AGENT, DESKTOP = "phoenix-agent", "phoenix-desktop"
+DESKTOP_PLATFORM = "desktop"  # the store's directory for desktop releases
+# OS keys of a desktop release manifest's "files".
+DESKTOP_OS_KEYS = ("windows", "linux-deb", "linux-rpm", "linux-arch", "macos-arm64")
+
 _TIMEOUT = 30           # seconds per socket operation
 _MAX_MANIFEST = 64 * 1024
 _MAX_PACKAGE = 512 * 1024 * 1024
@@ -43,6 +58,7 @@ _CHUNK = 1024 * 1024
 _DIR_RE = re.compile(r"^[0-9A-Za-z.+~-]+-[0-9]+$")
 _FILE_RE = re.compile(r"^[0-9A-Za-z._+~-]+$")
 _SHA512_RE = re.compile(r"^[0-9a-f]{128}$")
+_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 
 class PackageError(Exception):
@@ -63,6 +79,8 @@ class Manifest:
     size: int
     raw: bytes = field(default=b"", repr=False)       # manifest.json as signed
     signature: str = field(default="", repr=False)  # manifest.json.minisig
+    product: str = AGENT
+    expires: str = ""  # desktop releases: YYYY-MM-DD after which the feed is stale
 
 
 def packages_url() -> str:
@@ -171,6 +189,50 @@ def parse_manifest(data: bytes, signature: str, plat: str,
                     raw=data, signature=signature)
 
 
+def parse_desktop_manifest(data: bytes, signature: str, os_key: str,
+                           public_key: Optional[str] = None) -> Optional[Manifest]:
+    """Check a desktop release manifest; return the package for ``os_key``.
+
+    Verified against the desktop key, never the agent one. Returns None when
+    the (valid) release has no package for this OS; raises PackageError when
+    anything is wrong.
+    """
+    trusted_comment = verify_minisign(data, signature,
+                                      public_key or DESKTOP_MINISIGN_PUBLIC_KEY)
+    try:
+        m = json.loads(data)
+    except ValueError as e:
+        raise PackageError("The update manifest is not valid JSON.") from e
+    if not isinstance(m, dict):
+        raise PackageError("The update manifest is malformed.")
+    d, build, files = m.get("dir"), m.get("build"), m.get("files")
+    ok = (m.get("product") == DESKTOP
+          and isinstance(d, str) and _DIR_RE.match(d)
+          and isinstance(build, int) and not isinstance(build, bool)
+          and d.endswith(f"-{build}")
+          and isinstance(m.get("version"), str)
+          and isinstance(m.get("expires"), str) and _DATE_RE.match(m["expires"])
+          and isinstance(files, dict) and files
+          and all(k in DESKTOP_OS_KEYS and isinstance(v, dict)
+                  and isinstance(v.get("file"), str) and _FILE_RE.match(v["file"])
+                  and isinstance(v.get("sha512"), str) and _SHA512_RE.match(v["sha512"])
+                  and isinstance(v.get("size"), int) and 0 < v["size"] <= _MAX_PACKAGE
+                  for k, v in files.items()))
+    if not ok:
+        raise PackageError("The update manifest is malformed.")
+    # The trusted comment is signed: it pins the directory (so the build) and
+    # the expiry, so neither can be changed without the key.
+    if trusted_comment != f"{DESKTOP} {d} {m['expires']}":
+        raise PackageError("The update was signed for another build.")
+    entry = files.get(os_key)
+    if entry is None:
+        return None
+    return Manifest(platform=os_key, version=m["version"], build=build, dir=d,
+                    file=entry["file"], sha512=entry["sha512"], size=entry["size"],
+                    raw=data, signature=signature, product=DESKTOP,
+                    expires=m["expires"])
+
+
 # --------------------------------------------------------------------------
 # Download
 # --------------------------------------------------------------------------
@@ -214,8 +276,9 @@ def _read_small(r, limit: int) -> bytes:
     return body
 
 
-def fetch_manifest(plat: str, http=None, token_box: Optional[list] = None) -> Manifest:
-    """Download and verify the current manifest for ``plat``."""
+def _fetch_current(plat: str, http, token_box: Optional[list],
+                   signed_out: str) -> tuple[bytes, str]:
+    """Download ``plat``'s current manifest.json and its signature, unverified."""
     from plugins.login import oidc
 
     if token_box is None:
@@ -224,7 +287,7 @@ def fetch_manifest(plat: str, http=None, token_box: Optional[list] = None) -> Ma
         except oidc.OIDCError as e:
             raise PackageError(f"Couldn't reach the sign-in server: {e}") from e
         if not token:
-            raise PackageError("Sign in to Phoenix to download the agent.")
+            raise PackageError(signed_out)
         token_box = [token]
     http = http or oidc._session()
     base = f"{packages_url()}/{plat}/current"
@@ -232,7 +295,23 @@ def fetch_manifest(plat: str, http=None, token_box: Optional[list] = None) -> Ma
         data = _read_small(r, _MAX_MANIFEST)
     with _get(http, f"{base}/manifest.json.minisig", token_box, stream=True) as r:
         sig = _read_small(r, 4096).decode("utf-8", "replace")
+    return data, sig
+
+
+def fetch_manifest(plat: str, http=None, token_box: Optional[list] = None) -> Manifest:
+    """Download and verify the current agent manifest for ``plat``."""
+    data, sig = _fetch_current(plat, http, token_box,
+                               "Sign in to Phoenix to download the agent.")
     return parse_manifest(data, sig, plat)
+
+
+def fetch_desktop_manifest(os_key: str, http=None,
+                           token_box: Optional[list] = None) -> Optional[Manifest]:
+    """Download and verify the current desktop release; its ``os_key`` package
+    (None when the release has none for this OS)."""
+    data, sig = _fetch_current(DESKTOP_PLATFORM, http, token_box,
+                               "Sign in to Phoenix to check for updates.")
+    return parse_desktop_manifest(data, sig, os_key)
 
 
 def verify_file(path: str, manifest: Manifest) -> bool:

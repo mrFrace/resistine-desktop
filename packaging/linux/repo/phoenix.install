@@ -1,0 +1,19 @@
+# Trust the Phoenix repository key (/usr/share/pacman/keyrings/phoenix*).
+_populate() {
+	if [ -d /etc/pacman.d/gnupg ]; then
+		pacman-key --populate phoenix >/dev/null 2>&1 || true
+	fi
+}
+
+post_install() {
+	_populate
+	if ! grep -q '^\[phoenix\]' /etc/pacman.conf 2>/dev/null; then
+		echo ">>> To get Phoenix updates with pacman -Syu, add to /etc/pacman.conf:"
+		echo ">>>   [phoenix]"
+		echo ">>>   Include = /etc/pacman.d/phoenix.conf"
+	fi
+}
+
+post_upgrade() {
+	_populate
+}

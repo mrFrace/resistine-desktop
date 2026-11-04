@@ -191,7 +191,7 @@ class PageHeader(QWidget):
         row.setSpacing(12)
         text = QVBoxLayout()
         text.setSpacing(4)
-        line = QHBoxLayout()
+        line = self._line = QHBoxLayout()
         line.setSpacing(12)
         self.title = QLabel(title)
         self.title.setObjectName("H1")
@@ -218,6 +218,12 @@ class PageHeader(QWidget):
             return
         set_pill(self.pill, kind, text)
         self.pill.show()
+
+    def wrap_title(self) -> None:
+        """Wrap a long title across the header's width (not its minimum)."""
+        self.title.setWordWrap(True)
+        self._line.setStretch(self._line.count() - 1, 0)
+        self._line.setStretchFactor(self.title, 1)
 
     def set_subtitle(self, text: str) -> None:
         self.subtitle.setText(text)
@@ -483,6 +489,13 @@ class SlideStack(QStackedWidget):
 
     def push(self, page: QWidget) -> None:
         self._slide_to(page, forward=True)
+
+    def home(self) -> None:
+        """Show the first page at once (no slide), ending any slide."""
+        if self._anim is not None:
+            self._anim.stop()
+            self._finish()
+        self.setCurrentIndex(0)
 
     def back(self, page: QWidget | None = None) -> None:
         self._slide_to(page if page is not None else self.widget(0),

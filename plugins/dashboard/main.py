@@ -21,12 +21,12 @@ import time
 import webbrowser
 from urllib.parse import urlsplit
 
-from PyQt6.QtCore import QMimeData, QPoint, QPointF, QRectF, QSize, Qt, QTimer
+from PyQt6.QtCore import (QEasingCurve, QMimeData, QPoint, QPointF, QPropertyAnimation, QRect,
+                          QRectF, QSize, Qt, QTimer)
 from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
-    QTextBrowser,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -38,12 +38,13 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.page_kit import (
-    MenuRow, Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon, muted)
+    KVList, MenuRow, Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon,
+    muted)
 from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
-from plugins.dashboard import mitigations, posture, protection
+from plugins.dashboard import mitigations, posture, protection, tile_layout
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -54,9 +55,6 @@ WEBSITE_URL = "https://phoenix.exposed"
 _REFRESH_MS = 20_000
 # Alert notifications: only alerts sent after the app started pop up, each
 # once (module level, so a rebuilt plugin instance doesn't repeat them).
-_STARTED_AT = time.time()
-_NOTIFIED: set = set()
-_notified_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -195,8 +193,8 @@ def _system_info(app) -> dict:
     except Exception:
         rows["VPN"] = "—"
     try:
-        from utils.updates.version import get_current_version
-        rows["Phoenix"] = get_current_version()
+        from utils.updates.version import get_display_version
+        rows["Phoenix"] = get_display_version()
     except Exception:
         pass
     return {"badge": None, "rows": rows}
@@ -211,13 +209,21 @@ _PANEL_MIME = "application/x-phoenix-dashboard-panel"
 
 class _Panel(QFrame):
     """Card with an icon tile, title, status pill and key/value rows. Drag
-    it by its header to move it (the grid re-aligns)."""
+    it by its header to move it; drag its right edge to make it wider or
+    narrower (the grid, _PanelGrid, places it)."""
+
+    _EDGE = 10  # px at the right edge that resize instead of drag
 
     def __init__(self, title: str, icon_path: str, on_open=None, key: str = "", on_row=None):
         super().__init__()
         self.key = key
+        self.title = title
         self._on_row = on_row  # on_row(id) for rows listed in data["ids"]
         self._press: QPoint | None = None
+        self._resizing = False
+        self._edge_hover = False
+        self.on_resize = None  # grid callback: on_resize(key, x in the grid, done)
+        self.grab_offset = QPoint(0, 0)  # where the drag picked the panel up
         self.setMouseTracking(True)  # open-hand cursor over the header
         self.setObjectName("Surface")
         self.setMinimumWidth(260)
@@ -281,22 +287,57 @@ class _Panel(QFrame):
         self._head.insertWidget(self._controls_at + 1, widget, 0, Qt.AlignmentFlag.AlignVCenter)
         return widget
 
-    # ---- drag by the header ------------------------------------------------
+    # ---- drag by the header, resize by the right edge ----------------------
+    def _on_edge(self, pos: QPoint) -> bool:
+        return self.on_resize is not None and pos.x() >= self.width() - self._EDGE
+
     def _in_header(self, pos: QPoint) -> bool:
-        return pos.y() <= 64
+        return pos.y() <= 64 and not self._on_edge(pos)
+
+    def _set_edge_hover(self, on: bool) -> None:
+        if on != self._edge_hover:
+            self._edge_hover = on
+            self.update()
+
+    def _grid_x(self, e) -> int:
+        return self.mapToParent(e.position().toPoint()).x()
 
     def mousePressEvent(self, e):  # noqa: N802
-        if e.button() == Qt.MouseButton.LeftButton and self._in_header(e.position().toPoint()):
-            self._press = e.position().toPoint()
+        pos = e.position().toPoint()
+        if e.button() == Qt.MouseButton.LeftButton and self._on_edge(pos):
+            self._resizing = True
+            self.update()
+            return
+        if e.button() == Qt.MouseButton.LeftButton and self._in_header(pos):
+            self._press = pos
         super().mousePressEvent(e)
 
+    def mouseDoubleClickEvent(self, e):  # noqa: N802
+        if self._on_edge(e.position().toPoint()):
+            self.on_resize(self.key, None, True)  # back to the default width
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def leaveEvent(self, e):  # noqa: N802
+        if not self._resizing:
+            self._set_edge_hover(False)
+        super().leaveEvent(e)
+
     def mouseMoveEvent(self, e):  # noqa: N802
+        pos = e.position().toPoint()
+        if self._resizing:
+            self.on_resize(self.key, self._grid_x(e), False)
+            return
         if self._press is None or not (e.buttons() & Qt.MouseButton.LeftButton):
-            self.setCursor(Qt.CursorShape.OpenHandCursor if self._in_header(e.position().toPoint())
+            edge = self._on_edge(pos)
+            self._set_edge_hover(edge)
+            self.setCursor(Qt.CursorShape.SizeHorCursor if edge
+                           else Qt.CursorShape.OpenHandCursor if self._in_header(pos)
                            else Qt.CursorShape.ArrowCursor)
             return super().mouseMoveEvent(e)
-        if (e.position().toPoint() - self._press).manhattanLength() < QApplication.startDragDistance():
+        if (pos - self._press).manhattanLength() < QApplication.startDragDistance():
             return
+        self.grab_offset = self._press
         self._press = None
         drag = QDrag(self)
         mime = QMimeData()
@@ -313,8 +354,26 @@ class _Panel(QFrame):
             self.setEnabled(True)
 
     def mouseReleaseEvent(self, e):  # noqa: N802
+        if self._resizing:
+            self._resizing = False
+            self._set_edge_hover(self._on_edge(e.position().toPoint()))
+            self.on_resize(self.key, self._grid_x(e), True)
+            self.update()
+            return
         self._press = None
         super().mouseReleaseEvent(e)
+
+    def paintEvent(self, e):  # noqa: N802
+        super().paintEvent(e)
+        if not (self._edge_hover or self._resizing):
+            return
+        # The resize grip: a short accent bar in the middle of the right edge.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.color("sidebar_active_text")))
+        p.drawRoundedRect(QRectF(self.width() - 7, self.height() / 2 - 22, 4, 44), 2, 2)
+        p.end()
 
     def set_data(self, data: dict | None) -> None:
         for lay in (self._grid, self._extras):
@@ -467,39 +526,9 @@ class _Sparkline(QWidget):
         p.end()
 
 
-class _AlertText(QTextBrowser):
-    """An alert's text as rich text, as tall as its content (the page
-    scrolls, not this). Raw HTML in the alert is escaped and links never
-    open: the text quotes the monitored system and is not ours."""
-
-    def __init__(self, md: str):
-        super().__init__()
-        from plugins.chat.qt_markdown import markdown_to_html, stylesheet
-
-        self.setObjectName("Transparent")
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setOpenLinks(False)
-        self.setOpenExternalLinks(False)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.setStyleSheet("QTextBrowser { background: transparent; border: none; }")
-        self.document().setDocumentMargin(0)
-        self.document().setDefaultStyleSheet(
-            stylesheet(theme.color("text_primary")) + "pre { white-space: pre-wrap; }")
-        self.setHtml(markdown_to_html(md, allow_html=False))
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-    def resizeEvent(self, e):  # noqa: N802
-        super().resizeEvent(e)
-        self.document().setTextWidth(self.viewport().width())
-        h = int(self.document().size().height()) + 4
-        if h != self.height():
-            self.setFixedHeight(h)
-
-
 DEFAULT_ORDER = ["posture", "alerts", "antivirus", "vpn", "endpoint", "ai", "system"]
-_GAP = 16
+_GAP = tile_layout.GAP
+_MOVE_MS = 160  # tiles glide to a new place instead of jumping
 
 
 def panel_order(saved, keys=DEFAULT_ORDER) -> list:
@@ -508,120 +537,221 @@ def panel_order(saved, keys=DEFAULT_ORDER) -> list:
     return list(dict.fromkeys(saved)) + [k for k in keys if k not in saved]
 
 
-def masonry_columns(heights: list, n_cols: int) -> list:
-    """Column per panel, in order: each goes into the shortest column so far
-    (ties: leftmost). Gapless however tall the panels are."""
-    totals = [0] * max(1, n_cols)
-    cols = []
-    for h in heights:
-        i = totals.index(min(totals))
-        cols.append(i)
-        totals[i] += h + _GAP
-    return cols
+class _DropOverlay(QWidget):
+    """Over the grid: the dashed outline where a dragged tile will land, and
+    the width chip while a tile is resized."""
 
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.target: QRect | None = None
+        self.chip: QRect | None = None
+        self.chip_text = ""
 
-def move_panel(order: list, key: str, target: str | None, after: bool) -> list:
-    """Move ``key`` before/after ``target`` (None: to the end)."""
-    if key not in order or key == target:
-        return list(order)
-    rest = [k for k in order if k != key]
-    if target is None or target not in rest:
-        return rest + [key]
-    i = rest.index(target) + (1 if after else 0)
-    return rest[:i] + [key] + rest[i:]
+    def paintEvent(self, e):  # noqa: N802
+        if self.target is None and self.chip is None:
+            return
+        accent = QColor(theme.color("sidebar_active_text"))
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if self.target is not None:
+            fill = QColor(accent)
+            fill.setAlpha(28)
+            p.setBrush(fill)
+            p.setPen(QPen(accent, 2, Qt.PenStyle.DashLine))
+            p.drawRoundedRect(QRectF(self.target).adjusted(1, 1, -1, -1), 14, 14)
+        if self.chip is not None:
+            fill = QColor(accent)
+            fill.setAlpha(60)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(fill)
+            p.drawRoundedRect(QRectF(self.chip), 11, 11)
+            p.setPen(accent)
+            p.drawText(QRectF(self.chip), Qt.AlignmentFlag.AlignCenter, self.chip_text)
+        p.end()
 
 
 class _PanelGrid(QWidget):
-    """Gapless grid: 1-4 columns by width, panels in the user's order, each
-    placed in the shortest column. Accepts panel drops to reorder."""
+    """The Dashboard's tiles on a unit grid (tile_layout.py): each tile as
+    wide as its span, as tall as its content, in the user's order. A tile is
+    moved by dragging its header (a dashed outline shows where it lands) and
+    resized by dragging its right edge; tiles glide to new places."""
 
-    # Width per column: a panel needs ~420 px for its title, pill and Open
-    # link and for unbreakable values (hostnames, paths) without clipping.
-    _CARD_STEP = 420
-
-    def __init__(self, panels: dict, order: list, on_reorder):
+    def __init__(self, panels: dict, order: list, on_change, layout: dict | None = None):
         super().__init__()
         self.setObjectName("Transparent")
         self.setAcceptDrops(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._panels = panels
         self._order = order
-        self._on_reorder = on_reorder
-        self._placed: tuple | None = None
-        self._row = QHBoxLayout(self)
-        self._row.setContentsMargins(0, 0, 0, 0)
-        self._row.setSpacing(_GAP)
-        self._cols: list = []
+        self._layout = tile_layout.clean_layout(layout or {}, list(panels))
+        self._on_change = on_change  # on_change(order, layout)
+        self._units: int | None = None
+        self._placed: dict = {}
+        self._anims: dict = {}
+        self._drop = None  # (order, layout) the current drag would make
+        for p in panels.values():
+            p.setParent(self)
+            p.on_resize = self._resize_from
+            p.show()
+        self._overlay = _DropOverlay(self)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(60)
         self._debounce.timeout.connect(self.relayout)
-        self.relayout()
+        self.relayout(animate=False)
+
+    @property
+    def layout_state(self) -> dict:
+        return {k: dict(v) for k, v in self._layout.items()}
 
     def schedule(self) -> None:
         self._debounce.start()
 
-    def set_order(self, order: list) -> None:
+    def set_order(self, order: list, layout: dict | None = None) -> None:
         self._order = order
-        self._placed = None
+        if layout is not None:
+            self._layout = tile_layout.clean_layout(layout, list(self._panels))
         self.relayout()
 
     def resizeEvent(self, e):  # noqa: N802
         super().resizeEvent(e)
-        self.schedule()
+        self._overlay.setGeometry(self.rect())
+        if e.size().width() != e.oldSize().width():  # our own height changes don't count
+            self.schedule()
 
-    def _n_cols(self) -> int:
-        return max(1, min(4, len(self._order), max(1, self.width()) // self._CARD_STEP))
+    # ---- placement --------------------------------------------------------------
+    def _unit_w(self) -> float:
+        return tile_layout.unit_width(self.width(), self._units or tile_layout.MIN_UNITS)
 
-    def relayout(self) -> None:
-        n = self._n_cols()
-        col_w = max(1, (self.width() - _GAP * (n - 1)) // n)
-        panels = [self._panels[k] for k in self._order]
-        heights = [p.heightForWidth(col_w) if p.hasHeightForWidth() else p.sizeHint().height()
-                   for p in panels]
-        cols = masonry_columns(heights, n)
-        placed = (n, tuple(self._order), tuple(cols))
-        if placed == self._placed:
+    def _span_w(self, span: int) -> int:
+        return int(span * self._unit_w() + (span - 1) * _GAP)
+
+    def _height(self, key: str, span: int) -> int:
+        p = self._panels[key]
+        w = self._span_w(span)
+        lay = p.layout()
+        h = lay.totalHeightForWidth(w) if lay is not None and lay.hasHeightForWidth() else -1
+        return max(h, p.minimumSizeHint().height())
+
+    def _place(self, order: list, layout: dict) -> tuple[dict, int]:
+        return tile_layout.place(order, layout, self._units, self._height)
+
+    def _rect(self, col: int, span: int, top: int, h: int) -> QRect:
+        x = int(round(col * (self._unit_w() + _GAP)))
+        return QRect(x, top, self._span_w(span), h)
+
+    def relayout(self, animate: bool = True) -> None:
+        if self._drop is not None:
+            return  # a drag preview is showing; the drop or leave lays out
+        self._units = tile_layout.units_for(max(1, self.width()), self._units)
+        self._placed, total = self._place(self._order, self._layout)
+        self.setFixedHeight(max(1, total))
+        visible = animate and self.isVisible()
+        for key, spot in self._placed.items():
+            self._move(self._panels[key], self._rect(*spot), visible)
+
+    def _move(self, panel, rect: QRect, animate: bool) -> None:
+        old = self._anims.pop(panel.key, None)
+        if old is not None:
+            old.stop()
+        if not animate or panel.geometry() == rect or panel.geometry().isEmpty():
+            panel.setGeometry(rect)
             return
-        self._placed = placed
-        for col in self._cols:
-            for p in panels:
-                col.removeWidget(p)
-        while len(self._cols) < n:
-            col = QVBoxLayout()
-            col.setSpacing(_GAP)
-            col.addStretch(1)
-            self._row.addLayout(col, 1)
-            self._cols.append(col)
-        while len(self._cols) > n:
-            col = self._cols.pop()
-            self._row.removeItem(col)
-            col.deleteLater()
-        for p, c in zip(panels, cols):
-            col = self._cols[c]
-            col.insertWidget(col.count() - 1, p)
+        anim = QPropertyAnimation(panel, b"geometry", self)
+        anim.setDuration(_MOVE_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(panel.geometry())
+        anim.setEndValue(rect)
+        anim.start()
+        self._anims[panel.key] = anim
+
+    # ---- resize by the right edge ------------------------------------------------
+    def _resize_from(self, key: str, x: int | None, done: bool) -> None:
+        col, span = self._placed[key][0], self._placed[key][1]
+        if x is None:  # double-click: back to the default width
+            layout = {k: dict(v) for k, v in self._layout.items()}
+            layout.get(key, {}).pop("span", None)
+            self._layout = {k: v for k, v in layout.items() if v}
+        else:
+            step = self._unit_w() + _GAP
+            left = col * step
+            want = int(round((x - left + _GAP) / step))
+            want = max(tile_layout.MIN_SPAN, min(want, self._units - col))
+            if want != span:
+                self._layout = tile_layout.resize(self._layout, key, want, col)
+        self.relayout()
+        if done:
+            self._overlay.chip = None
+            self._on_change(list(self._order), self.layout_state)
+        else:
+            r = self._rect(*self._placed[key])
+            self._overlay.chip = QRect(r.right() - 78, r.bottom() - 34, 58, 22)
+            self._overlay.chip_text = tile_layout.width_label(self._placed[key][1]) + "  ↔"
+        self._overlay.raise_()
+        self._overlay.update()
 
     # ---- drops ----------------------------------------------------------------
+    def _drop_at(self, key: str, pos: QPoint) -> tuple[list, dict]:
+        panel = self._panels.get(key)
+        left = pos.x() - (panel.grab_offset.x() if panel is not None else 0)
+        top = pos.y() - (panel.grab_offset.y() if panel is not None else 0)
+        col = int(round(left / (self._unit_w() + _GAP)))
+        span = self._placed[key][1] if key in self._placed else tile_layout.MIN_SPAN
+        col = max(0, min(col, self._units - span))
+        return tile_layout.drop(self._order, self._layout, key, col, top, self._placed)
+
+    def _key_of(self, e) -> str | None:
+        if not e.mimeData().hasFormat(_PANEL_MIME):
+            return None
+        key = bytes(e.mimeData().data(_PANEL_MIME)).decode()
+        return key if key in self._panels else None
+
     def dragEnterEvent(self, e):  # noqa: N802
-        if e.mimeData().hasFormat(_PANEL_MIME):
+        if self._key_of(e):
             e.acceptProposedAction()
 
     def dragMoveEvent(self, e):  # noqa: N802
-        if e.mimeData().hasFormat(_PANEL_MIME):
-            e.acceptProposedAction()
+        key = self._key_of(e)
+        if not key:
+            return
+        e.acceptProposedAction()
+        drop = self._drop_at(key, e.position().toPoint())
+        if drop == self._drop:
+            return
+        # Preview: the others glide aside and the (dimmed) tile sits where it
+        # would land, under the outline. The drop point is worked out against
+        # the committed layout, so the preview can't chase the mouse.
+        self._drop = drop
+        placed, total = self._place(*drop)
+        self.setFixedHeight(max(1, total, self.height()))
+        for k, spot in placed.items():
+            self._move(self._panels[k], self._rect(*spot), True)
+        self._overlay.target = self._rect(*placed[key])
+        self._overlay.raise_()
+        self._overlay.update()
+
+    def dragLeaveEvent(self, e):  # noqa: N802
+        self._drop = None
+        self._overlay.target = None
+        self._overlay.update()
+        self.relayout()  # back to the committed layout
 
     def dropEvent(self, e):  # noqa: N802
-        key = bytes(e.mimeData().data(_PANEL_MIME)).decode()
-        pos = e.position().toPoint()
-        target, after = None, False
-        for k, p in self._panels.items():
-            if p.geometry().contains(pos):
-                target, after = k, pos.y() > p.geometry().center().y()
-                break
-        order = move_panel(self._order, key, target, after)
+        key = self._key_of(e)
+        self._drop = None  # the preview ends either way
+        self._overlay.target = None
+        self._overlay.update()
+        if not key:
+            self.relayout()
+            return
+        order, layout = self._drop_at(key, e.position().toPoint())
         e.acceptProposedAction()
-        if order != self._order:
-            self.set_order(order)
-            self._on_reorder(order)
+        changed = order != self._order or layout != self._layout
+        self._order, self._layout = order, layout
+        self.relayout()
+        if changed:
+            self._on_change(list(order), self.layout_state)
 
 
 class Plugin(BasePlugin):
@@ -650,10 +780,11 @@ class Plugin(BasePlugin):
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
+        self._posture_cards = (None, [])  # (this machine's card, others) as shown
+        self._recheck_btn = None
+        self._mitigation_page = None  # one posture item's page while open
         self._timer: QTimer | None = None
         self._busy = False
-        self._alert_pages: list = []  # alert list/detail pages pushed over the panels
-        self._alerts_list = None      # (RowList, PageHeader) while the list is open
         self._subscribe_alerts()  # notify even before the Dashboard is opened
 
     # ---- screen -----------------------------------------------------------
@@ -699,8 +830,9 @@ class Plugin(BasePlugin):
         self._reset_layout = QPushButton("Reset layout")
         self._reset_layout.setObjectName("Link")
         self._reset_layout.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._reset_layout.setToolTip("Drag panels by their header to move them")
-        self._reset_layout.clicked.connect(lambda: self._save_order(list(DEFAULT_ORDER)))
+        self._reset_layout.setToolTip("Drag panels by their header to move them, "
+                                      "and by their right edge to resize them")
+        self._reset_layout.clicked.connect(lambda: self._save_layout(list(DEFAULT_ORDER), {}))
         head.addWidget(self._reset_layout, 0, Qt.AlignmentFlag.AlignVCenter)
         site = QPushButton("phoenix.exposed ↗")
         site.setObjectName("Link")
@@ -751,8 +883,9 @@ class Plugin(BasePlugin):
             panel.set_data(self._data.get(key))
         self._subscribe_alerts()
         order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
-        self._grid = _PanelGrid(self._panels, order, self._save_order)
-        self._reset_layout.setVisible(order != DEFAULT_ORDER)
+        self._grid = _PanelGrid(self._panels, order, self._save_layout,
+                                app_settings.get("dashboard", "panel_layout"))
+        self._reset_layout.setVisible(order != DEFAULT_ORDER or bool(self._grid.layout_state))
         v.addWidget(self._grid)
         v.addStretch(1)
 
@@ -761,8 +894,8 @@ class Plugin(BasePlugin):
         self._views = SlideStack(fit_height=False)
         self._views.addWidget(scroll_page(inner))
         self._detail = None
-        self._alert_pages = []
-        self._alerts_list = None
+        self._recheck_btn = None
+        self._mitigation_page = None
         return self._views
 
     def on_theme_changed(self) -> None:
@@ -773,7 +906,27 @@ class Plugin(BasePlugin):
             pass
 
     def on_screen_shown(self):
+        self._show_tiles()
         self.refresh()
+
+    def _show_tiles(self) -> None:
+        """Back to the tiles: the sidebar's Dashboard button always opens the
+        Dashboard itself, not a detail page left open before (no slide: the
+        screen is changing anyway)."""
+        if self._views is None:
+            return
+        pages = [self._mitigation_page, self._detail[0] if self._detail is not None else None]
+        self._mitigation_page = None
+        self._detail = None
+        self._recheck_btn = None
+        try:
+            self._views.home()
+            for page in pages:
+                if page is not None:
+                    self._views.removeWidget(page)
+                    page.deleteLater()
+        except RuntimeError:  # screen rebuilt meanwhile
+            self._views = None
 
     def destroy(self):
         if self._timer is not None:
@@ -880,49 +1033,19 @@ class Plugin(BasePlugin):
             pass
 
     def _alert_arrived(self, alert: dict) -> None:
-        # Matrix thread: repaint on the Qt thread.
+        # Matrix thread: repaint on the Qt thread. The Alerts plugin
+        # (plugins/alerts) shows the alerts and sends the notification.
         try:
             self.app.after(0, self._repaint_alerts)
         except Exception:  # noqa: BLE001
             pass
-        self._notify_alert(alert)
 
-    def _notify_alert(self, alert: dict) -> None:
-        """A desktop notification for a new high or critical alert."""
-        from utils import settings as app_settings
-
-        if not app_settings.get("dashboard", "alert_notifications", True):
-            return
-        note = recent_alerts.notification(alert, _STARTED_AT)
-        with _notified_lock:
-            if note is None or note["event_id"] in _NOTIFIED:
-                return
-            _NOTIFIED.add(note["event_id"])
-        eid = note["event_id"]
-        try:
-            from utils import notifications
-            notifications.send(note["title"], note["body"], urgency=note["urgency"],
-                               on_click=(lambda: self.app.after(0, self._show_alert, eid))
-                               if eid else None)
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Alert notification failed: {e}")
-
-    def _show_alert(self, event_id: str) -> None:
-        """Clicked notification: bring the window up on that alert."""
-        try:
-            win = self.app
-            win.showNormal()
-            win.raise_()
-            win.activateWindow()
-            win.navigate(self.get_name())
-        except Exception as e:  # noqa: BLE001
-            logger.debug(f"Could not show the window for an alert: {e}")
-        if self._views is not None:
-            self._open_alert(event_id)
+    def repaint_alerts(self) -> None:
+        """Refresh the Recent alerts panel (Qt thread; the Alerts screen
+        calls it after marking alerts read)."""
+        self._repaint_alerts()
 
     def _repaint_alerts(self) -> None:
-        if self._alerts_list is not None:
-            self._fill_alerts_list()  # open list: the new alert is seen
         self._data["alerts"] = self._alerts_data()
         panel = self._panels.get("alerts")
         if panel is None:
@@ -934,138 +1057,24 @@ class Plugin(BasePlugin):
         except RuntimeError:  # panel deleted by a rebuild
             pass
 
-    # ---- alert list and detail (slide in over the panels) ------------------
-    _SEV_PILL = {"critical": "error", "high": "error", "medium": "warning", "unknown": "warning",
-                 "low": "info", "info": "ok"}
-    _KIND_ICON = {"triage": "activity", "hunt": "folder-search", "result": "shield-check"}
-
-    def _push_page(self, page: Page) -> None:
-        if self._views is None:
-            return
-        self._views.addWidget(page.widget)
-        self._alert_pages.append(page.widget)
-        self._views.push(page.widget)
-
-    def _pop_page(self) -> None:
-        if self._views is None or not self._alert_pages:
-            return
-        page = self._alert_pages.pop()
-        if not self._alert_pages:
-            self._alerts_list = None
-        self._views.back(self._alert_pages[-1] if self._alert_pages else None)
-        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
-                          if self._views is not None else None)
+    # ---- alerts: shown by the Alerts screen (plugins/alerts) -----------------
+    def _alerts_plugin(self):
+        return next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Alerts"), None)
 
     def _open_alerts(self) -> None:
-        """The panel's Open: every stored alert, newest first."""
-        if self._views is None or self._alerts_list is not None:
-            return
-        page = Page()
-        page.add(back_link("Dashboard", self._pop_page))
-        header = PageHeader("Recent alerts")
-        page.add(header)
-        rows = RowList()
-        page.spacing(18)
-        page.add(rows)
-        page.spacing(14)
-        page.add(muted("Alerts come from Phoenix's SIEM about the machines you own. "
-                       "Triage sums up a batch of alerts, Investigating means a hunt "
-                       "started, and the hunt result says whether it was a real threat."))
-        page.stretch()
-        self._alerts_list = (rows, header)
-        self._fill_alerts_list()
-        self._push_page(page)
-
-    def _fill_alerts_list(self) -> None:
-        from plugins.chat import siem_alerts
-        rows, header = self._alerts_list
-        try:
-            rows.clear()
-        except RuntimeError:  # page deleted by a rebuild
-            self._alerts_list = None
-            return
-        st = siem_alerts.store()
-        alerts = recent_alerts.newest_first(st.all())
-        header.set_subtitle(f"{len(alerts)} alert{'s' if len(alerts) != 1 else ''}, newest first"
-                            if alerts else "No alerts yet. Alerts about machines you own appear here.")
-        for a in alerts:
-            info = recent_alerts.parse(a.get("body", ""))
-            hint = " · ".join(p for p in (info["host"], recent_alerts.ago(a.get("ts"))) if p)
-            row = MenuRow(self._KIND_ICON.get(info["kind"], "info"), info["title"], hint,
-                          on_click=lambda e=a.get("event_id"): self._open_alert(e))
-            row._title.setWordWrap(True)  # long file paths
-            row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-            pill = QLabel()
-            set_pill(pill, *self._pill(info))
-            row.layout().insertWidget(2, pill, 0, Qt.AlignmentFlag.AlignVCenter)
-            rows.add_row(row)
-        if st.unread:
-            st.mark_read()
-            self._data["alerts"] = self._alerts_data()
-            panel = self._panels.get("alerts")
-            if panel is not None:
-                try:
-                    panel.set_data(self._data["alerts"])
-                except RuntimeError:
-                    pass
-
-    def _pill(self, info: dict) -> tuple:
-        if info["kind"] == "result" and info["verdict"]:
-            v = info["verdict"].lower()
-            return ("ok" if "false" in v else "error" if "true" in v else "warning"), info["verdict"]
-        return self._SEV_PILL[info["severity"]], info["severity"].capitalize()
+        plugin = self._alerts_plugin()
+        if plugin is not None:
+            plugin.show()
 
     def _open_alert(self, event_id: str) -> None:
-        """One alert, in full: what it is about, its findings and the text."""
-        from plugins.chat import siem_alerts
-        alert = next((a for a in siem_alerts.store().all() if a.get("event_id") == event_id), None)
-        if alert is None or self._views is None:
-            return
-        body = alert.get("body", "")
-        info = recent_alerts.parse(body)
-        page = Page()
-        page.add(back_link("Recent alerts" if self._alerts_list else "Dashboard", self._pop_page))
-        header = PageHeader(info["title"], recent_alerts.subtitle(info, alert.get("ts")),
-                            status=self._pill(info))
-        header.title.setTextFormat(Qt.TextFormat.PlainText)
-        header.title.setWordWrap(True)
-        header.subtitle.setTextFormat(Qt.TextFormat.PlainText)
-        ask = QPushButton("Ask AI")
-        ask.setIcon(QIcon(line_icon("message-circle", "#ffffff", 18)))
-        ask.setCursor(Qt.CursorShape.PointingHandCursor)
-        ask.setToolTip("Start a chat with Phoenix AI about this alert")
-        ask.clicked.connect(lambda: self._ask_ai(body, alert.get("ts")))
-        header.add_control(ask)
-        page.add(header)
-        if info["findings"]:
-            page.section("Findings")
-            found = RowList()
-            for f in info["findings"]:
-                found.add_row(self._finding_row(f))
-            page.add(found)
-        page.section("Details")
-        page.spacing(6)
-        page.add(_AlertText(recent_alerts.detail_text(body) or body))
-        page.stretch()
-        self._push_page(page)
+        plugin = self._alerts_plugin()
+        if plugin is not None:
+            plugin.show(event_id)
 
-    def _finding_row(self, finding: dict) -> QWidget:
-        row = QWidget()
-        row.setObjectName("Transparent")
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 8, 4, 8)
-        h.setSpacing(14)
-        name = QLabel(finding["name"])
-        name.setObjectName("RowTitle")
-        name.setTextFormat(Qt.TextFormat.PlainText)
-        name.setWordWrap(True)
-        h.addWidget(name, 1)
-        pill = QLabel()
-        set_pill(pill, self._SEV_PILL[finding["severity"]], finding["severity"].capitalize())
-        h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
-        return row
+    def _ask_ai_text(self, text: str) -> None:
+        self._start_chat(lambda chat: chat.ask(text))
 
-    def _ask_ai(self, body: str, ts=None) -> None:
+    def _start_chat(self, send) -> None:
         chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)
         if chat is None or getattr(chat, "client", None) is None:
             self.app.show_notification(
@@ -1075,7 +1084,7 @@ class Plugin(BasePlugin):
 
         def go():
             try:
-                if not chat.ask_about_alert(body, ts):
+                if not send(chat):
                     self.app.show_notification("The chat isn't ready yet. Try again.", type="warning")
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard: Ask AI failed: {e}")
@@ -1111,13 +1120,16 @@ class Plugin(BasePlugin):
     def _refresh_after_toggle(self) -> None:
         self.refresh()
 
-    def _save_order(self, order: list) -> None:
+    def _save_layout(self, order: list, layout: dict) -> None:
+        """Keep the tiles' order and their spans/columns (Reset passes the
+        default order and no layout)."""
         from utils import settings as app_settings
         app_settings.set("dashboard", "panel_order", order)
+        app_settings.set("dashboard", "panel_layout", layout)
         try:
             if self._grid is not None:
-                self._grid.set_order(order)
-            self._reset_layout.setVisible(order != DEFAULT_ORDER)
+                self._grid.set_order(order, layout)
+            self._reset_layout.setVisible(order != DEFAULT_ORDER or bool(layout))
         except RuntimeError:  # screen rebuilt meanwhile
             pass
 
@@ -1140,6 +1152,7 @@ class Plugin(BasePlugin):
         again = icon_button("refresh-cw", "Check again")
         again.clicked.connect(self._recheck_mitigations)
         header.add_control(again)
+        self._recheck_btn = again
         page.add(header)
         rows = RowList()
         page.spacing(18)
@@ -1162,22 +1175,46 @@ class Plugin(BasePlugin):
             return
         page = self._detail[0]
         self._detail = None
+        self._recheck_btn = None
         self._views.back()
         QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
                           if self._views is not None else None)
 
     def _recheck_mitigations(self) -> None:
-        if self._posture_view is None:
-            return
-        st, names = self._posture_view
+        """Fetch the posture again and re-check this machine's items."""
+        if self._recheck_btn is not None:
+            self._recheck_btn.setEnabled(False)
+        if self._detail is not None:
+            self._detail[2].set_subtitle("Checking…")
 
         def work():
-            mine, _ = posture.split_cards(st["cards"], names)
-            if mine:
-                mitigations.check(mine, True, force=True)
-            self.app.after(0, self._fill_posture_detail)
+            note = None
+            try:
+                st, names = posture.fetch(force=True), posture.local_names()
+                mine, _ = posture.split_cards(st["cards"], names)
+                if mine:
+                    mitigations.check(mine, True, force=True)
+                self._posture_view = (st, names)
+                if st.get("status") == "error":
+                    note = st.get("error") or "The Phoenix service is unavailable."
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Dashboard posture re-check failed: {e}")
+                note = str(e)
+            self.app.after(0, lambda: self._rechecked(note))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _rechecked(self, note) -> None:
+        try:
+            if self._recheck_btn is not None:
+                self._recheck_btn.setEnabled(True)
+        except RuntimeError:  # page closed meanwhile
+            self._recheck_btn = None
+        self._fill_posture_detail()
+        if note:
+            self.app.show_notification(f"Couldn't refresh the posture: {note}", type="warning")
+        else:
+            self.app.show_notification("Security posture checked.", type="info")
 
     def _fill_posture_detail(self) -> None:
         if self._detail is None:
@@ -1190,6 +1227,7 @@ class Plugin(BasePlugin):
             return
         st, names = self._posture_view or (posture.state(), posture.local_names(include_agent=False))
         mine, others = posture.split_cards(st.get("cards") or [], names)
+        self._posture_cards = (mine, others)
         if mine is None and not others:
             header.set_subtitle("No posture yet. It appears after the first daily scan.")
             header.set_status(None)
@@ -1200,16 +1238,16 @@ class Plugin(BasePlugin):
                 f"{mine.get('score')}/100 · computed {str(mine.get('computed_at', ''))[:16].replace('T', ' ')}")
             header.set_status(*posture.panel_data(st, names)["badge"])
             items = mitigations.cached(mine, True)
-            self._add_section(rows, "THIS MACHINE", items, "Nothing to fix on this machine.")
+            self._add_section(rows, "THIS MACHINE", items, "Nothing to fix on this machine.", mine)
         else:
             header.set_subtitle("No posture for this machine yet.")
             header.set_status("info", "No data for this machine")
         for card in others:
             self._add_section(rows, f"{str(card.get('hostname') or card.get('agent_id')).upper()} · "
                                     f"GRADE {card.get('grade')}",
-                              mitigations.cached(card, False), "Nothing to fix.")
+                              mitigations.cached(card, False), "Nothing to fix.", card)
 
-    def _add_section(self, rows, title: str, items: list, empty: str) -> None:
+    def _add_section(self, rows, title: str, items: list, empty: str, card: dict) -> None:
         heading = QLabel(title)
         heading.setObjectName("Section")
         heading.setTextFormat(Qt.TextFormat.PlainText)
@@ -1219,35 +1257,100 @@ class Plugin(BasePlugin):
             rows.add_row(muted(empty))
             return
         for item, state in items:
-            rows.add_row(self._item_row(item, state))
+            rows.add_row(self._item_row(item, state, card))
 
-    def _item_row(self, item: dict, state) -> QWidget:
-        row = QWidget()
-        row.setObjectName("Transparent")
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 10, 4, 10)
-        h.setSpacing(14)
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        title = QLabel(item["title"] or item["kind"])
-        title.setObjectName("RowTitle")
-        title.setTextFormat(Qt.TextFormat.PlainText)
-        text.addWidget(title)
-        hint = QLabel(mitigations.detail_line(item))
-        hint.setObjectName("Hint")
-        hint.setTextFormat(Qt.TextFormat.PlainText)
-        hint.setWordWrap(True)
-        hint.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        text.addWidget(hint)
-        h.addLayout(text, 1)
-        if state != mitigations.REMOTE:
-            kind, label = self._PILLS.get(state, self._PILLS[None])
-            if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
-                kind = "warning"
-            pill = QLabel()
-            set_pill(pill, kind, label)
-            h.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)
+    _ITEM_ICON = {"package_update": "package", "cis_checks": "shield-check",
+                  "agent_connection": "activity"}
+
+    def _item_pill(self, item: dict, state) -> tuple | None:
+        if state == mitigations.REMOTE:
+            return None
+        kind, label = self._PILLS.get(state, self._PILLS[None])
+        if state in (mitigations.OPEN, mitigations.REBOOT) and item["severity"] not in ("critical", "high"):
+            kind = "warning"
+        return kind, label
+
+    def _item_row(self, item: dict, state, card: dict) -> QWidget:
+        row = MenuRow(self._ITEM_ICON.get(item["kind"], "info"), item["title"] or item["kind"],
+                      mitigations.detail_line(item),
+                      on_click=lambda: self._open_mitigation(item, state, card))
+        row._title.setTextFormat(Qt.TextFormat.PlainText)
+        row._hint.setTextFormat(Qt.TextFormat.PlainText)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        pill = self._item_pill(item, state)
+        if pill:
+            label = QLabel()
+            set_pill(label, *pill)
+            row.layout().insertWidget(2, label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
+
+    def _open_mitigation(self, item: dict, state, card: dict) -> None:
+        """One posture item: its evidence, how to fix it, and Ask AI."""
+        if self._views is None or self._detail is None:
+            return
+        this_machine = card is self._posture_cards[0]
+        host = str(card.get("hostname") or card.get("agent_id") or "")
+        page = Page()
+        page.add(back_link("Security posture", self._close_mitigation))
+        header = PageHeader(item["title"] or item["kind"],
+                            ("This machine: " if this_machine else "") + host,
+                            status=self._item_pill(item, state))
+        header.title.setTextFormat(Qt.TextFormat.PlainText)
+        header.wrap_title()
+        ask = QPushButton("Ask AI")
+        ask.setIcon(QIcon(line_icon("message-circle", "#ffffff", 18)))
+        ask.setCursor(Qt.CursorShape.PointingHandCursor)
+        ask.setToolTip("Start a chat with Phoenix AI about this item")
+        ask.clicked.connect(lambda: self._ask_ai_text(
+            mitigations.question(item, host, this_machine)))
+        header.add_control(ask)
+        page.add(header)
+        page.section("Status")
+        page.spacing(6)
+        page.add(muted(mitigations.state_text(state)))
+        facts = self._mitigation_facts(item)
+        if facts:
+            page.section("Evidence")
+            page.add(KVList(facts))
+        steps = mitigations.fix_steps(item)
+        if steps:
+            page.section("How to fix")
+            page.spacing(6)
+            for step in steps:
+                line = muted(step)
+                line.setTextFormat(Qt.TextFormat.PlainText)
+                line.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                page.add(line)
+        page.stretch()
+        self._views.addWidget(page.widget)
+        self._mitigation_page = page.widget
+        self._views.push(page.widget)
+
+    @staticmethod
+    def _mitigation_facts(item: dict) -> list:
+        ev, c = item["evidence"], item["check"]
+        facts = [("Severity", item["severity"].capitalize())]
+        if item["kind"] == "package_update":
+            facts.append(("Package", c["package"] + (f" ({c['package_type']})" if c["package_type"] else "")))
+            facts.append(("Installed", c["version"]))
+            if ev["fixed_version"]:
+                facts.append(("Fixed in", ev["fixed_version"]))
+            elif ev["fix_available"] is False:
+                facts.append(("Fixed in", "No fix released yet"))
+            facts.append(("Vulnerabilities", f"{ev['critical']} critical · {ev['high']} high"))
+            if ev["cves"]:
+                facts.append(("CVEs", ", ".join(ev["cves"])))
+        elif item["kind"] == "cis_checks":
+            facts.append(("Failed checks", f"{ev['failed_checks']} of {ev['checks']}"))
+        return facts
+
+    def _close_mitigation(self) -> None:
+        page, self._mitigation_page = self._mitigation_page, None
+        if self._views is None or page is None:
+            return
+        self._views.back(self._detail[0] if self._detail is not None else None)
+        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
+                          if self._views is not None else None)
 
     def _set_protection(self, kind: str) -> None:
         # Endpoint badge kind -> logo glow: ok = green, info (unsupported

@@ -97,8 +97,11 @@ log "Windows is up at $ip; building"
 # ---------------------------------------------------------------------------
 # 3. Python + Inno Setup + PyInstaller in the VM
 # ---------------------------------------------------------------------------
+# Build ID from the host clock (the VM's may drift): see packaging/Resistine.spec.
+build="${PHOENIX_BUILD:-$(date -u +%Y%m%d%H%M)}"
+log "Build ID $build"
 scp "${SSH_OPTS[@]}" "$SRC_ZIP" "$ROOT/scripts/build/windows-vm-build.ps1" "phoenix@$ip:C:/Users/phoenix/"
-ssh_vm "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\phoenix\\windows-vm-build.ps1 -Zip C:\\Users\\phoenix\\phoenix-desktop-src.zip"
+ssh_vm "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\phoenix\\windows-vm-build.ps1 -Zip C:\\Users\\phoenix\\phoenix-desktop-src.zip -Build $build"
 
 # ---------------------------------------------------------------------------
 # 4. Fetch the installer

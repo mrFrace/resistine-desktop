@@ -169,11 +169,11 @@ class Plugin(BasePlugin):
     def _subtitle() -> str:
         text = "Guides, release notes and licences"
         try:
-            from utils.updates.version import get_current_version
-            version = get_current_version()
+            from utils.updates.version import get_display_version
+            version = get_display_version()
         except Exception:
             version = ""
-        if version and version != "0.0.0":
+        if version and not version.startswith("0.0.0"):
             text += f" · Phoenix {version}"
         return text
 

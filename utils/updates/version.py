@@ -3,6 +3,8 @@ Version Helper — single source of truth for the current app version.
 
 Frozen (PyInstaller) builds: reads from the bundled VERSION file in _MEIPASS.
 Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
+Frozen builds also carry a BUILD file (UTC YYYYMMDDHHMM) that tells builds of
+one VERSION apart; source runs have none.
 
 Author: Resistine Team
 Copyright (c) Resistine 2025
@@ -58,6 +60,25 @@ def get_current_version() -> str:
     except (OSError, IOError) as e:
         logger.warning(f"[VERSION] Could not read spec file: {e}")
     return "0.0.0"
+
+
+def get_build() -> str:
+    """Return this build's ID (UTC YYYYMMDDHHMM), or "" when running from source."""
+    if not getattr(sys, "frozen", False):
+        return ""
+    meipass = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    try:
+        with open(os.path.join(meipass, "BUILD"), "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""  # a build from before build IDs
+
+
+def get_display_version() -> str:
+    """Version as shown to people: "2026.07.20-rc (build 202610221405)"."""
+    version = get_current_version()
+    build = get_build()
+    return f"{version} (build {build})" if build else version
 
 
 def compare_versions(current: str, remote: str) -> int:

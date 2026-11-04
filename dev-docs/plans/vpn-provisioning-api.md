@@ -114,6 +114,15 @@ agent, and marks it revoked. 204 on success, 404 if the device has neither
 (the client treats both as done). The app calls it on logout, before revoking
 its MAS session.
 
+## GET /v1/internal/device-agent?user=<mxid>&device=<device_id>
+
+Not called by the app. LLMAgent-api's Matrix bridge asks which agent the
+device that sent a chat message is, so the assistant knows "this machine".
+Authenticated by `X-Phoenix-Lookup-Key: <PROV_LOOKUP_SECRET>` instead of a
+user token. Answer `{"agent_id": "024", "agent_name": "phx-trace-…"}`; 404 when
+that user has no agent registered for that device, 401 for a wrong key, 503
+when the key is not configured.
+
 ## Errors
 
 | Status | Meaning | Client shows |

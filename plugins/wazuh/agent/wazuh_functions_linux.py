@@ -11,7 +11,6 @@ import socket
 import subprocess
 import tempfile
 import shutil
-import re
 
 from utils import settings
 from utils.logger import logger
@@ -42,6 +41,16 @@ def _deploy_env(agent_name, agent_group):
     )
 
 def run_privileged_command(command, timeout=120):
+    """Traced entry point; see _run_privileged_command."""
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", command)
+    result = _run_privileged_command(command, timeout)
+    http_trace.event("root command result", result if isinstance(result, tuple)
+                     else getattr(result, "returncode", result))
+    return result
+
+
+def _run_privileged_command(command, timeout=120):
     """
     Run a command with elevated privileges using pkexec or sudo.
     Shows the password dialog if sudo is used.
@@ -114,15 +123,13 @@ def _get_machine_id():
     return None
 
 def get_agent_name():
-    """Return a stable, org-unique agent name."""
-    hostname = socket.gethostname()
-    machine_id = _get_machine_id()
-    if machine_id:
-        suffix = machine_id.replace("-", "")[-12:].upper()
-        name = f"{hostname}-{suffix}"
-    else:
-        name = hostname
-    return re.sub(r"[^A-Za-z0-9.\-_]", "", name)
+    """Return a stable, org-unique agent name (see enrollment.agent_name_from).
+
+    hostname + last 12 chars of the machine-id; when the machine-id can't be
+    read, a stable per-install salt stands in, so the name never degrades to a
+    bare hostname that collides across the manager.
+    """
+    return enrollment.agent_name_from(socket.gethostname(), _get_machine_id())
 
 def get_agent_group():
     """The Wazuh group of this user's agents (u_<Matrix localpart>)."""
@@ -288,6 +295,27 @@ def is_app_managed_agent():
     re-enrolls them.
     """
     return os.path.isdir(LINUX_WAZUH_DIR) and bool(settings.get("wazuh", _APP_INSTALLED, False))
+
+def read_agent_key_line():
+    """The installed agent's client.keys line, read as root (one admin prompt),
+    or None when it can't be read or the prompt was dismissed.
+
+    For linking an agent installed some other way (enrollment.link); the key
+    stays in this process. The traced runner is not used: it would log it.
+    """
+    agent_dir = installed_agent_dir()
+    if not agent_dir:
+        return None
+    from utils import http_trace
+    http_trace.event("root command (pkexec)", ["head", "-n", "1", f"{agent_dir}/etc/client.keys"])
+    ok, out = _run_privileged_command(
+        ["sh", "-c", 'head -n 1 -- "$1"', "sh", f"{agent_dir}/etc/client.keys"], timeout=120)
+    http_trace.event("root command result", ok)
+    if not ok:
+        logger.warning("Could not read the agent's key (admin prompt dismissed or no key)")
+        return None
+    return (out or "").strip().splitlines()[0] if (out or "").strip() else None
+
 
 def get_agent_status():
     if not is_agent_installed():

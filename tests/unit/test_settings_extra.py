@@ -359,3 +359,37 @@ class TestMigrateLegacyConfigDir:
         assert s.get_config_dir() == str(tmp_path / "phoenix")
         assert (tmp_path / "resistine").exists()
         assert not (tmp_path / "phoenix").exists()
+
+
+@pytest.mark.unit
+def test_unreadable_secret_logs_when_it_was_written(isolated_settings, monkeypatch):
+    """A value written under another master key: the log says when, to find
+    which run wrote it."""
+    from cryptography.fernet import Fernet
+    token = Fernet(Fernet.generate_key()).encrypt_at_time(b"x", 1_800_000_000).decode()
+    isolated_settings.set("chat", "k", "ENC:" + token)
+    errors = []
+    monkeypatch.setattr(isolated_settings.logger, "error", errors.append)
+    assert isolated_settings.get_secret("chat", "k") is None
+    import time
+    when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(1_800_000_000))
+    assert f"(written {when})" in errors[0] and "InvalidToken" in errors[0]
+
+
+@pytest.mark.unit
+def test_save_is_atomic(isolated_settings, monkeypatch):
+    """A crash or a reader in another process never sees a half-written file."""
+    import json
+    import os
+    isolated_settings.set("chat", "a", 1)
+    path = isolated_settings._get_file_path("chat")
+    real_dump = json.dump
+
+    def dump_then_fail(data, f, **kw):
+        real_dump(data, f, **kw)
+        raise OSError("disk full")
+    monkeypatch.setattr(isolated_settings.json, "dump", dump_then_fail)
+    assert isolated_settings.set("chat", "b", 2) is False
+    monkeypatch.setattr(isolated_settings.json, "dump", real_dump)
+    assert json.load(open(path)) == {"a": 1}
+    assert not [n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")]

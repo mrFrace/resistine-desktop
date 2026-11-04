@@ -54,8 +54,14 @@ let
         <check_if>yes</check_if>
         <frequency>43200</frequency>
         <skip_nfs>yes</skip_nfs>
+        <!-- Container storage (image layers, container filesystems, Docker's
+             own containerd under /var/lib/docker/containerd): their
+             world-writable files are the containers', not the host's, and
+             the advice to chmod them breaks the containers. -->
+        <ignore>/var/lib/docker</ignore>
         <ignore>/var/lib/containerd</ignore>
-        <ignore>/var/lib/docker/overlay2</ignore>
+        <ignore>/var/lib/containers</ignore>
+        <ignore type="sregex">^/var/lib/docker/|^/var/lib/containerd/|^/var/lib/containers/</ignore>
       </rootcheck>
 
       <wodle name="syscollector">

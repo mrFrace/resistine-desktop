@@ -5,7 +5,7 @@ Phoenix bot (@secagent by default) instead of the OpenAI-compatible HTTPS API.
 The server side is the matrix_bridge service of Phoenix-LLMAgent-api; its
 message contract (docs/MATRIX_BRIDGE.md there):
 
-  user → bot   m.text, ``net.resisti.request: {session}`` picks the server
+  user → bot   m.text, ``exposed.phoenix.request: {session}`` picks the server
                session (one per Desktop chat)
   bot → user   one reply (m.in_reply_to the prompt) grown by m.replace
                edits; every version carries ``net.resisti.turn: {status}``,
@@ -46,7 +46,7 @@ from utils import settings
 from utils.logger import logger
 
 TURN_KEY = "net.resisti.turn"
-REQUEST_KEY = "net.resisti.request"
+REQUEST_KEY = "exposed.phoenix.request"
 DEFAULT_BOT = "@secagent:phoenix.exposed"
 _NS = "chat"
 
@@ -128,22 +128,50 @@ class TurnAssembler:
 # Matrix client on its own thread
 # ---------------------------------------------------------------------------
 
-def _store_key() -> str:
-    """The E2EE store's pickle key (a secret under the keyring's master key).
+def _keyring_store_key() -> Optional[str]:
+    try:
+        return settings.keyring.get_password(settings.MATRIX_STORE_KEY_SERVICE,
+                                    settings.MATRIX_STORE_KEY_USERNAME) or None
+    except Exception as e:  # noqa: BLE001 — no keyring: chat.json only
+        logger.debug(f"[CHAT-MATRIX] store key not readable from the keyring: {e}")
+        return None
 
-    A key that is stored but won't decrypt is NOT replaced while the master
-    key itself may be the problem (keyring locked, or answering with another
-    key): a new key would lock the store for good. Only when another secret
-    still decrypts is it really lost; then a new one is made, and _main
-    moves the store it can no longer open aside."""
+
+def _save_keyring_store_key(key: str) -> None:
+    try:
+        settings.keyring.set_password(settings.MATRIX_STORE_KEY_SERVICE,
+                             settings.MATRIX_STORE_KEY_USERNAME, key)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[CHAT-MATRIX] could not keep the store key in the keyring: {e}")
+
+
+def _store_key() -> str:
+    """The E2EE store's pickle key.
+
+    Kept in its own keyring entry, with a copy in chat.json under the
+    master key (where older versions kept it alone, and the fallback when
+    the keyring can't hold it). A key that is stored but won't decrypt is
+    NOT replaced while the master key itself may be the problem (keyring
+    locked, or answering with another key): a new key would lock the store
+    for good. Only when another secret still decrypts is it really lost;
+    then a new one is made, and _main moves the store it can no longer open
+    aside."""
+    key = _keyring_store_key()
+    if key:
+        if settings.get_secret(_NS, "matrix_store_key") != key:
+            settings.set_secret(_NS, "matrix_store_key", key)  # repair the copy
+        return key
     key = settings.get_secret(_NS, "matrix_store_key")
     if key:
+        _save_keyring_store_key(key)  # move an older version's key over
         return key
     if settings.get(_NS, "matrix_store_key") and not _master_key_works():
         raise MatrixTransportError(
             "Couldn't read the chat encryption key from the system keyring. "
             "Unlock the keyring (or sign in to your desktop session again) and retry.")
+    logger.warning("[CHAT-MATRIX] no usable E2EE store key; making a new one")
     key = secrets.token_urlsafe(32)
+    _save_keyring_store_key(key)
     settings.set_secret(_NS, "matrix_store_key", key)
     return key
 
@@ -575,7 +603,8 @@ class MatrixService:
             # Discovery reads two state events of every joined room (~40 KB
             # for ~50 rooms), so it runs at start and every _DISCOVER_EVERY
             # polls; in between only invites (stripped state) come back.
-            state = {"types": ["m.room.create", "m.room.encryption"]} if discover else {"not_types": ["*"]}
+            state = ({"types": ["m.room.create", "m.room.encryption", "m.room.name"]}
+                     if discover else {"not_types": ["*"]})
             return {"room": {"timeline": {"limit": 0}, "state": state,
                              "ephemeral": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}},
                     "presence": {"not_types": ["*"]}, "account_data": {"not_types": ["*"]}}
@@ -591,8 +620,8 @@ class MatrixService:
                         headers={"Authorization": f"Bearer {client.access_token}"}) as r:
                     data = await r.json() if r.status == 200 else {}
                 rooms = data.get("rooms") or {}
-                if discover:
-                    self._adopt_joined_alert_rooms(rooms.get("join") or {})
+                if discover and "rooms" in data:
+                    self._check_joined_alert_rooms(rooms.get("join") or {})
                 invites = rooms.get("invite") or {}
                 for room_id, inv in invites.items():
                     state = (inv.get("invite_state") or {}).get("events") or []
@@ -612,12 +641,27 @@ class MatrixService:
                 logger.warning(f"[CHAT-MATRIX] SIEM alerts invite check failed: {e}")
             await asyncio.sleep(_INVITE_POLL)
 
-    def _adopt_joined_alert_rooms(self, joined: dict) -> None:
+    def _check_joined_alert_rooms(self, joined: dict) -> None:
+        """Adopt this user's alert rooms joined elsewhere, and drop known ones
+        that are not theirs (shared into by their owner) or that they have
+        left or been removed from."""
+        for room_id in sorted(self._alert_rooms):
+            room = joined.get(room_id)
+            if room is not None:
+                state = ((room or {}).get("state") or {}).get("events") or []
+                if siem_alerts.is_alert_room(state, self.alerts_bot, self.user_id):
+                    continue
+                why = "it is another user's"
+            else:
+                why = "this account is no longer in it"
+            self._alert_rooms.discard(room_id)
+            siem_alerts.forget_alert_room(room_id)
+            logger.warning(f"[CHAT-MATRIX] dropped SIEM alerts room {room_id}: {why}")
         for room_id, room in joined.items():
             if room_id in self._alert_rooms:
                 continue
             state = ((room or {}).get("state") or {}).get("events") or []
-            if not siem_alerts.is_alert_room(state, self.alerts_bot):
+            if not siem_alerts.is_alert_room(state, self.alerts_bot, self.user_id):
                 continue
             self._alert_rooms.add(room_id)
             siem_alerts.add_alert_room(room_id, since=time.time())
