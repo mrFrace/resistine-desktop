@@ -53,8 +53,9 @@ class TestRequest:
             assert api.call_args.kwargs["json"] == {"name": "laptop-1a2b"}
             with open(e.key_file) as f:
                 assert f.read() == LINE + "\n"
-            assert stat.S_IMODE(os.stat(e.key_file).st_mode) == 0o600
-            assert stat.S_IMODE(os.stat(os.path.dirname(e.key_file)).st_mode) == 0o700
+            if os.name != "nt":  # POSIX modes; Windows ACLs are not comparable
+                assert stat.S_IMODE(os.stat(e.key_file).st_mode) == 0o600
+                assert stat.S_IMODE(os.stat(os.path.dirname(e.key_file)).st_mode) == 0o700
         finally:
             enrollment.discard(e)
         assert not os.path.exists(os.path.dirname(e.key_file))
@@ -160,6 +161,7 @@ def _enrolled(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(os.name == "nt", reason="Linux installer path uses os.getuid")
 class TestLinuxInstall:
     def _script(self, enrolled, family="deb", pkg="/tmp/p.deb"):
         from plugins.wazuh.agent import wazuh_functions_linux as wl

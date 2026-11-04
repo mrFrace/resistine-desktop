@@ -390,6 +390,7 @@ class TestWindowsPowerShellQuoting:
 # ===========================================================================
 @pytest.mark.unit
 @pytest.mark.security
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux installer path uses os.getuid")
 class TestLinuxDownload:
     def test_download_goes_through_phoenix_packages(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_linux as wf

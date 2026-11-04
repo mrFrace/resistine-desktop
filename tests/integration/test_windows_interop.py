@@ -33,8 +33,11 @@ class TestIPCTokenFlow:
         token_file = tmp_path / "Resistine" / "ipc_token"
         token_file.parent.mkdir(parents=True)
 
-        # Service side: generate and write token
-        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+        # Service side: generate and write token. The ACL step shells out to
+        # icacls, which the suite's subprocess guard stubs to a failure, and the
+        # service then (correctly) refuses to persist the token; isolate it.
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)), \
+             patch("plugins.vpn.wireguard.windows_vpn_service._restrict_token_acl", return_value=True):
             from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
             service_token = _get_or_create_ipc_token()
 
@@ -409,8 +412,9 @@ class TestWindowsEdgeCases:
         token_file = tmp_path / "Resistine" / "ipc_token"
         token_file.parent.mkdir(parents=True)
 
-        # Service writes its token
-        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+        # Service writes its token (ACL step isolated: see TestIPCTokenFlow)
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)), \
+             patch("plugins.vpn.wireguard.windows_vpn_service._restrict_token_acl", return_value=True):
             from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token, handle_request
             real_service_token = _get_or_create_ipc_token()
 

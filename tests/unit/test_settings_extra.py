@@ -11,6 +11,7 @@ Supplements test_settings.py with coverage for:
 - clear_namespace error handling
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -258,6 +259,7 @@ class TestGetConfigDir:
         path = s.get_config_dir()
         assert "Phoenix" in path
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX path separators")
     def test_linux(self, monkeypatch):
         import utils.settings as s
 
