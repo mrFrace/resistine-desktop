@@ -202,7 +202,11 @@ class PageHeader(QWidget):
         line.addStretch(1)
         text.addLayout(line)
         self.subtitle = muted(subtitle)
-        self.subtitle.setVisible(bool(subtitle))
+        # Never setVisible(True) on a widget that has no parent yet: Qt shows
+        # it as its own top-level window (a brief flash on Windows). An
+        # unhidden child simply appears with its parent once laid out.
+        if not subtitle:
+            self.subtitle.hide()
         text.addWidget(self.subtitle)
         row.addLayout(text, 1)
         self._controls = QHBoxLayout()
@@ -341,13 +345,15 @@ class MenuRow(QFrame):
         self._hint = QLabel(hint)
         self._hint.setObjectName("Hint")
         self._hint.setWordWrap(True)
-        self._hint.setVisible(bool(hint))
+        if not hint:  # see PageHeader: no setVisible(True) before parenting
+            self._hint.hide()
         text.addWidget(self._hint)
         h.addLayout(text, 1)
         self._chev = QLabel()
         self._chev.setPixmap(
             line_icon("chevron-right", theme.color("text_secondary"), 18))
-        self._chev.setVisible(chevron)
+        if not chevron:
+            self._chev.hide()
         h.addWidget(self._chev)
         for w in (self._tile, self._title, self._hint, self._chev):
             w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -419,7 +425,8 @@ class SettingRow(QWidget):
         self.hint = QLabel(hint)
         self.hint.setObjectName("Hint")
         self.hint.setWordWrap(True)
-        self.hint.setVisible(bool(hint))
+        if not hint:  # see PageHeader: no setVisible(True) before parenting
+            self.hint.hide()
         text.addWidget(self.hint)
         top.addLayout(text, 1)
         outer.addLayout(top)
