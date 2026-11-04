@@ -59,7 +59,8 @@ def _linux_os_key(exe: str) -> Optional[str]:
         if not shutil.which(tool):
             continue
         try:
-            r = subprocess.run([tool, *args], capture_output=True, timeout=10)
+            r = subprocess.run([tool, *args], capture_output=True, timeout=10,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except (OSError, subprocess.SubprocessError):
             continue
         if r.returncode == 0:

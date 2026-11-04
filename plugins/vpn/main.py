@@ -195,6 +195,7 @@ def _list_wg_interfaces() -> list[str]:
             text=True,
             timeout=5,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError:
         logger.info("WireGuard 'wg' tool not found; assuming no active interfaces")

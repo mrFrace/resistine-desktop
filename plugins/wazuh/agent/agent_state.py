@@ -146,7 +146,8 @@ def probe_manager_socket(port: int | None = None) -> bool:
                     return True
             return False
         result = subprocess.run(
-            ["netstat", "-an"], capture_output=True, text=True, timeout=5)
+            ["netstat", "-an"], capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return any(established_in_netstat(result.stdout, p) for p in ports)
     except Exception:
         return False

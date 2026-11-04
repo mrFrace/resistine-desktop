@@ -176,6 +176,7 @@ def _restrict_file_permissions(file_path: str):
                     ],
                     capture_output=True,
                     check=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
         except Exception as e:
             logger.warning(f"Failed to set Windows ACL on {file_path}: {e}")
