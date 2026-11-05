@@ -302,8 +302,9 @@ class Plugin(BasePlugin):
     # ── Re-enrollment required (account change) ────────────────────────
 
     def _build_reenroll_section(self, page: Page) -> None:
+        from plugins.wazuh.agent import enrollment as _enr
         enrolled = settings.get("wazuh", "enrolled_email", "unknown")
-        current = settings.get("auth", "email", "unknown")
+        current = _enr.account_identity() or "unknown"
 
         self._header.set_status("error", "Re-enrollment required")
         self._header.set_subtitle(

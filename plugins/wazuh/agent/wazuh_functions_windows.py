@@ -242,7 +242,7 @@ def get_agent_group():
 def needs_reenrollment():
     """Return True if the agent was enrolled under a different email."""
     enrolled = settings.get("wazuh", "enrolled_email", "")
-    current = settings.get("auth", "email", "")
+    current = enrollment.account_identity()
     if enrolled and current and enrolled != current:
         logger.info(f"[WAZUH] Enrollment mismatch: enrolled={enrolled!r} current={current!r}")
         return True
@@ -963,7 +963,7 @@ def full_install(progress_callback=None):
         _p("Wazuh agent installed (may need manual start)")
 
     # Record enrollment email
-    settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+    settings.set("wazuh", "enrolled_email", enrollment.account_identity())
 
     logger.info("Wazuh full install completed successfully")
     return True

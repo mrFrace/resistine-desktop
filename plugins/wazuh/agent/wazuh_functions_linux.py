@@ -141,7 +141,7 @@ def get_agent_group():
 
 def needs_reenrollment():
     enrolled = settings.get("wazuh", "enrolled_email", "")
-    current = settings.get("auth", "email", "")
+    current = enrollment.account_identity()
     if enrolled and current and enrolled != current:
         return True
     return False
@@ -654,7 +654,7 @@ def full_install(progress_callback=None):
 
     if success or is_agent_installed():
         settings.set("wazuh", _APP_INSTALLED, True)
-        settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+        settings.set("wazuh", "enrolled_email", enrollment.account_identity())
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
         return True

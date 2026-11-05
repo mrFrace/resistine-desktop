@@ -110,8 +110,17 @@ def request(agent_name: str) -> Optional[Enrollment]:
     return Enrollment(agent_id, name, group, line, _write_private(line))
 
 
-def _account() -> str:
+def account_identity() -> str:
+    """The signed-in account's identity for enrollment bookkeeping.
+
+    Under MAS/OIDC the authoritative identity is the Matrix user_id;
+    userinfo often carries no email at all (auth.email stays unset), so
+    anything gating on email alone silently fails for signed-in users.
+    """
     return settings.get("auth", "user_id", "") or settings.get("auth", "email", "") or ""
+
+
+_account = account_identity  # internal alias
 
 
 def _remember_group(group: str) -> None:

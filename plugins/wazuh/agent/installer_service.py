@@ -87,10 +87,18 @@ def ensure_download_started(force: bool = False):
             _set_state(STATE_INSTALLED)
             return
 
-        # Not authenticated (check email rather than logged_in flag because
-        # the download thread may start before logged_in is persisted).
+        # Not authenticated. Identity, not the logged_in flag, because the
+        # download thread may start before logged_in is persisted — and
+        # identity means user_id OR email: under MAS the userinfo endpoint
+        # returns no email, so auth.email is unset for signed-in users and
+        # gating on it alone made this a silent no-op (the setup wizard
+        # then polls to a bogus "Download timed out").
         # Skipped on force — an explicit user request to install anyway.
-        if not force and not settings.get("auth", "email", ""):
+        from plugins.wazuh.agent.enrollment import account_identity
+
+        if not force and not account_identity():
+            logger.info(
+                "[WZ-INSTALLER] download not started: no signed-in identity")
             return
 
         # Respect backoff on prior failure
@@ -338,7 +346,9 @@ def _install_succeeded(details: dict):
     else:
         _set_state(STATE_INSTALLED)
 
+    from plugins.wazuh.agent.enrollment import account_identity
+
     settings.set(_NAMESPACE, "retry_count", 0)
-    settings.set(_NAMESPACE, "enrolled_email", settings.get("auth", "email", ""))
+    settings.set(_NAMESPACE, "enrolled_email", account_identity())
     _delete_cached_pkg()  # Clean up cache after successful install
     logger.info(f"[INSTALLER] Install succeeded, enrollment={enrollment}")
