@@ -12,6 +12,23 @@ import platform
 import subprocess
 import threading
 import time
+
+
+# os.path.isdir must only lie about the scan-target paths: production code
+# (clamav_common._ensure_dirs via os.makedirs) also consults isdir, and a
+# blanket False makes makedirs(exist_ok=True) re-raise FileExistsError.
+_REAL_ISDIR = os.path.isdir
+
+
+def _isdir_lying_about(*fake_dirs):
+    """isdir replacement: fixed answers for the test's fake paths, truth otherwise."""
+    fake = {str(p) for p in fake_dirs}
+    def _isdir(p):
+        s = str(p)
+        if s.startswith("/tmp/") or s.startswith("/excluded/"):
+            return s in fake
+        return _REAL_ISDIR(p)
+    return _isdir
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -962,7 +979,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -988,7 +1005,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: "/bin/clamscan" if n == "clamscan" else None)
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([
@@ -1009,7 +1026,7 @@ class TestScanPath:
     def test_scan_file_via_socket(self, monkeypatch, clamav_dirs):
         """When clamd is running, single file uses direct socket scan."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
         monkeypatch.setattr(
             clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
@@ -1025,10 +1042,11 @@ class TestScanPath:
         """Directory scan uses parallel socket connections for speed."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about("/tmp/dir"))
 
         test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/c.txt"]
-        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files",
+                            lambda t, w, excl=None, mx=0, cancel=None: test_files)
         monkeypatch.setattr(
             clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
@@ -1046,7 +1064,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         cancel = threading.Event()
         cancel.set()  # Already cancelled
@@ -1067,7 +1085,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([])
@@ -1086,7 +1104,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([])
@@ -1104,7 +1122,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([])
@@ -1126,7 +1144,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         with patch("subprocess.Popen", side_effect=OSError("Permission denied")):
             result = clamav.scan_path("/tmp/file")
@@ -1139,7 +1157,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter(["/tmp/f: OK\n"])
@@ -1158,7 +1176,7 @@ class TestScanPath:
             clamav_common, "_active_clamd_socket",
             lambda: clamav_platform_darwin._SYSTEM_CLAMD_SOCKET,
         )
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         used_sockets = []
 
@@ -1177,7 +1195,7 @@ class TestScanPath:
         monkeypatch.setattr(clamav_common, "has_database", lambda: True)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: ["/excluded/dir"])
         monkeypatch.setattr(clamav_common, "start_clamd", lambda: (False, "test"))
-        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/excluded/dir" or p == "/tmp/file")
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about("/excluded/dir", "/tmp/file"))
 
         mock_proc = MagicMock()
         mock_proc.stdout = iter([])
@@ -1199,10 +1217,11 @@ class TestScanPath:
         """Parallel socket scan correctly counts infected files."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about("/tmp/dir"))
 
         test_files = ["/tmp/dir/a.txt", "/tmp/dir/b.txt", "/tmp/dir/virus.exe"]
-        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files",
+                            lambda t, w, excl=None, mx=0, cancel=None: test_files)
 
         responses = {
             "/tmp/dir/a.txt": "/tmp/dir/a.txt: OK",
@@ -1268,7 +1287,7 @@ class TestSocketScanHelpers:
     def test_scan_socket_error(self, monkeypatch, clamav_dirs):
         """Socket error is reported in result."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
         monkeypatch.setattr(
             clamav_common, "_contscan_socket",
             MagicMock(side_effect=OSError("Connection refused")),
@@ -1281,7 +1300,7 @@ class TestSocketScanHelpers:
     def test_scan_file_cancel_socket(self, monkeypatch, clamav_dirs):
         """Single-file socket scan respects cancel event."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
 
         cancel = threading.Event()
         cancel.set()
@@ -1300,11 +1319,12 @@ class TestSocketScanHelpers:
         """Parallel socket scan respects cancel event."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about("/tmp/dir"))
 
         # Many files so cancel triggers before all are processed
         test_files = [f"/tmp/dir/f{i}.txt" for i in range(50)]
-        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files",
+                            lambda t, w, excl=None, mx=0, cancel=None: test_files)
 
         cancel = threading.Event()
         cancel.set()
@@ -1325,10 +1345,11 @@ class TestSocketScanHelpers:
             lambda: clamav_common._CLAMD_SOCKET,
         )
         monkeypatch.setattr(clamav_common, "get_whitelist", lambda: [])
-        monkeypatch.setattr(os.path, "isdir", lambda p: p == "/tmp/dir")
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about("/tmp/dir"))
 
         test_files = [f"/tmp/dir/f{i}.txt" for i in range(200)]
-        monkeypatch.setattr(clamav_common, "_walk_files", lambda t, w: test_files)
+        monkeypatch.setattr(clamav_common, "_walk_files",
+                            lambda t, w, excl=None, mx=0, cancel=None: test_files)
 
         cancel = threading.Event()
 
@@ -1348,7 +1369,7 @@ class TestSocketScanHelpers:
     def test_on_line_callback_socket(self, monkeypatch, clamav_dirs):
         """Socket scan invokes on_line callback per file."""
         monkeypatch.setattr(clamav_common, "_active_clamd_socket", lambda: clamav_common._CLAMD_SOCKET)
-        monkeypatch.setattr(os.path, "isdir", lambda p: False)
+        monkeypatch.setattr(os.path, "isdir", _isdir_lying_about())
         monkeypatch.setattr(
             clamav_common, "_contscan_socket",
             lambda sock, path: f"{path}: OK",
