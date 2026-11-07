@@ -17,11 +17,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from gui.dialogs import CTkPasswordDialog
 from utils.i18n import get_text
 from utils.logger import logger
 from plugins.vpn.wireguard.config_validation import (
+    SCRIPT_HOOK_KEYS,
     is_valid_config_name,
     optional_peer_lines,
     validate_config_name,
@@ -621,6 +623,47 @@ def make_dns_compatible_config(config_path):
     return compat_path
 
 
+def _write_vetted_private_copy(config_path, iface):
+    """Re-validate the stored config and snapshot it into a private temp file.
+
+    The stored config lives in a user-writable directory, so between the time
+    it was created (validated) and the time the user approves the polkit
+    prompt, user-level malware could have rewritten it — e.g. inserted a
+    ``PostUp = <cmd>`` hook that wg-quick would run as root. Close that TOCTOU
+    window by reading the file ONCE into memory, rejecting any script-hook
+    directive (SCRIPT_HOOK_KEYS, case-insensitive), and writing that vetted
+    in-memory content to a fresh private file (0700 dir, 0600 file, O_EXCL).
+    The privileged command only ever reads the vetted copy, never the
+    original user path.
+
+    The copy is named ``<iface>.conf`` (wg-quick derives the interface name
+    from the file name on the NixOS in-place path). Returns the temp path;
+    raises ValueError on a forbidden directive, OSError on I/O failure.
+    """
+    with open(config_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    for line in content.splitlines():
+        stripped = line.strip()
+        if "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip().lower()
+        if key in SCRIPT_HOOK_KEYS:
+            raise ValueError(
+                f"stored config contains forbidden script hook {key!r}"
+            )
+    # Fresh 0700 dir with a random name, next to the stored config (same
+    # 0700-restricted parent), so the vetted copy never crosses filesystems
+    # and inherits no world-visible location.
+    tmp_dir = tempfile.mkdtemp(
+        prefix=".phoenix_wg_", dir=os.path.dirname(config_path) or "."
+    )
+    tmp_path = os.path.join(tmp_dir, f"{iface}.conf")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+    return tmp_path
+
+
 def start_vpn(config_path):
     """
     Start the WireGuard VPN service with a specified configuration.
@@ -628,21 +671,32 @@ def start_vpn(config_path):
     :param config_path: The path to the WireGuard configuration file.
     :return: True if the service is started successfully, False otherwise.
     """
+    vetted_conf = None
     try:
         iface = os.path.splitext(os.path.basename(config_path))[0]
         if not is_valid_config_name(iface):
             logger.error(f"Refusing to start VPN: invalid interface name {iface!r}")
             return False
         etc_conf = f"/etc/wireguard/{iface}.conf"
+        # Re-validate the stored config and snapshot it to a private temp
+        # file; everything below (DNS rewrite, root copy, wg-quick) works
+        # only on that vetted copy, never the user-writable original.
+        try:
+            vetted_conf = _write_vetted_private_copy(config_path, iface)
+        except (OSError, ValueError) as e:
+            logger.error(f"Refusing to start VPN: {e}")
+            return False
         # Adapt DNS handling to whatever this host provides (resolvconf vs
-        # resolvectl) so wg-quick doesn't fail on a missing resolvconf.
-        src_conf = make_dns_compatible_config(config_path)
+        # resolvectl) so wg-quick doesn't fail on a missing resolvconf. Any
+        # PostUp hooks this adds are generated in-process from sanitized DNS
+        # tokens, after the script-hook vetting above.
+        src_conf = make_dns_compatible_config(vetted_conf)
         if _is_nixos():
-            # /etc is read-only on NixOS: run wg-quick on the user's config
-            # (~/.config/phoenix/wireguard/<iface>.conf, 0600) in place. The
-            # interface name comes from the file name, so use the stored file
-            # (NixOS always has resolvconf, so no DNS-compat copy is needed).
-            script = f"{shlex.quote(_wg_quick())} up {shlex.quote(config_path)}"
+            # /etc is read-only on NixOS: run wg-quick on the vetted private
+            # copy in place (named <iface>.conf so the interface name is
+            # preserved; NixOS always has resolvconf, so no DNS-compat copy
+            # is needed).
+            script = f"{shlex.quote(_wg_quick())} up {shlex.quote(vetted_conf)}"
         else:
             # Copy into /etc/wireguard/ first — Ubuntu's AppArmor profile for
             # wg-quick only permits reading configs from that directory.
@@ -656,6 +710,9 @@ def start_vpn(config_path):
     except Exception as e:
         logger.error(f"Failed to start VPN service: {e}")
         return False
+    finally:
+        if vetted_conf:
+            shutil.rmtree(os.path.dirname(vetted_conf), ignore_errors=True)
 
 
 def setup_vpn_keys():
