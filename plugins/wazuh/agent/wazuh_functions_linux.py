@@ -28,10 +28,26 @@ from plugins.wazuh.config import (
     LINUX_WAZUH_DIR_CANDIDATES,
 )
 
+# Values interpolated into privileged `sh -c` strings (deploy env, sed
+# expressions in ossec.conf patching) must be plain tokens — no quotes,
+# spaces, `$`, `;`, `|` or other shell/sed metacharacters. Upstream callers
+# already validate names/groups, but these builders run as root, so they
+# re-check locally (defense in depth, mirroring wazuh_functions_darwin).
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _require_safe_tokens(**values):
+    """Raise ValueError if any value is unsafe to interpolate into root sh -c."""
+    for name, value in values.items():
+        if not _SAFE_TOKEN_RE.match(value or ""):
+            raise ValueError(f"unsafe {name} for privileged command: {value!r}")
+
+
 # Deployment-variable prefix passed to the package installer.  Carries the
 # manager address, ports, protocol, agent name, and group so the package's
 # preinstall hook patches ossec.conf accordingly.
 def _deploy_env(agent_name, agent_group):
+    _require_safe_tokens(agent_name=agent_name, agent_group=agent_group)
     return (
         f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
         f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}' "
@@ -162,6 +178,7 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
                                           at the end of <agent> (5.0), or of
                                           <client> in a config kept from 4.x
     """
+    _require_safe_tokens(agent_name=agent_name)
     return (
         f"if grep -q '<agent_name>' '{ossec_conf}'; then "
         f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
@@ -186,6 +203,7 @@ def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
     the same unique name AND the correct group. Runs after _set_ossec_agent_name
     so the <enrollment> block is guaranteed to exist for the <groups> insert.
     """
+    _require_safe_tokens(agent_name=agent_name, agent_group=agent_group)
     return (
         _set_ossec_agent_name(ossec_conf, agent_name)
         + "\n"
@@ -373,12 +391,38 @@ def write_env_file(agent_name, agent_group):
 _KEY_BACKUP = os.path.join(settings.get_config_dir(), "wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
+
+def _backup_key_is_valid():
+    """Re-validate the user-owned key backup before root restores it.
+
+    The backup lives in the (user-writable) app config dir but is copied back
+    into the agent's client.keys as root, so its content must be re-checked at
+    use time: read it once (capped at 512 bytes) and require exactly one
+    enrollment key line ("<id> <name> <ip|any> <64 hex>"). On mismatch the
+    restore is skipped — treated as if no backup existed.
+    """
+    try:
+        with open(_KEY_BACKUP, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(512)
+    except OSError as e:
+        logger.warning(f"Could not read client.keys backup: {e}")
+        return False
+    line = content.strip()
+    if "\n" in line or not enrollment._KEY_LINE_RE.match(line):
+        logger.warning(
+            "client.keys backup does not look like a valid enrollment key; "
+            "skipping restore"
+        )
+        return False
+    return True
+
+
 def start_agent():
     if get_agent_status() == "Running":
         return True
-        
-    # Restore key if missing
-    if os.path.exists(_KEY_BACKUP):
+
+    # Restore key if missing (only from a backup that re-validates)
+    if os.path.exists(_KEY_BACKUP) and _backup_key_is_valid():
         script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -402,7 +446,11 @@ def restore_client_key_if_needed():
         
     if not os.path.exists(_KEY_BACKUP):
         return True
-        
+
+    # A backup that fails re-validation is treated as no backup at all.
+    if not _backup_key_is_valid():
+        return True
+
     script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -592,6 +640,13 @@ def full_install(progress_callback=None):
     if enrolled:
         agent_name = enrolled.agent_name
         agent_group = enrolled.group
+    # Both values land inside root `sh -c` strings below (deploy env + sed).
+    if not (_SAFE_TOKEN_RE.match(agent_name or "") and _SAFE_TOKEN_RE.match(agent_group or "")):
+        enrollment.discard(enrolled)
+        logger.error("Refusing to install: unsafe agent name or group")
+        if progress_callback:
+            progress_callback("Installation failed")
+        return False
 
     os_type = _get_os_info()
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
@@ -692,6 +747,11 @@ def reenroll_agent():
     if enrolled:
         new_name = enrolled.agent_name
         group = enrolled.group
+    # new_name/group also land unquoted inside sed expressions below.
+    if not (_SAFE_TOKEN_RE.match(new_name or "") and _SAFE_TOKEN_RE.match(group or "")):
+        enrollment.discard(enrolled)
+        return (False, "Unsafe agent name or group")
+    if enrolled:
         register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
     else:
         register = (f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "

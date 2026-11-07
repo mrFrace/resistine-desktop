@@ -477,6 +477,15 @@ _KEYCHAIN = "/Library/Keychains/System.keychain"
 _KC_SERVICE = "com.resistine.wazuh.agent"
 _KC_ACCOUNT = "client_key"
 
+# `security -i` command that stores the agent key in the System Keychain.
+# The key itself is appended as a quoted argument on security's *stdin* —
+# a `-w "$(cat ...)"` on the command line would put the key in argv, where
+# any local user can read it via ps (M2).
+_KC_ADD_CMD = (
+    f'add-generic-password -U -k "{_KEYCHAIN}" '
+    f'-s "{_KC_SERVICE}" -a "{_KC_ACCOUNT}" -w'
+)
+
 
 def remove_agent(wipe_keys: bool = False):
     """Stop the Wazuh agent and remove /Library/Phoenix/ with admin privileges.
@@ -511,9 +520,11 @@ def remove_agent(wipe_keys: bool = False):
         key_phase = (
             f"mkdir -p {_sh(backup_dir)} && "
             f"cp {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)} 2>/dev/null && "
-            f"security add-generic-password -U "
-            f"-k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
-            f"-w \"$(cat {_sh(_CLIENT_KEYS)})\" 2>/dev/null; "
+            # printf is a shell builtin, so the key (expanded by the command
+            # substitution) never reaches any process's argv; security reads
+            # the whole command, key included, from stdin (-i).
+            f"printf '%s \"%s\"\\n' {_sh(_KC_ADD_CMD)} \"$(cat {_sh(_CLIENT_KEYS)})\" "
+            f"| security -i 2>/dev/null; "
         )
 
     script = (
@@ -587,8 +598,9 @@ def reenroll_agent():
         f"'s|<agent_name>.*</agent_name>|<agent_name>{new_name}</agent_name>|' "
         f"{_sh(ossec_conf)} 2>/dev/null || true; "
         f"cp {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)} 2>/dev/null; "
-        f"security add-generic-password -U -k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} "
-        f"-a {_sh(_KC_ACCOUNT)} -w \"$(cat {_sh(_CLIENT_KEYS)})\" 2>/dev/null; "
+        # M2: key on security's stdin (-i), never in argv (ps-visible).
+        f"printf '%s \"%s\"\\n' {_sh(_KC_ADD_CMD)} \"$(cat {_sh(_CLIENT_KEYS)})\" "
+        f"| security -i 2>/dev/null; "
         # Bring it back up under launchd.
         f"launchctl enable system/com.wazuh.agent 2>/dev/null; "
         f"launchctl bootstrap system {_sh(WAZUH_LAUNCHD_PLIST)} 2>/dev/null; "
@@ -784,6 +796,8 @@ def full_install(progress_callback=None):
         agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
+        # Don't leak the enrollment key file when the install never launches.
+        enrollment.discard(enrolled)
         if progress_callback:
             progress_callback("Failed to write environment file")
         return False
@@ -853,13 +867,15 @@ def full_install(progress_callback=None):
             progress_callback(f"Installation failed: {error}")
         return False
 
-    # Log enrollment outcome for diagnostics
-    enrollment = details.get("enrollment", "")
-    if enrollment == "restored":
+    # Log enrollment outcome for diagnostics.  B1: this local must NOT be
+    # named "enrollment" — that shadowed the imported enrollment module and
+    # made every enrollment.* call in this function raise UnboundLocalError.
+    enroll_outcome = details.get("enrollment", "")
+    if enroll_outcome == "restored":
         logger.info("[WAZUH] Existing enrollment key restored — agent will reconnect as same agent")
-    elif enrollment == "enrolled":
+    elif enroll_outcome == "enrolled":
         logger.info("[WAZUH] Fresh enrollment succeeded — new agent registered on manager")
-    elif enrollment == "enroll_failed":
+    elif enroll_outcome == "enroll_failed":
         logger.warning("[WAZUH] agent-auth enrollment failed — agent may connect via auto-enrollment")
 
     # Verify the agent is actually running via launchd
@@ -872,8 +888,9 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
 
-    # Record which email this enrollment belongs to so we can detect
-    # account changes (different user / org) on future startups.
+    # Record which account identity this enrollment belongs to so we can
+    # detect account changes (different user / org) on future startups —
+    # same bookkeeping as installer_service._install_succeeded().
     settings.set("wazuh", "enrolled_email", enrollment.account_identity())
 
     logger.info("Wazuh full install completed successfully")

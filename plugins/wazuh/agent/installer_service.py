@@ -155,6 +155,8 @@ def trigger_install(app) -> bool:
         agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
+        # L3: the enrollment key file must not outlive a failed install.
+        enrollment.discard(enrolled)
         _fail(STATE_INSTALL_FAILED, "script_failed")
         return False
 

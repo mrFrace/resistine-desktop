@@ -302,3 +302,13 @@ class TestPlatformKey:
     def test_env_override(self):
         with patch.dict(os.environ, {"PHOENIX_PACKAGES_URL": "https://x/p/"}):
             assert pp.manifest_url("windows") == "https://x/p/windows/current/manifest.json"
+
+    @pytest.mark.parametrize("bad", [
+        "http://x/p",                 # plain HTTP would leak the Bearer token
+        "ftp://x/p",
+        "x/p",
+        "HTTPS://x/p",                # scheme must be lowercase https://
+    ])
+    def test_non_https_env_override_rejected(self, bad):
+        with patch.dict(os.environ, {"PHOENIX_PACKAGES_URL": bad}):
+            assert pp.packages_url() == pp.PACKAGES_URL.rstrip("/")

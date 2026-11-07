@@ -403,9 +403,11 @@ class TestRestoreClientKey:
         with patch("plugins.wazuh.agent.wazuh_functions_windows.needs_reenrollment",
                    return_value=False):
             with patch("os.path.exists", return_value=True):
-                with patch("plugins.wazuh.agent.wazuh_functions_windows._run_privileged",
-                           return_value=(True, "KEY_RESTORED\nSUCCESS")) as mock_priv:
-                    result = restore_client_key_if_needed()
+                with patch("plugins.wazuh.agent.wazuh_functions_windows._backup_key_is_valid",
+                           return_value=True):
+                    with patch("plugins.wazuh.agent.wazuh_functions_windows._run_privileged",
+                               return_value=(True, "KEY_RESTORED\nSUCCESS")) as mock_priv:
+                        result = restore_client_key_if_needed()
         assert result is True
         # Verify the script was actually invoked (not just no-op'd)
         assert mock_priv.called, "_run_privileged was not called"
@@ -413,6 +415,64 @@ class TestRestoreClientKey:
         script = mock_priv.call_args[0][0]
         assert "Test-Path" in script
         assert "Copy-Item" in script
+
+    def test_invalid_backup_skips_restore(self):
+        """A tampered backup must never be restored as SYSTEM."""
+        from plugins.wazuh.agent.wazuh_functions_windows import restore_client_key_if_needed
+        with patch("plugins.wazuh.agent.wazuh_functions_windows.needs_reenrollment",
+                   return_value=False):
+            with patch("os.path.exists", return_value=True):
+                with patch("plugins.wazuh.agent.wazuh_functions_windows._backup_key_is_valid",
+                           return_value=False):
+                    with patch("plugins.wazuh.agent.wazuh_functions_windows._run_privileged") as mock_priv:
+                        assert restore_client_key_if_needed() is True
+        mock_priv.assert_not_called()
+
+
+# ===========================================================================
+# _backup_key_is_valid: backup re-validated before SYSTEM copies it back
+# ===========================================================================
+@pytest.mark.unit
+@pytest.mark.security
+class TestBackupKeyValidation:
+    _GOOD = "001 agent-ABC123 any " + "a" * 64
+
+    def _check(self, content, tmp_path):
+        import plugins.wazuh.agent.wazuh_functions_windows as wf
+        backup = tmp_path / "wazuh_client.keys"
+        backup.write_text(content)
+        with patch.object(wf, "_KEY_BACKUP", str(backup)):
+            return wf._backup_key_is_valid()
+
+    def test_valid_key_line_accepted(self, tmp_path):
+        assert self._check(self._GOOD + "\n", tmp_path) is True
+
+    @pytest.mark.parametrize("bad", [
+        "",                                           # empty
+        "not a key at all",                           # garbage
+        "001 agent;rm -rf / any " + "a" * 64,         # shell metacharacters
+        "001 agent any " + "a" * 64 + "\n002 x any " + "b" * 64,  # multi-line
+        "x" * 600,                                    # oversized
+    ])
+    def test_invalid_content_rejected(self, bad, tmp_path):
+        assert self._check(bad, tmp_path) is False
+
+    def test_unreadable_backup_rejected(self, tmp_path):
+        import plugins.wazuh.agent.wazuh_functions_windows as wf
+        with patch.object(wf, "_KEY_BACKUP", str(tmp_path / "missing.keys")):
+            assert wf._backup_key_is_valid() is False
+
+    def test_start_agent_skips_invalid_backup(self):
+        import plugins.wazuh.agent.wazuh_functions_windows as wf
+        with patch.object(wf, "get_agent_status", return_value="Stopped"), \
+                patch.object(wf, "_ensure_ossec_address"), \
+                patch("os.path.exists", side_effect=lambda p: p == wf._KEY_BACKUP), \
+                patch.object(wf, "_backup_key_is_valid", return_value=False), \
+                patch.object(wf, "_run_privileged",
+                             return_value=(True, "started")) as mock_priv:
+            assert wf.start_agent() is True
+        # Only the NET START call — no Copy-Item restore of the bad backup.
+        assert all("Copy-Item" not in c.args[0] for c in mock_priv.call_args_list)
 
 
 # ===========================================================================

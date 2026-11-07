@@ -566,6 +566,32 @@ def _ensure_ossec_address():
     _run_privileged(patch_cmd)
 
 
+def _backup_key_is_valid():
+    """Re-validate the user-owned key backup before SYSTEM restores it.
+
+    The backup lives in the (user-writable) %APPDATA%\\Phoenix dir but is
+    copied back into the agent's client.keys by an elevated PowerShell, so its
+    content must be re-checked at use time: read it once (capped at 512
+    bytes) and require exactly one enrollment key line
+    ("<id> <name> <ip|any> <64 hex>"). On mismatch the restore is skipped —
+    treated as if no backup existed.
+    """
+    try:
+        with open(_KEY_BACKUP, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(512)
+    except OSError as e:
+        logger.warning(f"Could not read client.keys backup: {e}")
+        return False
+    line = content.strip()
+    if "\n" in line or not enrollment._KEY_LINE_RE.match(line):
+        logger.warning(
+            "client.keys backup does not look like a valid enrollment key; "
+            "skipping restore"
+        )
+        return False
+    return True
+
+
 def start_agent():
     """Start the Wazuh agent Windows service."""
     if get_agent_status() == "Running":
@@ -573,8 +599,9 @@ def start_agent():
 
     _ensure_ossec_address()
 
-    # Restore key if missing
-    if os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS):
+    # Restore key if missing (only from a backup that re-validates)
+    if (os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS)
+            and _backup_key_is_valid()):
         restore_cmd = (
             f"Copy-Item -Path {_ps_quote(_KEY_BACKUP)} -Destination {_ps_quote(_CLIENT_KEYS)} -Force"
         )
@@ -616,6 +643,10 @@ def restore_client_key_if_needed():
 
     if not os.path.exists(_KEY_BACKUP):
         logger.info("No client.keys backup found")
+        return True
+
+    # A backup that fails re-validation is treated as no backup at all.
+    if not _backup_key_is_valid():
         return True
 
     # Only restore if missing

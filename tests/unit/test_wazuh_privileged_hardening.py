@@ -322,6 +322,7 @@ class TestWindowsPowerShellQuoting:
                 patch.object(wf.os.path, "exists", return_value=True), \
                 patch.object(wf, "get_agent_name", return_value="host-1"), \
                 patch.object(wf, "get_agent_group", return_value="grp"), \
+                patch.object(wf, "_backup_key_is_valid", return_value=True), \
                 patch.object(wf, "_run_privileged", return_value=(True, "")) as rp:
             wf.remove_agent()
             wf.remove_agent(wipe_keys=True)
@@ -396,6 +397,7 @@ class TestLinuxDownload:
         from plugins.wazuh.agent import wazuh_functions_linux as wf
 
         with patch.object(wf, "_get_os_info", return_value="deb"), \
+                patch.object(wf.phoenix_packages, "platform_key", return_value="linux-amd64"), \
                 patch.object(wf.phoenix_packages, "manifest_url", return_value="https://x/m.json"), \
                 patch.object(wf.tempfile, "mkdtemp", return_value=str(tmp_path)), \
                 patch.object(wf.phoenix_packages, "download_or_none",

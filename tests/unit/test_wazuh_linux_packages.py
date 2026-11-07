@@ -1,6 +1,7 @@
 """Linux agent package choice: .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/openSUSE,
 .pkg.tar.zst for Arch."""
 
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -64,6 +65,7 @@ _CONF = """<ossec_config>
 """
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="GNU sed required (sed -i syntax)")
 def test_enrollment_group_leaves_other_groups_tags(tmp_path, allow_subprocess):
     """Only <enrollment>'s <groups> changes; syscollector's stays 'yes', and
     a MANAGER_IP placeholder left by a failed package script is filled in."""
