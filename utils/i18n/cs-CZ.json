@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "Bílá listina",
   "antivirus.ui_cards.signature_database": "Databáze signatur",
   "antivirus.ui_cards.signature_updates": "Aktualizace signatur",
-  "store.browse_and_install_plugins": "Procházejte a instalujte pluginy pro rozšíření Phoenix."
+  "store.browse_and_install_plugins": "Procházejte a instalujte pluginy pro rozšíření Phoenix.",
+  "devices.vulns_filter_chip": "✕ Pouze {sev}",
+  "devices.vulns_none_filtered": "V tomto seznamu nejsou žádné CVE závažnosti {sev} — zrušte filtr {sev} a uvidíte všech {total}."
 }

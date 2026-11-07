@@ -213,6 +213,21 @@ class VulnerabilitiesTab:
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._search_changed)
         head.addWidget(self.search, 1)
+        # Visible marker for an active severity filter (set by clicking a
+        # donut slice / legend / timeline segment). Without it, a selected
+        # severity with zero matches reads as "the page is broken".
+        from PyQt6.QtWidgets import QPushButton
+        from PyQt6.QtGui import QCursor
+        self.filter_chip = QPushButton()
+        self.filter_chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.filter_chip.setStyleSheet(
+            "QPushButton { border: 1px solid rgba(96,165,250,0.55);"
+            " border-radius: 10px; padding: 2px 10px; font-size: 11px;"
+            " color: #93C5FD; background: rgba(59,130,246,0.12); }"
+            "QPushButton:hover { background: rgba(59,130,246,0.25); }")
+        self.filter_chip.clicked.connect(self._clear_sev)
+        self.filter_chip.hide()
+        head.addWidget(self.filter_chip)
         self.count = _label("", hint=True)
         head.addWidget(self.count)
         col.addLayout(head)
@@ -322,6 +337,10 @@ class VulnerabilitiesTab:
         self.timeline.set_selected_severity(self._sev)
         self._render_list()
 
+    def _clear_sev(self) -> None:
+        if self._sev is not None:
+            self._toggle_sev(self._sev)
+
     def _search_changed(self, _text) -> None:
         if self._search_token is not None:
             self.ctx.app.after_cancel(self._search_token)
@@ -340,6 +359,12 @@ class VulnerabilitiesTab:
             if len(vulns) == total
             else self.t("vulns_count_of", shown=len(vulns), total=total)
         )
+        if self._sev:
+            self.filter_chip.setText(
+                self.t("vulns_filter_chip", sev=self._sev.capitalize()))
+            self.filter_chip.show()
+        else:
+            self.filter_chip.hide()
         page_items, self._page, pages = tables.page_slice(
             vulns, self._page, tables.PAGE_SIZE
         )
@@ -352,7 +377,12 @@ class VulnerabilitiesTab:
         for v in page_items:
             self._add_row(v)
         if not vulns:
-            empty = _label(self.t("vulns_none"), hint=True, wrap=True)
+            if self._sev and not self.search.text().strip():
+                msg = self.t("vulns_none_filtered",
+                             sev=self._sev.capitalize(), total=total)
+            else:
+                msg = self.t("vulns_none")
+            empty = _label(msg, hint=True, wrap=True)
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.rows.insertWidget(self.rows.count() - 1, empty)
         self._render_detail(
@@ -529,6 +559,21 @@ class EventsTab:
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._search_changed)
         head.addWidget(self.search, 1)
+        # Visible marker for an active severity filter (set by clicking a
+        # donut slice / legend / timeline segment). Without it, a selected
+        # severity with zero matches reads as "the page is broken".
+        from PyQt6.QtWidgets import QPushButton
+        from PyQt6.QtGui import QCursor
+        self.filter_chip = QPushButton()
+        self.filter_chip.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self.filter_chip.setStyleSheet(
+            "QPushButton { border: 1px solid rgba(96,165,250,0.55);"
+            " border-radius: 10px; padding: 2px 10px; font-size: 11px;"
+            " color: #93C5FD; background: rgba(59,130,246,0.12); }"
+            "QPushButton:hover { background: rgba(59,130,246,0.25); }")
+        self.filter_chip.clicked.connect(self._clear_sev)
+        self.filter_chip.hide()
+        head.addWidget(self.filter_chip)
         self.count = _label("", hint=True)
         head.addWidget(self.count)
         col.addLayout(head)

@@ -35,7 +35,6 @@
   "main.registration.error.empty": "Email cannot be empty",
   "main.registration.error.invalid": "Invalid email format",
   "main.plugin.error_loading": "Error loading plugin button {plugin_name}, Error: {error}",
-  "main.plugin.error_loading": "Error loading plugin button {plugin_name}, Error: {error}",
   "settings.apikey.label": "OpenAI API Key:",
   "settings.apikey.placeholder": "sk-...",
   "settings.apikey.save": "Save Key",
@@ -185,5 +184,7 @@
   "devices.col_device": "DEVICE",
   "devices.inv_showing": "Showing {shown} of {total}",
   "devices.inv_show_more": "Show {n} more",
-  "devices.description_label": "DESCRIPTION"
+  "devices.description_label": "DESCRIPTION",
+  "devices.vulns_filter_chip": "✕ {sev} only",
+  "devices.vulns_none_filtered": "No {sev} CVEs in this list — clear the {sev} filter to see all {total}."
 }

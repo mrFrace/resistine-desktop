@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "Witte lijst",
   "antivirus.ui_cards.signature_database": "Signaturendatabase",
   "antivirus.ui_cards.signature_updates": "Signatuur-updates",
-  "store.browse_and_install_plugins": "Blader door en installeer plugins om Phoenix uit te breiden."
+  "store.browse_and_install_plugins": "Blader door en installeer plugins om Phoenix uit te breiden.",
+  "devices.vulns_filter_chip": "✕ Alleen {sev}",
+  "devices.vulns_none_filtered": "Geen {sev}-CVE's in deze lijst — verwijder het {sev}-filter om alle {total} te zien."
 }

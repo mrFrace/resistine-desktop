@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "Whitelist",
   "antivirus.ui_cards.signature_database": "Database delle firme",
   "antivirus.ui_cards.signature_updates": "Aggiornamenti delle firme",
-  "store.browse_and_install_plugins": "Sfoglia e installa plugin per estendere Phoenix."
+  "store.browse_and_install_plugins": "Sfoglia e installa plugin per estendere Phoenix.",
+  "devices.vulns_filter_chip": "✕ Solo {sev}",
+  "devices.vulns_none_filtered": "Nessuna CVE {sev} in questo elenco — rimuovi il filtro {sev} per vederle tutte e {total}."
 }

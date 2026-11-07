@@ -91,12 +91,14 @@ class Donut(QWidget):
                 if not n:
                     continue
                 span = 360.0 * n / total
+                selected_here = self._selected == s
                 pen.setColor(
                     _dim(
                         severity_color(s),
-                        self._selected is not None and self._selected != s,
+                        self._selected is not None and not selected_here,
                     )
                 )
+                pen.setWidthF(thickness * (1.18 if selected_here else 1.0))
                 p.setPen(pen)
                 p.drawArc(ring, int(start * 16), int(-span * 16))
                 self._arcs.append((start, span, s))
@@ -211,8 +213,12 @@ class StackedBars(QWidget):
         peak = max(
             (sum(self._counts.get(b, {}).values()) for b in self._buckets), default=0
         )
-        # y grid + labels
+        # y grid + labels: a "nice" max divisible by the step count, so the
+        # ticks are uniform integers (0,3,6,9,12) instead of rounded
+        # fractions of the peak (0,2,4,7,9).
         steps = 4
+        tick = max(1, -(-peak // steps)) if peak else 1  # ceil(peak/steps)
+        nice_max = tick * steps
         p.setPen(QPen(grid, 1, Qt.PenStyle.DashLine))
         for i in range(steps + 1):
             y = bottom - plot_h * i / steps
@@ -221,7 +227,7 @@ class StackedBars(QWidget):
             p.drawText(
                 QRectF(0, y - 8, left - 6, 16),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                str(int(round(peak * i / steps))) if peak else "",
+                str(tick * i) if peak else "",
             )
             p.setPen(QPen(grid, 1, Qt.PenStyle.DashLine))
         if not peak:
@@ -238,7 +244,7 @@ class StackedBars(QWidget):
             total = sum(self._counts.get(key, {}).values())
             y = bottom
             if total and peak:
-                h = plot_h * total / peak
+                h = plot_h * total / nice_max
                 for s in ("low", "medium", "high", "critical"):
                     cnt = self._counts.get(key, {}).get(s, 0)
                     if not cnt:

@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "Білий список",
   "antivirus.ui_cards.signature_database": "База даних сигнатур",
   "antivirus.ui_cards.signature_updates": "Оновлення сигнатур",
-  "store.browse_and_install_plugins": "Переглядайте та встановлюйте плагіни, щоб розширити Phoenix."
+  "store.browse_and_install_plugins": "Переглядайте та встановлюйте плагіни, щоб розширити Phoenix.",
+  "devices.vulns_filter_chip": "✕ Лише {sev}",
+  "devices.vulns_none_filtered": "У цьому списку немає CVE рівня {sev} — зніміть фільтр {sev}, щоб побачити всі {total}."
 }

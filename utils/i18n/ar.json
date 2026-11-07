@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "القائمة البيضاء",
   "antivirus.ui_cards.signature_database": "قاعدة بيانات التواقيع",
   "antivirus.ui_cards.signature_updates": "تحديثات التواقيع",
-  "store.browse_and_install_plugins": "تصفح وثبّت الإضافات لتوسيع Phoenix."
+  "store.browse_and_install_plugins": "تصفح وثبّت الإضافات لتوسيع Phoenix.",
+  "devices.vulns_filter_chip": "✕ {sev} فقط",
+  "devices.vulns_none_filtered": "لا توجد ثغرات CVE بخطورة {sev} في هذه القائمة — أزل مرشح {sev} لرؤية جميع {total}."
 }

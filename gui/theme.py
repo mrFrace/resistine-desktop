@@ -43,15 +43,17 @@ BADGE_BG: dict[str, tuple[str, str]] = {
     "ok": ("#DCFCE7", "#14532D"),
     "info": ("#DBEAFE", "#1E3A5F"),
     "warning": ("#FEF3C7", "#78350F"),
-    "error": ("#FEE2E2", "#7F1D1D"),
-    "critical": ("#FEE2E2", "#7F1D1D"),
+    # Dark bgs are deep (red-950) so the bright red text stays readable —
+    # #7F1D1D bg + #F87171 text was red-on-red at ~3:1 contrast.
+    "error": ("#FEE2E2", "#450A0A"),
+    "critical": ("#FEE2E2", "#450A0A"),
 }
 BADGE_TEXT: dict[str, tuple[str, str]] = {
     "ok": ("#15803D", "#4ADE80"),
     "info": ("#1D4ED8", "#60A5FA"),
     "warning": ("#B45309", "#FBBF24"),
-    "error": ("#DC2626", "#F87171"),
-    "critical": ("#991B1B", "#F87171"),
+    "error": ("#DC2626", "#FCA5A5"),
+    "critical": ("#991B1B", "#FECACA"),
 }
 
 _mode = "Dark"

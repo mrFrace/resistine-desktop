@@ -561,5 +561,7 @@
   "antivirus.ui_cards.whitelist": "Whitelist",
   "antivirus.ui_cards.signature_database": "Signaturdatenbank",
   "antivirus.ui_cards.signature_updates": "Signatur-Updates",
-  "store.browse_and_install_plugins": "Durchsuche und installiere Plugins, um Phoenix zu erweitern."
+  "store.browse_and_install_plugins": "Durchsuche und installiere Plugins, um Phoenix zu erweitern.",
+  "devices.vulns_filter_chip": "✕ Nur {sev}",
+  "devices.vulns_none_filtered": "Keine {sev}-CVEs in dieser Liste — entferne den {sev}-Filter, um alle {total} zu sehen."
 }
