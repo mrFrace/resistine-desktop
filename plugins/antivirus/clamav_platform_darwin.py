@@ -411,6 +411,32 @@ def _daemon_loaded(label: str) -> bool:
         return False
 
 
+def _daemon_program_stale(label: str) -> bool:
+    """True if the loaded job's program binary no longer exists on disk.
+
+    BTM snapshots the plist (including ProgramArguments) at registration
+    time, so after the app is reinstalled under a new name (Resistine.app
+    → Phoenix.app) launchd keeps spawning the OLD path forever — "spawn
+    failed" on every attempt while the job still reports as loaded. Such
+    a registration must be torn down and re-made from the current bundle.
+    """
+    try:
+        result = subprocess.run(
+            ["launchctl", "print", f"system/{label}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("program = "):
+                prog = stripped.split("=", 1)[1].strip()
+                return bool(prog) and not os.path.exists(prog)
+    except Exception:
+        pass
+    return False
+
+
 def ensure_daemons_registered():
     """Register ClamAV LaunchDaemons via SMAppService.
 
@@ -466,13 +492,16 @@ def ensure_daemons_registered():
 
         if status == 1:
             # Enabled in Login Items — verify it's actually loaded in
-            # launchd. If not, unregister and re-register to trigger a
-            # fresh bootstrap.
-            if _daemon_loaded(label):
+            # launchd AND that the loaded job's binary still exists (a
+            # registration made under a previous app name keeps the old
+            # program path and spawn-fails forever). Otherwise unregister
+            # and re-register to trigger a fresh bootstrap from the
+            # current bundle.
+            if _daemon_loaded(label) and not _daemon_program_stale(label):
                 continue
             logger.warning(
-                f"ClamAV daemon {label} is enabled but not loaded "
-                f"in launchd — re-registering",
+                f"ClamAV daemon {label} is enabled but not loaded (or its "
+                f"registered binary is gone) — re-registering",
             )
             try:
                 service.unregisterAndReturnError_(None)
