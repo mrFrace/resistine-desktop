@@ -133,8 +133,8 @@ class Plugin(BasePlugin):
             description="Monitor this device with the Phoenix endpoint agent.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
-            icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
-            icon_dark_path=os.path.join(_PLUGIN_DIR, "add_user_dark.png"),
+            icon_light_path=os.path.join(_PLUGIN_DIR, "endpoint_light.png"),
+            icon_dark_path=os.path.join(_PLUGIN_DIR, "endpoint_dark.png"),
             uninstall_enabled=True,
         )
         self.app = app

@@ -728,6 +728,44 @@ class Plugin(BasePlugin):
         except Exception:
             return False
 
+    def on_screen_shown(self):
+        """Shell hook: the cached chat screen is being re-shown.
+
+        The screen (and its empty-state panel) was built against the client
+        state of that moment; the transport may have been switched in
+        Settings, or the sign-in may have completed since. Re-derive the
+        client when it's missing and swap the panel to match, so the screen
+        is correct the first time it's viewed after any change — no app
+        restart, no navigate-away dance.
+        """
+        try:
+            if self.client is None:
+                self.reinitialize_client()
+            else:
+                self._sync_input_enabled()
+                self._refresh_welcome_state()
+        except Exception as e:
+            logger.debug(f"Chat on_screen_shown refresh failed: {e}")
+
+    def _refresh_welcome_state(self) -> None:
+        """Swap the empty-state panel to match the current client state.
+
+        The panel is chosen at build time; reinitialize_client() can change
+        ``self.client``/``_matrix_problem`` afterwards and a stale
+        "Matrix Chat Unavailable" / "API Key Required" panel would otherwise
+        stick until restart.
+        """
+        lay = getattr(self, "_messages_lay", None)
+        if lay is None or getattr(self, "_welcome_widget", None) is None:
+            return  # no screen yet, or real history is showing
+        self._clear_welcome()
+        if self.client is not None:
+            self._welcome_widget = self._build_welcome_screen()
+        else:
+            self._welcome_widget = self._build_api_missing_screen()
+        lay.insertWidget(lay.count() - 1, self._welcome_widget,
+                         0, Qt.AlignmentFlag.AlignCenter)
+
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the chat client (OpenAI API or Matrix) from settings."""
         self.transport = settings.get("chat", "transport") or "matrix"
@@ -735,6 +773,7 @@ class Plugin(BasePlugin):
             self._init_matrix_client()
             try:
                 self._sync_input_enabled()
+                self._refresh_welcome_state()
             except Exception:
                 pass
             return
@@ -776,9 +815,11 @@ class Plugin(BasePlugin):
                 except Exception:
                     pass
             self.client = None
-        # Reflect any client change in a live screen's input controls.
+        # Reflect any client change in a live screen's input controls and
+        # swap a stale empty-state panel (transport switched in Settings).
         try:
             self._sync_input_enabled()
+            self._refresh_welcome_state()
         except Exception:
             pass
 
