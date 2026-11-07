@@ -102,8 +102,10 @@ def _service(fresh_rooms=("!alerts:phoenix.exposed",)):
 
 
 def _ev(sender, eid="$e", body="hello"):
+    # decrypted=True: real events reach _on_message Megolm-decrypted; plaintext
+    # ones (forgeable sender) are dropped there.
     return SimpleNamespace(sender=sender, event_id=eid, body=body, server_timestamp=1_700_000_000_000,
-                           source={"content": {"body": body}})
+                           decrypted=True, source={"content": {"body": body}})
 
 
 @pytest.mark.unit

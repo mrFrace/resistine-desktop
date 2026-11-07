@@ -37,7 +37,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QCursor, QIcon
+from PyQt6.QtGui import QCursor, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
@@ -224,7 +224,13 @@ class _Bubble(QFrame):
             self._view.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse)
         else:
-            self._view.setOpenExternalLinks(True)  # markdown links → browser
+            # The assistant relays attacker-influenced text (SIEM data), so a
+            # markdown link can smuggle file:// or UNC targets. Never let Qt
+            # open links itself; route clicks through _open_link, which only
+            # passes http/https to the browser.
+            self._view.setOpenLinks(False)
+            self._view.setOpenExternalLinks(False)
+            self._view.anchorClicked.connect(self._open_link)
             # Read-only browser shows no caret; mouse-select + link-click only.
             self._view.setTextInteractionFlags(
                 Qt.TextInteractionFlag.TextSelectableByMouse
@@ -262,6 +268,35 @@ class _Bubble(QFrame):
         self._copy_row.addWidget(self._copy_btn)
         self._copy_row.addStretch(1)
         lay.addLayout(self._copy_row)
+
+    @staticmethod
+    def _open_link(url) -> None:
+        """Open a clicked link in the browser — http/https ONLY.
+
+        Anything else (file://, UNC \\\\host\\share, custom schemes) can open
+        local files or leak NTLM credentials and is dropped.
+        """
+        if url.scheme().lower() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+        else:
+            logger.debug(
+                f"[CHAT] blocked non-http(s) link click: {url.toString()}")
+
+    def mark_untrusted(self) -> None:
+        """Treat subsequent text as untrusted: raw HTML escaped, links inert.
+
+        Used for error bubbles, whose text can originate from room event
+        content (same rendering as SIEM-alert bubbles).
+        """
+        self._untrusted = True
+        if self._view is not None:
+            try:
+                self._view.setOpenLinks(False)
+                self._view.setOpenExternalLinks(False)
+                self._view.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse)
+            except RuntimeError:
+                pass
 
     def _build_copy_button(self) -> QPushButton:
         muted = theme.color("text_secondary")
@@ -1792,6 +1827,9 @@ class Plugin(BasePlugin):
         elif self._current_asst_bubble is not None:
             try:
                 bubble = self._current_asst_bubble
+                # Error text can originate from room event content (Matrix
+                # turn errors): render it escaped, never as trusted HTML.
+                bubble.mark_untrusted()
                 bubble.set_text(f"⚠ {error_msg}")
                 row = bubble.parentWidget()
                 bubble.add_retry(
