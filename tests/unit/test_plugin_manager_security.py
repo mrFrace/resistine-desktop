@@ -31,9 +31,16 @@ def _ok(content: bytes):
     resp = MagicMock()
     resp.status_code = 200
     resp.content = content
+    resp.iter_content = lambda chunk_size=8192: iter(
+        [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    )
     resp.headers = {}
     resp.raise_for_status.return_value = None
     return resp
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 def _redirect(location: str, code: int = 302):
@@ -105,10 +112,33 @@ class TestHashVerification:
         (ok, _), _ = _download(mgr, [_ok(data)], plugin_id="100")
         assert ok is True
 
-    def test_no_hash_available_installs_unverified(self, mgr):
-        """Drake's semantics: verification is applied only when a hash exists."""
-        (ok, _), _ = _download(mgr, [_ok(_make_zip({"main.py": "x"}))], plugin_id="p2")
-        assert ok is True
+    def test_no_hash_available_refuses_install(self, mgr):
+        """No published SHA-256 → refuse before anything is downloaded."""
+        (ok, msg), get = _download(mgr, [_ok(_make_zip({"main.py": "x"}))], plugin_id="p2")
+        assert ok is False
+        assert "sha-256" in msg.lower() or "integrity" in msg.lower()
+        assert get.call_count == 0
+        assert not os.path.exists(os.path.join(mgr.user_plugins_path, "p2"))
+
+    def test_oversized_download_aborted_while_streaming(self, mgr):
+        """The 50 MB cap is enforced on the running stream, not a buffered body."""
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.headers = {}
+        resp.raise_for_status.return_value = None
+        consumed = {"n": 0}
+
+        def iter_content(chunk_size=8192):
+            while True:
+                consumed["n"] += 1
+                yield b"x" * (1024 * 1024)
+
+        resp.iter_content = iter_content
+        (ok, msg), _ = _download(mgr, [resp], plugin_id="p3", expected_sha256="0" * 64)
+        assert ok is False
+        assert "too large" in msg.lower()
+        # Aborted just past the cap — the endless stream was not read on.
+        assert consumed["n"] <= 52
 
 
 # ===========================================================================
@@ -128,7 +158,9 @@ class TestRequestHardening:
         assert kwargs["timeout"] and kwargs["timeout"] > 0
 
     def test_download_disables_auto_redirects(self, mgr):
-        (ok, _), get = _download(mgr, [_ok(_make_zip({"main.py": "x"}))], plugin_id="p")
+        data = _make_zip({"main.py": "x"})
+        (ok, _), get = _download(mgr, [_ok(data)], plugin_id="p",
+                                 expected_sha256=_sha(data))
         assert ok is True
         kwargs = get.call_args.kwargs
         assert kwargs["allow_redirects"] is False
@@ -137,11 +169,13 @@ class TestRequestHardening:
 
     def test_github_release_redirect_is_followed(self, mgr):
         asset = "https://release-assets.githubusercontent.com/github-production-release-asset/1/abc"
+        data = _make_zip({"main.py": "x"})
         (ok, _), get = _download(
             mgr,
-            [_redirect(asset), _ok(_make_zip({"main.py": "x"}))],
+            [_redirect(asset), _ok(data)],
             url="https://github.com/Resistine/Resistine-Desktop-Plugins/releases/download/v/calc.zip",
             plugin_id="calc",
+            expected_sha256=_sha(data),
         )
         assert ok is True
         assert get.call_args_list[1].args[0] == asset
@@ -159,6 +193,7 @@ class TestRequestHardening:
         (ok, msg), get = _download(
             mgr, [_redirect(location)],
             url="https://github.com/o/r/releases/download/v/p.zip", plugin_id="p",
+            expected_sha256="0" * 64,
         )
         assert ok is False
         assert "redirect" in msg.lower()
@@ -166,7 +201,7 @@ class TestRequestHardening:
 
     def test_redirect_loop_is_bounded(self, mgr):
         loop = [_redirect("https://example.com/again.zip")] * 20
-        (ok, _), get = _download(mgr, loop, plugin_id="p")
+        (ok, _), get = _download(mgr, loop, plugin_id="p", expected_sha256="0" * 64)
         assert ok is False
         assert get.call_count == mgr.MAX_DOWNLOAD_REDIRECTS + 1
 
@@ -183,7 +218,8 @@ class TestZipSlip:
     )
     def test_traversal_entries_rejected(self, mgr, tmp_path, evil_name):
         data = _make_zip({"main.py": "x", evil_name: "pwned"})
-        (ok, msg), _ = _download(mgr, [_ok(data)], plugin_id="p")
+        (ok, msg), _ = _download(mgr, [_ok(data)], plugin_id="p",
+                                 expected_sha256=_sha(data))
         assert ok is False
         assert "zip slip" in msg.lower()
         assert not (tmp_path / "escape.py").exists()
@@ -193,11 +229,13 @@ class TestZipSlip:
     def test_nested_traversal_rejected(self, mgr, tmp_path):
         # Every entry under '..' would be treated as a "nested" single-root zip.
         data = _make_zip({"../evil/main.py": "x"})
-        (ok, _), _ = _download(mgr, [_ok(data)], plugin_id="p")
+        (ok, _), _ = _download(mgr, [_ok(data)], plugin_id="p",
+                               expected_sha256=_sha(data))
         assert ok is False
         assert not (tmp_path / "evil").exists()
 
     def test_benign_dotted_names_allowed(self, mgr):
         data = _make_zip({"main.py": "x", "assets/..hidden..png": "y", "./config.json": "{}"})
-        (ok, _), _ = _download(mgr, [_ok(data)], plugin_id="p")
+        (ok, _), _ = _download(mgr, [_ok(data)], plugin_id="p",
+                               expected_sha256=_sha(data))
         assert ok is True
