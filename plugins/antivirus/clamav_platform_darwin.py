@@ -105,7 +105,13 @@ def system_db_dir() -> str | None:
 
 
 def system_db_dir_writable() -> str | None:
-    """Return system DB dir if writable by the current user, else None."""
+    """Return system DB dir if writable by the current user, else None.
+
+    The system DB dir is root-owned 0755 by design, so for a normal user
+    this returns None and user-level freshclam writes fall back to the
+    user DB dir (see clamav_common._effective_db_dir). The root freshclam
+    LaunchDaemon handles system DB updates.
+    """
     if os.path.isdir(_SYSTEM_DB_DIR) and os.access(_SYSTEM_DB_DIR, os.W_OK):
         return _SYSTEM_DB_DIR
     return None
@@ -623,9 +629,15 @@ def _get_postinstall_script_path() -> str:
 def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
     """Launch the ClamAV postinstall script with admin privileges.
 
-    Copies the script to /tmp/ to strip com.apple.provenance xattr
-    (Sequoia). Launches via osascript with start_new_session=True so
-    the script survives app quit.
+    The unprivileged side passes osascript only the trusted app-bundle
+    script path. The elevated command itself (running as root) copies that
+    script to a root-owned mktemp file, chmods it 755, strips the
+    com.apple.provenance xattr (Sequoia), and executes the root-owned
+    copy. Copying before elevation (to user-owned /tmp) would let local
+    malware swap the script between the admin prompt and execution.
+
+    Launches via osascript with start_new_session=True so the script
+    survives app quit.
 
     Returns (launched_ok, status_file_path, osascript_pid).
     """
@@ -647,13 +659,6 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
     log_file = f"/tmp/resistine-clamav-install-{unique_id}.log"
     script_path = _get_postinstall_script_path()
 
-    # Copy script to /tmp/ to strip com.apple.provenance xattr
-    import shutil as _shutil
-
-    tmp_script = f"/tmp/resistine-clamav-postinstall-{unique_id}.sh"
-    _shutil.copy2(script_path, tmp_script)
-    os.chmod(tmp_script, 0o755)
-
     args = [
         f"--app-contents {shlex.quote(contents)}",
         f"--db-source {shlex.quote(db_source)}",
@@ -661,14 +666,26 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
         f"--log-file {shlex.quote(log_file)}",
     ]
 
-    shell_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
-    escaped = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    # All copying happens AFTER privilege elevation: root creates a
+    # root-owned temp copy (mktemp is 0600 root in sticky /tmp — not
+    # swappable by a local user), strips the provenance xattr, and
+    # executes that copy. Only the trusted bundle path crosses the
+    # trust boundary.
+    shell_cmd = (
+        's="$(/usr/bin/mktemp /tmp/resistine-clamav-postinstall-XXXXXX)" && '
+        f'/bin/cp {shlex.quote(script_path)} "$s" && '
+        '/bin/chmod 755 "$s" && '
+        '{ /usr/bin/xattr -d com.apple.provenance "$s" 2>/dev/null '
+        '|| true; } && '
+        f'/bin/bash "$s" {" ".join(args)}'
+    )
 
     try:
         proc = subprocess.Popen(
             [
                 "osascript", "-e",
-                f'do shell script "{escaped}" with administrator privileges',
+                "do shell script " + _applescript_quote(shell_cmd)
+                + " with administrator privileges",
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
@@ -829,11 +846,17 @@ def set_freshclam_daemon_enabled(enabled: bool) -> tuple[bool, str]:
 
 
 def refresh_system_configs():
-    """Rewrite system-level ClamAV configs if the DB dir is writable.
+    """Rewrite system-level ClamAV configs where the user can write them.
 
     Called after a Sparkle update to ensure configs reflect the current
-    app bundle (e.g. updated CVDCertsDirectory path).  Only rewrites
-    files the current user can write — no admin prompt.
+    app bundle (e.g. updated CVDCertsDirectory path).
+
+    The system configs are root-owned (0644) BY DESIGN: they are consumed
+    by root daemons, and user-writable configs would be a local-root
+    privilege escalation (VirusEvent / OnUpdateExecute). On a current
+    install this function therefore hits PermissionError and degrades
+    gracefully — the app-side refresh only applies to legacy installs
+    where the configs were still user-owned.
     """
     if not os.path.isdir(_SYSTEM_CLAMAV_DIR):
         return  # System not set up yet
