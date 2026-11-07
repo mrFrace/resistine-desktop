@@ -686,18 +686,12 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
 
     Returns (launched_ok, status_file_path).
     """
-    import shutil
     import uuid
 
     unique_id = uuid.uuid4().hex[:12]
     status_file = f"/tmp/resistine-wazuh-install-{unique_id}.status"
     log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
     script_path = _get_script_path()
-
-    # Copy script to /tmp/ to strip com.apple.provenance xattr
-    tmp_script = f"/tmp/resistine-wazuh-postinstall-{unique_id}.sh"
-    shutil.copy2(script_path, tmp_script)
-    os.chmod(tmp_script, 0o755)
 
     # Build the argument list for the script
     args = [
@@ -715,7 +709,18 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
         # line's shape, installs it as client.keys and deletes the file.
         args.append(f"--key-file {shlex.quote(key_file)}")
 
-    script_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
+    # The elevated command itself copies the install script from the trusted
+    # bundle path into a root-owned mktemp and executes THAT copy (stripping
+    # com.apple.provenance there). Root never executes a user-writable /tmp
+    # file, so same-user malware cannot swap the payload behind the admin
+    # prompt (same pattern as the ClamAV postinstall launcher).
+    script_cmd = (
+        f'S="$(/usr/bin/mktemp /tmp/phoenix-wz-run-XXXXXX.sh)" && '
+        f"/bin/cp {_sh(script_path)} \"$S\" && /bin/chmod 755 \"$S\" && "
+        f'{{ /usr/bin/xattr -d com.apple.provenance "$S" 2>/dev/null || true; }} && '
+        f"/bin/bash \"$S\" {' '.join(args)}; SRC=$?; "
+        f'/bin/rm -f "$S"; (exit $SRC)'
+    )
     # Wazuh's .pkg scripts read /tmp/wazuh_envs: stage it as root, run the
     # installer script, then remove it.  If staging fails, report through the
     # status file so the poller doesn't wait for the full timeout.
