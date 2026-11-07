@@ -215,10 +215,21 @@ class TestSession:
         # Server did not rotate the refresh token -> the old one is kept.
         assert isolated_settings.get_secret("auth", "refresh_token") == "RT"
 
-    def test_refresh_rejected_means_signed_out(self, mas):
+    def test_refresh_rejected_means_signed_out(self, mas, isolated_settings):
         self._login(mas, expires_in=10)
         mas.token_responses.append(_resp(400, {"error": "invalid_grant"}))
         assert oidc.refresh() is None
+        # The dead session's tokens are cleared so has_session() stops
+        # claiming one; the identity stays for the UI.
+        assert isolated_settings.get("auth", "access_token") is None
+        assert isolated_settings.get("auth", "refresh_token") is None
+        assert isolated_settings.get("auth", "expires_at") is None
+        assert isolated_settings.get("auth", "user_id") == "@alice:example.test"
+        assert isolated_settings.get("auth", "method") == "mas"
+        assert not oidc.has_session()
+
+    def test_validate_session_false_when_rejected(self, mas):
+        self._login(mas, expires_in=10)
         mas.token_responses.append(_resp(400, {"error": "invalid_grant"}))
         assert oidc.validate_session() is False
 
@@ -233,12 +244,85 @@ class TestSession:
     def test_validate_without_session(self, isolated_settings):
         assert oidc.validate_session() is True
 
+    def test_failed_login_revokes_unused_tokens(self, mas, monkeypatch):
+        def boom(*a, **k):
+            raise oidc.OIDCError("whoami exploded")
+        monkeypatch.setattr(oidc, "_whoami", boom)
+        with pytest.raises(oidc.OIDCError, match="whoami exploded"):
+            oidc.complete_login(oidc.Tokens.from_response(_token_body()))
+        url, form = mas.posts[-1]
+        assert url == META["revocation_endpoint"]
+        assert form["token"] == "RT" and form["token_type_hint"] == "refresh_token"
+        assert not oidc.has_session()
+
     def test_revoke_uses_refresh_token(self, mas):
         self._login(mas)
         oidc.revoke()
         url, form = mas.posts[-1]
         assert url == META["revocation_endpoint"]
         assert form["token"] == "RT" and form["token_type_hint"] == "refresh_token"
+
+
+class TestRefreshLock:
+    """MAS refresh tokens are single-use; concurrent refreshes must not race."""
+
+    def _login(self, expires_in=10):
+        oidc.complete_login(oidc.Tokens.from_response(_token_body(expires_in=expires_in)))
+
+    def _token_posts(self, mas):
+        return [p for p in mas.posts if p[0] == META["token_endpoint"]]
+
+    def _run_while_lock_held(self, mas, isolated_settings, target):
+        """Block ``target`` on the refresh lock, simulate a winner refreshing
+        meanwhile, then release and return the target's result."""
+        results = []
+        assert oidc._refresh_lock.acquire(timeout=5)
+        try:
+            t = threading.Thread(target=lambda: results.append(target()))
+            t.start()
+            time.sleep(0.2)  # let the worker block on the lock
+            # "Winning thread" stores a fresh token while the worker waits.
+            isolated_settings.set_secret("auth", "access_token", "FRESH")
+            isolated_settings.set("auth", "expires_at", time.time() + 3600)
+        finally:
+            oidc._refresh_lock.release()
+        t.join(timeout=5)
+        assert not t.is_alive()
+        return results
+
+    def test_waiter_reuses_winners_token_without_posting(self, mas, isolated_settings):
+        self._login(expires_in=10)  # stale: would refresh if it won the lock
+        results = self._run_while_lock_held(mas, isolated_settings, oidc.refresh)
+        assert results == ["FRESH"]
+        assert self._token_posts(mas) == []
+
+    def test_force_skips_post_when_token_already_rotated(self, mas, isolated_settings):
+        self._login(expires_in=3600)
+        results = self._run_while_lock_held(
+            mas, isolated_settings, lambda: oidc.refresh(force=True))
+        assert results == ["FRESH"]
+        assert self._token_posts(mas) == []
+
+    def test_force_refreshes_even_a_fresh_token(self, mas):
+        self._login(expires_in=3600)
+        mas.token_responses.append(_resp(200, {"access_token": "NEW", "expires_in": 300}))
+        assert oidc.refresh(force=True) == "NEW"
+        assert len(self._token_posts(mas)) == 1
+
+    def test_concurrent_refresh_posts_exactly_once(self, mas):
+        self._login(expires_in=10)
+        # Only ONE response is queued: a second POST would blow up FakeMAS.
+        mas.token_responses.append(
+            _resp(200, _token_body(access="NEW", expires_in=300)))
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(oidc.refresh()))
+                   for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert results == ["NEW"] * 5
+        assert len(self._token_posts(mas)) == 1
 
 
 def test_user_agent_is_not_python_default():

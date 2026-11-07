@@ -12,7 +12,7 @@ import json
 import os
 import platform
 from threading import RLock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import keyring
 from cryptography.fernet import Fernet
@@ -296,6 +296,10 @@ def _save_json(namespace: str, data: Dict[str, Any]) -> bool:
             else:
                 with open(file_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4, ensure_ascii=False)
+                # chmod cannot express owner-only on Windows; lock the file
+                # down with an owner-only ACL instead (same hardening the
+                # master key file gets).
+                _restrict_file_permissions(file_path)
         return True
     except OSError as e:
         logger.error(f"Failed to save settings to {file_path}: {e}")
@@ -317,6 +321,54 @@ def set(namespace: str, key: str, value: Any) -> bool:
     with _lock:
         data = _load_json(namespace)
         data[key] = value
+        return _save_json(namespace, data)
+
+
+def set_many(namespace: str, values: Dict[str, Any], secret_keys: Iterable[str] = ()) -> bool:
+    """
+    Set several configuration values atomically (a single file write).
+
+    Use this when related keys must never be observed half-updated on disk
+    (e.g. an access token together with the refresh token that replaced it).
+
+    Args:
+        namespace: The plugin or component name.
+        values: Mapping of key -> value (values must be JSON serializable;
+            values for keys listed in ``secret_keys`` must be strings).
+        secret_keys: Keys in ``values`` whose values are encrypted exactly
+            like ``set_secret`` (Fernet, stored with the ``ENC:`` prefix).
+    """
+    # NB: this module shadows the builtin set() -> use frozenset here.
+    secret_keys = frozenset(secret_keys)
+    missing = secret_keys - values.keys()
+    if missing:
+        logger.error(f"set_many: secret_keys not present in values: {sorted(missing)}")
+        return False
+    try:
+        prepared = dict(values)
+        if secret_keys:
+            f = _get_fernet()
+            for key in secret_keys:
+                encrypted_value = f.encrypt(prepared[key].encode()).decode()
+                prepared[key] = f"{ENCRYPTED_PREFIX}{encrypted_value}"
+    except Exception as e:
+        logger.error(f"Failed to encrypt secrets for {namespace}.{sorted(secret_keys)}: {e}")
+        return False
+    with _lock:
+        data = _load_json(namespace)
+        data.update(prepared)
+        return _save_json(namespace, data)
+
+
+def delete_many(namespace: str, keys: Iterable[str]) -> bool:
+    """Delete several keys from a namespace in a single file write."""
+    with _lock:
+        data = _load_json(namespace)
+        present = [k for k in keys if k in data]
+        if not present:
+            return True
+        for k in present:
+            del data[k]
         return _save_json(namespace, data)
 
 

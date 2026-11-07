@@ -180,6 +180,71 @@ class TestSecrets:
 
 
 @pytest.mark.unit
+class TestSetMany:
+    def test_sets_all_keys(self, isolated_settings):
+        assert isolated_settings.set_many("myns", {"a": 1, "b": "two", "c": None})
+        assert isolated_settings.get("myns", "a") == 1
+        assert isolated_settings.get("myns", "b") == "two"
+        assert isolated_settings.get("myns", "c") is None
+        assert "c" in isolated_settings.list_keys("myns")
+
+    def test_single_file_write(self, isolated_settings, monkeypatch):
+        calls = []
+        real_save = isolated_settings._save_json
+
+        def counting_save(namespace, data):
+            calls.append(namespace)
+            return real_save(namespace, data)
+
+        monkeypatch.setattr(isolated_settings, "_save_json", counting_save)
+        isolated_settings.set_many(
+            "myns", {"access_token": "AT", "refresh_token": "RT", "expires_at": 1.0},
+            secret_keys=("access_token", "refresh_token"))
+        assert calls == ["myns"]
+
+    def test_secret_keys_are_encrypted(self, isolated_settings, tmp_config_dir):
+        isolated_settings.set_many(
+            "myns", {"tok": "s3cr3t", "plain": "visible"}, secret_keys=("tok",))
+        raw = json.loads((tmp_config_dir / "myns.json").read_text())
+        assert raw["tok"].startswith("ENC:") and "s3cr3t" not in raw["tok"]
+        assert raw["plain"] == "visible"
+        assert isolated_settings.get_secret("myns", "tok") == "s3cr3t"
+
+    def test_preserves_existing_keys(self, isolated_settings):
+        isolated_settings.set("myns", "keep", "kept")
+        isolated_settings.set_many("myns", {"a": 1})
+        assert isolated_settings.get("myns", "keep") == "kept"
+
+    def test_secret_key_missing_from_values_writes_nothing(self, isolated_settings):
+        assert isolated_settings.set_many("myns", {"a": 1}, secret_keys=("b",)) is False
+        assert isolated_settings.get("myns", "a") is None
+
+
+@pytest.mark.unit
+class TestDeleteMany:
+    def test_deletes_all_given_keys_one_write(self, isolated_settings, monkeypatch):
+        for k in ("a", "b", "c"):
+            isolated_settings.set("myns", k, k)
+        calls = []
+        real_save = isolated_settings._save_json
+
+        def counting_save(namespace, data):
+            calls.append(namespace)
+            return real_save(namespace, data)
+
+        monkeypatch.setattr(isolated_settings, "_save_json", counting_save)
+        assert isolated_settings.delete_many("myns", ("a", "b", "missing"))
+        assert calls == ["myns"]
+        assert isolated_settings.list_keys("myns") == ["c"]
+
+    def test_no_keys_present_is_a_noop(self, isolated_settings, monkeypatch):
+        isolated_settings.set("myns", "keep", 1)
+        monkeypatch.setattr(isolated_settings, "_save_json",
+                            lambda *a: pytest.fail("should not write"))
+        assert isolated_settings.delete_many("myns", ("x", "y"))
+
+
+@pytest.mark.unit
 class TestFilePermissions:
     @pytest.mark.skipif(platform.system() == "Windows", reason="POSIX-only")
     def test_config_file_permissions_600(self, isolated_settings, tmp_config_dir):
