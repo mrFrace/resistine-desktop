@@ -556,6 +556,24 @@ PLISTEOF
                 echo "  - Normalized com.resistine.$base.plist -> com.resistine.desktop.$base.plist"
             fi
         done
+
+        # The CI artifact plists hardcode /Applications/Resistine.app in
+        # ProgramArguments. After the Phoenix rename that path doesn't exist,
+        # so SMAppService registers daemons that spawn-fail forever (clamd
+        # EX_CONFIG loop) and clamonacc registration dies with "Operation not
+        # permitted" — the shipped bundle must point at its own install path.
+        for base in clamd clamonacc; do
+            p="$DAEMONS_DIR/com.resistine.desktop.$base.plist"
+            if [ -f "$p" ]; then
+                /usr/bin/sed -i '' \
+                    "s|/Applications/Resistine\.app|/Applications/${APP_NAME}.app|g" "$p"
+            fi
+        done
+        if grep -q "/Applications/Resistine\.app" "$DAEMONS_DIR"/*.plist 2>/dev/null; then
+            echo "  ERROR: a LaunchDaemon plist still references Resistine.app"
+            exit 1
+        fi
+        echo "  - Rewrote daemon program paths to ${APP_NAME}.app"
     else
         echo "  - Warning: No launchd plists found in artifacts"
     fi
