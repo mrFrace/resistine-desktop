@@ -664,6 +664,10 @@ class EventsTab:
         self.chart.set_selected_severity(self._sev)
         self._render_list()
 
+    def _clear_sev(self) -> None:
+        if self._sev is not None:
+            self._toggle_sev(self._sev)
+
     def _toggle_bucket(self, key) -> None:
         self._bucket = None if self._bucket == key else key
         self._page = 1
@@ -696,6 +700,12 @@ class EventsTab:
             start = self._bucket.astimezone()
             text += f" · {start.strftime('%H:%M')}–{(start + timedelta(hours=1)).strftime('%H:%M')}"
         self.count.setText(text)
+        if self._sev:
+            self.filter_chip.setText(
+                self.t("vulns_filter_chip", sev=self._sev.capitalize()))
+            self.filter_chip.show()
+        else:
+            self.filter_chip.hide()
         page_items, self._page, pages = tables.page_slice(
             events, self._page, tables.PAGE_SIZE
         )
