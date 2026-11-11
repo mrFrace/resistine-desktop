@@ -568,5 +568,6 @@
   "devices.tab_failed": "このタブを読み込めませんでした: {error}",
   "devices.view_in_vulns": "これらの CVE を脆弱性タブで表示",
   "devices.reenrolled_label": "再登録済み",
-  "devices.reenrolled_stale": "表示中のデータは以前のエージェント {old} のものです。このデバイスはエージェント {new} として再登録されました。次のポスチャスキャンで新しいデータが届きます。"
+  "devices.reenrolled_stale": "表示中のデータは以前のエージェント {old} のものです。このデバイスはエージェント {new} として再登録されました。次のポスチャスキャンで新しいデータが届きます。",
+  "devices.first_scan_pending": "登録済み — 最初のポスチャスキャンを待っています。Phoenix SIEM がこのデバイスをスキャンすると、評価・脆弱性・コンプライアンスが表示されます。"
 }

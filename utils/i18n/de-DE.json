@@ -568,5 +568,6 @@
   "devices.tab_failed": "Dieser Tab konnte nicht geladen werden: {error}",
   "devices.view_in_vulns": "Diese CVEs unter Schwachstellen ansehen",
   "devices.reenrolled_label": "Neu registriert",
-  "devices.reenrolled_stale": "Die angezeigten Daten stammen vom früheren Agenten {old}; dieses Gerät ist jetzt als Agent {new} registriert. Neue Daten kommen mit dem nächsten Posture-Scan."
+  "devices.reenrolled_stale": "Die angezeigten Daten stammen vom früheren Agenten {old}; dieses Gerät ist jetzt als Agent {new} registriert. Neue Daten kommen mit dem nächsten Posture-Scan.",
+  "devices.first_scan_pending": "Registriert — wartet auf den ersten Posture-Scan. Note, Schwachstellen und Compliance erscheinen, sobald das Phoenix-SIEM dieses Gerät gescannt hat."
 }

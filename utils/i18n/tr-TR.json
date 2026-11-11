@@ -568,5 +568,6 @@
   "devices.tab_failed": "Bu sekme yüklenemedi: {error}",
   "devices.view_in_vulns": "Bu CVE'leri Güvenlik Açıkları'nda görüntüle",
   "devices.reenrolled_label": "Yeniden kaydedildi",
-  "devices.reenrolled_stale": "Gösterilen veriler önceki aracı {old} aittir; bu cihaz aracı {new} olarak yeniden kaydedildi. Yeni veriler bir sonraki duruş taramasıyla gelecek."
+  "devices.reenrolled_stale": "Gösterilen veriler önceki aracı {old} aittir; bu cihaz aracı {new} olarak yeniden kaydedildi. Yeni veriler bir sonraki duruş taramasıyla gelecek.",
+  "devices.first_scan_pending": "Kaydedildi — ilk duruş taraması bekleniyor. Phoenix SIEM bu cihazı taradığında not, güvenlik açıkları ve uyumluluk görünecek."
 }

@@ -568,5 +568,6 @@
   "devices.tab_failed": "Impossibile caricare questa scheda: {error}",
   "devices.view_in_vulns": "Vedi queste CVE in Vulnerabilità",
   "devices.reenrolled_label": "Nuova registrazione",
-  "devices.reenrolled_stale": "I dati mostrati appartengono al precedente agente {old}; questo dispositivo si è registrato di nuovo come agente {new}. I nuovi dati arriveranno con la prossima scansione."
+  "devices.reenrolled_stale": "I dati mostrati appartengono al precedente agente {old}; questo dispositivo si è registrato di nuovo come agente {new}. I nuovi dati arriveranno con la prossima scansione.",
+  "devices.first_scan_pending": "Registrato — in attesa della prima scansione. Voto, vulnerabilità e conformità appariranno quando il SIEM Phoenix avrà scansionato questo dispositivo."
 }

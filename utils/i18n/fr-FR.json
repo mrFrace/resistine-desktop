@@ -568,5 +568,6 @@
   "devices.tab_failed": "Impossible de charger cet onglet : {error}",
   "devices.view_in_vulns": "Voir ces CVE dans Vulnérabilités",
   "devices.reenrolled_label": "Réinscrit",
-  "devices.reenrolled_stale": "Les données affichées proviennent de l'ancien agent {old} ; cet appareil s'est réinscrit comme agent {new}. Les nouvelles données arriveront au prochain scan de posture."
+  "devices.reenrolled_stale": "Les données affichées proviennent de l'ancien agent {old} ; cet appareil s'est réinscrit comme agent {new}. Les nouvelles données arriveront au prochain scan de posture.",
+  "devices.first_scan_pending": "Inscrit — en attente du premier scan de posture. La note, les vulnérabilités et la conformité apparaîtront une fois ce poste analysé par le SIEM Phoenix."
 }

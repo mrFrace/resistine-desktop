@@ -568,5 +568,6 @@
   "devices.tab_failed": "Não foi possível carregar esta aba: {error}",
   "devices.view_in_vulns": "Ver essas CVEs em Vulnerabilidades",
   "devices.reenrolled_label": "Reinscrito",
-  "devices.reenrolled_stale": "Os dados exibidos são do agente anterior {old}; este dispositivo foi reinscrito como agente {new}. Dados novos chegam na próxima varredura de postura."
+  "devices.reenrolled_stale": "Os dados exibidos são do agente anterior {old}; este dispositivo foi reinscrito como agente {new}. Dados novos chegam na próxima varredura de postura.",
+  "devices.first_scan_pending": "Inscrito — aguardando a primeira varredura de postura. Nota, vulnerabilidades e conformidade aparecem assim que o SIEM do Phoenix examinar este dispositivo."
 }

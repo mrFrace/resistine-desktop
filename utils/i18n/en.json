@@ -191,5 +191,6 @@
   "devices.tab_failed": "This tab failed to load: {error}",
   "devices.view_in_vulns": "View these CVEs in Vulnerabilities",
   "devices.reenrolled_label": "Re-enrolled",
-  "devices.reenrolled_stale": "Data shown is from previous agent {old}; this device re-enrolled as agent {new}. Fresh data arrives with the next posture scan."
+  "devices.reenrolled_stale": "Data shown is from previous agent {old}; this device re-enrolled as agent {new}. Fresh data arrives with the next posture scan.",
+  "devices.first_scan_pending": "Enrolled — waiting for the first posture scan. Grade, vulnerabilities and compliance appear once the Phoenix SIEM has scanned this device."
 }

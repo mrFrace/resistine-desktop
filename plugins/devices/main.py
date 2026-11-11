@@ -609,10 +609,19 @@ class Plugin(BasePlugin):
         # The shell already carries the page's side margins and the header.
         page.widget.widget().layout().setContentsMargins(0, 20, 0, 32)
 
+        pending_card = None
+        if data.this_machine_row(rows) is None:
+            enrolled = settings.get("wazuh", "enrolled_agent_id", "")
+            if enrolled:
+                pending_card = self._first_scan_card(enrolled)
+
         if not rows:
-            page.add(self._empty_card(st.get("status")))
+            page.add(pending_card or self._empty_card(st.get("status")))
             page.stretch()
             return page.widget
+        if pending_card is not None:
+            page.add(pending_card)
+            page.spacing(16)
 
         scoped = data.scope_rows(rows, self._scope)
         focus = (
@@ -801,6 +810,30 @@ class Plugin(BasePlugin):
         if actions.count() > 1:
             card.body.addSpacing(4)
             card.body.addLayout(actions)
+        return card
+
+    def _first_scan_card(self, enrolled_id: str) -> QWidget:
+        """Card for this machine when it's enrolled but has no posture card
+        yet — a fresh (re-)enrollment otherwise vanishes from the page until
+        the server's first scan."""
+        import socket
+
+        card = Card()
+        label = _plain(muted(_t("this_device")))
+        card.body.addWidget(label)
+        title = _plain(QLabel(socket.gethostname()))
+        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setWordWrap(True)
+        card.body.addWidget(title)
+        facts = KVList()
+        facts.add(_t("agent_number", id=enrolled_id), "")
+        local = self._local_agent_text()
+        if local:
+            facts.add(_t("local_agent"), local)
+        card.body.addWidget(facts)
+        note = _plain(muted(_t("first_scan_pending")))
+        note.setWordWrap(True)
+        card.body.addWidget(note)
         return card
 
     def _local_agent_text(self) -> str:

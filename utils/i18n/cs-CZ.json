@@ -568,5 +568,6 @@
   "devices.tab_failed": "Tuto kartu se nepodařilo načíst: {error}",
   "devices.view_in_vulns": "Zobrazit tyto CVE ve Zranitelnostech",
   "devices.reenrolled_label": "Znovu zaregistrováno",
-  "devices.reenrolled_stale": "Zobrazená data patří předchozímu agentovi {old}; toto zařízení je nyní registrováno jako agent {new}. Nová data přijdou s příštím skenem."
+  "devices.reenrolled_stale": "Zobrazená data patří předchozímu agentovi {old}; toto zařízení je nyní registrováno jako agent {new}. Nová data přijdou s příštím skenem.",
+  "devices.first_scan_pending": "Zaregistrováno — čeká na první sken. Známka, zranitelnosti a shoda se zobrazí, jakmile Phoenix SIEM toto zařízení proskenuje."
 }
