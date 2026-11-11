@@ -25,14 +25,25 @@ SEVERITY_KIND = {
 }
 
 
+# Chart palette: fixed, hue-distinct colours. Deriving these from the badge
+# TEXT colours tied chart readability to badge-contrast tuning (critical
+# became pale pink and high near-white on dark backgrounds).
+_SEVERITY_CHART = {
+    "critical": "#EF4444",  # red
+    "high": "#F97316",      # orange
+    "medium": "#FBBF24",    # amber
+    "low": "#60A5FA",       # blue
+}
+
+
 def severity_color(sev: str) -> QColor:
-    _bg, fg = theme.badge_colors(SEVERITY_KIND.get(sev, "info"))
-    c = QColor(fg)
-    if sev == "high":  # keep high visibly lighter than critical
-        c = c.lighter(125)
+    hexval = _SEVERITY_CHART.get(sev)
+    if hexval:
+        return QColor(hexval)
     if sev == "other":
-        c = QColor(theme.color("text_secondary"))
-    return c
+        return QColor(theme.color("text_secondary"))
+    _bg, fg = theme.badge_colors(SEVERITY_KIND.get(sev, "info"))
+    return QColor(fg)
 
 
 class SeverityBar(QWidget):

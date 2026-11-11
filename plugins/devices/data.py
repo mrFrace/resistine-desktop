@@ -43,6 +43,23 @@ def grade_kind(grade) -> str:
     return {"A": "ok", "B": "ok", "C": "warning"}.get(str(grade or "").upper(), "error")
 
 
+def health_kind(health, grade=None) -> str:
+    """Badge kind for the server's health state.
+
+    The pill text IS the health string, so its colour must follow the same
+    value — colouring by grade painted a green pill that said
+    "Needs attention" (grade B + needs_attention health).
+    """
+    h = str(health or "").strip().lower()
+    if h in ("ok", "healthy", "protected", "good"):
+        return "ok"
+    if "attention" in h or h in ("degraded", "warning", "stale"):
+        return "warning"
+    if h in ("at risk", "critical", "compromised", "error"):
+        return "error"
+    return grade_kind(grade)
+
+
 def grade_rank(grade) -> int:
     return {"A": 0, "B": 1, "C": 2, "D": 3, "F": 4}.get(str(grade or "").upper(), 5)
 

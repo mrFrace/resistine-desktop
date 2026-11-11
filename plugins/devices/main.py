@@ -712,7 +712,9 @@ class Plugin(BasePlugin):
         if row["health"]:
             health_pill = QLabel()
             set_pill(
-                health_pill, data.grade_kind(row["grade"]), row["health"].capitalize()
+                health_pill,
+                data.health_kind(row["health"], row["grade"]),
+                row["health"].capitalize(),
             )
             pill_row.addWidget(health_pill)
         pill_row.addStretch(1)
