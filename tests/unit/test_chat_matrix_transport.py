@@ -487,11 +487,25 @@ class TestSettingsTransportCard:
         from utils import settings
 
         p = self._card(qapp)
+        # Selecting a transport applies immediately (like appearance and
+        # language) — it no longer waits for a valid Save.
         p.transport_combo.setCurrentIndex(p.transport_combo.findData("matrix"))
+        assert settings.get("chat", "transport") == "matrix"
+        # ...but an invalid bot id still refuses the SAVE: the bad id is
+        # not persisted and the error is shown.
         p.matrix_bot_entry.setText("secagent")
         p.save_api_key()
-        assert settings.get("chat", "transport") is None
+        assert settings.get("chat", "matrix_bot") is None
         assert "Matrix ID" in p.status_label.text()
+
+    def test_transport_switch_applies_without_save(self, isolated_settings, qapp):
+        from utils import settings
+
+        p = self._card(qapp)
+        p.transport_combo.setCurrentIndex(p.transport_combo.findData("openai"))
+        assert settings.get("chat", "transport") == "openai"
+        p.transport_combo.setCurrentIndex(p.transport_combo.findData("matrix"))
+        assert settings.get("chat", "transport") == "matrix"
 
 
 @pytest.mark.unit

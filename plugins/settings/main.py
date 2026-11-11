@@ -371,6 +371,24 @@ class Plugin(BasePlugin):
                 "Uses your Phoenix account; messages are end-to-end encrypted."
                 if signed_in else
                 "Sign in with your Phoenix account (Log In below) to use Matrix chat.")
+        # Picking a transport IS the decision — apply it immediately, like
+        # the appearance and language selectors. Save Key still persists the
+        # typed credentials (key / base URL / bot id); without this, the
+        # switch silently did nothing until the user also pressed Save.
+        chosen = self.transport_combo.currentData() or "matrix"
+        if settings.get("chat", "transport") != chosen:
+            settings.set("chat", "transport", chosen)
+            self._reinit_chat_client()
+
+    def _reinit_chat_client(self) -> None:
+        for plugin in getattr(self.app, "plugin_list", []):
+            if plugin.get_name() == "Chat" and hasattr(
+                    plugin, "reinitialize_client"):
+                try:
+                    plugin.reinitialize_client()
+                except Exception as e:
+                    logger.warning(f"Chat reinit after transport switch: {e}")
+                break
 
     def save_api_key(self):
         api_key = self.api_key_entry.text().strip()
