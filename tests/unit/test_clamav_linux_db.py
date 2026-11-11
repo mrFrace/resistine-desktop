@@ -80,8 +80,13 @@ class TestFresherDbDirWins:
 
 
 @pytest.mark.unit
+@pytest.mark.slow  # runs the generated shell (against a temp file only)
 class TestClamonaccConfig:
     """clamonacc refuses to start unless an exclude UID/user is configured."""
+
+    @pytest.fixture(autouse=True)
+    def _real_sh(self, allow_subprocess):
+        pass
 
     def _run(self, tmp_path, monkeypatch, body):
         import subprocess
@@ -91,9 +96,13 @@ class TestClamonaccConfig:
         monkeypatch.setattr(linux, "_is_fedora_like", lambda: False)
         conf = tmp_path / "clamd.conf"
         conf.write_text(body)
-        script = linux._prepare_config_script().replace("/etc/clamav/clamd.conf", str(conf))
+        # Only the temp config is touched: sed -i and the unit lookup are stubbed.
+        script = (linux._prepare_config_script()
+                  .replace("/etc/clamav/clamd.conf", str(conf))
+                  .replace("sed -i", "true")
+                  .replace("systemctl cat clamav-clamonacc", "true"))
         for _ in range(2):  # re-running must not add lines twice
-            subprocess.run(["sh", "-c", script.replace("sed -i", "true")], capture_output=True)
+            subprocess.run(["sh", "-c", script], capture_output=True)
         return conf.read_text()
 
     def test_stock_config_gets_exclude_and_include(self, tmp_path, monkeypatch):
@@ -110,3 +119,13 @@ class TestClamonaccConfig:
     def test_odd_user_value_is_not_interpolated(self, tmp_path, monkeypatch):
         out = self._run(tmp_path, monkeypatch, "User $(id)\n")
         assert "OnAccessExcludeUname clamav\n" in out
+
+
+@pytest.mark.unit
+def test_activation_creates_the_clamonacc_quarantine_dir():
+    """Arch's unit runs clamonacc --move=/root/quarantine, which must exist."""
+    from plugins.antivirus import clamav_platform_linux as linux
+
+    script = linux._prepare_config_script()
+    assert "systemctl cat clamav-clamonacc" in script
+    assert "--move=" in script and 'mkdir -p "$d" && chmod 700 "$d"' in script

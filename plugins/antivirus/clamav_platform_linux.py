@@ -522,6 +522,9 @@ def _prepare_config_script() -> str:
       3. Set the on-access options clamonacc refuses to start without
          (an excluded UID/user and an include path), when none are set.
 
+      4. Create the quarantine directory the clamonacc unit moves
+         infected files to (Arch: /root/quarantine).
+
     All steps are safe to re-run on every invocation.
     """
     cmds: list[str] = []
@@ -589,7 +592,17 @@ def _prepare_config_script() -> str:
             f"fi",
         )
 
-    # (4) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
+    # (4) Arch's clamav-clamonacc.service runs ``--move=/root/quarantine``
+    # and clamonacc exits ("Failed to get realpath of /root/quarantine")
+    # when that directory doesn't exist, which the package never creates.
+    # Create whatever --move= directory the installed unit names.
+    cmds.append(
+        "d=$(systemctl cat clamav-clamonacc 2>/dev/null "
+        "| sed -n 's/.*--move=\\([^ \"]*\\).*/\\1/p' | head -n 1); "
+        "case \"$d\" in /*[!A-Za-z0-9/_.-]*) ;; /?*) mkdir -p \"$d\" && chmod 700 \"$d\";; esac",
+    )
+
+    # (5) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
     #
     # The Fedora clamd@.service unit does NOT declare ``RuntimeDirectory=``
     # — it just runs clamd, which creates /run/clamd.scan itself when it
