@@ -314,10 +314,11 @@ def find_certs_dir() -> str | None:
     bail out before ever invoking freshclam — on every Linux distro, not just
     ones with an unusual layout.
 
-    Distro packages ship the cert at <prefix>/share/clamav/certs, so derive
-    the prefix from the resolved binary rather than hardcoding /usr. That also
-    covers non-FHS prefixes (Nix store, /usr/local, custom builds), where the
-    path is not knowable ahead of time.
+    Most distro packages ship the cert at <prefix>/share/clamav/certs, so
+    derive the prefix from the resolved binary rather than hardcoding /usr.
+    That also covers non-FHS prefixes (Nix store, /usr/local, custom builds),
+    where the path is not knowable ahead of time. Arch keeps it at ClamAV's
+    own default, <sysconfdir>/certs (/etc/clamav/certs).
     """
     candidates: list[str] = []
 
@@ -335,6 +336,7 @@ def find_certs_dir() -> str | None:
         "/usr/share/clamav/certs",
         "/usr/local/share/clamav/certs",
         "/var/lib/clamav/certs",
+        "/etc/clamav/certs",
     ]
 
     for directory in candidates:
@@ -503,8 +505,8 @@ def _shell_quote(s: str) -> str:
 def _prepare_config_script() -> str:
     """Shell snippet that normalises the distro-stock ClamAV configs.
 
-    Two fixups are applied so clamd can actually start after a fresh
-    package install:
+    These fixups are applied so clamd (and clamonacc) can actually start
+    after a fresh package install:
 
       1. Comment out the lone ``Example`` stanza that Fedora (and older
          Debian) ship at the top of clamd.conf / freshclam.conf — clamd
@@ -517,7 +519,13 @@ def _prepare_config_script() -> str:
          path only if no uncommented ``LocalSocket`` is already
          present, so this is idempotent and non-destructive.
 
-    Both steps are safe to re-run on every invocation.
+      3. Set the on-access options clamonacc refuses to start without
+         (an excluded UID/user and an include path), when none are set.
+
+      4. Create the quarantine directory the clamonacc unit moves
+         infected files to (Arch: /root/quarantine).
+
+    All steps are safe to re-run on every invocation.
     """
     cmds: list[str] = []
 
@@ -563,7 +571,38 @@ def _prepare_config_script() -> str:
             f"fi",
         )
 
-    # (3) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
+    # (3) Give clamonacc what it needs to start. Stock configs (Arch,
+    # Debian) set no on-access options, and clamonacc exits with
+    # "at least one of OnAccessExcludeUID, OnAccessExcludeUname, or
+    # OnAccessExcludeRootUID must be specified" (and with no include path
+    # it has nothing to watch). Exclude clamd's own user, as ClamAV
+    # recommends, so its reads don't trigger scans in a loop; watch /home.
+    # Each line is only added when the admin set none of that kind.
+    for conf, _sock in socket_targets:
+        cq = _shell_quote(conf)
+        cmds.append(
+            f"if [ -f {cq} ]; then "
+            f"grep -qE '^[[:space:]]*OnAccessIncludePath[[:space:]]' {cq} "
+            f"|| echo 'OnAccessIncludePath /home' >> {cq}; "
+            f"if ! grep -qE '^[[:space:]]*OnAccessExclude(UID|Uname|RootUID)[[:space:]]' {cq}; then "
+            f"u=$(awk '/^[[:space:]]*User[[:space:]]/ {{print $2; exit}}' {cq}); "
+            f"case \"$u\" in ''|*[!A-Za-z0-9_.-]*) u=clamav;; esac; "
+            f"echo \"OnAccessExcludeUname $u\" >> {cq}; "
+            f"fi; "
+            f"fi",
+        )
+
+    # (4) Arch's clamav-clamonacc.service runs ``--move=/root/quarantine``
+    # and clamonacc exits ("Failed to get realpath of /root/quarantine")
+    # when that directory doesn't exist, which the package never creates.
+    # Create whatever --move= directory the installed unit names.
+    cmds.append(
+        "d=$(systemctl cat clamav-clamonacc 2>/dev/null "
+        "| sed -n 's/.*--move=\\([^ \"]*\\).*/\\1/p' | head -n 1); "
+        "case \"$d\" in /*[!A-Za-z0-9/_.-]*) ;; /?*) mkdir -p \"$d\" && chmod 700 \"$d\";; esac",
+    )
+
+    # (5) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
     #
     # The Fedora clamd@.service unit does NOT declare ``RuntimeDirectory=``
     # — it just runs clamd, which creates /run/clamd.scan itself when it

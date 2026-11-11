@@ -57,7 +57,8 @@ CONFIG_DIRS="$CONFIG_BASE/phoenix $CONFIG_BASE/resistine"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-WAZUH_DIR="/var/ossec"
+# The upstream 4.x agent the app used to install, and the Phoenix 5.0 package.
+WAZUH_DIRS="/var/ossec /opt/phoenix-agent"
 HELPER_DIR="/usr/local/lib/resistine"
 
 info()  { printf '  \033[0;36m%s\033[0m\n' "$*"; }
@@ -116,8 +117,11 @@ ok "VPN teardown done"
 
 # ---- 3. Wazuh SIEM agent removal ----
 step "[3/7] Removing SIEM (Wazuh) agent..."
-if [ -d "$WAZUH_DIR" ] || systemctl list-unit-files 2>/dev/null | grep -q '^wazuh-agent'; then
-    ( "$WAZUH_DIR/bin/wazuh-control" stop 2>/dev/null ) || true
+wazuh_present=""
+for d in $WAZUH_DIRS; do [ -d "$d" ] && wazuh_present=1; done
+if [ -n "$wazuh_present" ] || systemctl list-unit-files 2>/dev/null | grep -q '^wazuh-agent' \
+        || { command -v pacman >/dev/null 2>&1 && pacman -Q wazuh-agent >/dev/null 2>&1; }; then
+    for d in $WAZUH_DIRS; do ( "$d/bin/wazuh-control" stop 2>/dev/null ) || true; done
     systemctl stop wazuh-agent 2>/dev/null || true
     systemctl disable wazuh-agent 2>/dev/null || true
     rm -f /usr/lib/systemd/system/wazuh-agent.service \
@@ -125,9 +129,14 @@ if [ -d "$WAZUH_DIR" ] || systemctl list-unit-files 2>/dev/null | grep -q '^wazu
     systemctl daemon-reload 2>/dev/null || true
 
     # Package-managed installs: let the package manager run its postrm
-    # (drops the wazuh user/group). Arch/extraction installs aren't tracked,
-    # so remove the user/group by hand.
-    if command -v apt-get >/dev/null 2>&1 && apt-get remove -y wazuh-agent >/dev/null 2>&1; then
+    # (drops the wazuh user/group). Extraction installs aren't tracked, so
+    # remove the user/group by hand.
+    if command -v pacman >/dev/null 2>&1 && pacman -Q wazuh-agent >/dev/null 2>&1; then
+        pacman -R --noconfirm wazuh-agent >/dev/null 2>&1 || true
+        userdel wazuh 2>/dev/null || true
+        groupdel wazuh 2>/dev/null || true
+        ok "Removed wazuh-agent via pacman"
+    elif command -v apt-get >/dev/null 2>&1 && apt-get remove -y wazuh-agent >/dev/null 2>&1; then
         ok "Removed wazuh-agent via apt"
     elif command -v dnf >/dev/null 2>&1 && dnf remove -y wazuh-agent >/dev/null 2>&1; then
         ok "Removed wazuh-agent via dnf"
@@ -140,8 +149,12 @@ if [ -d "$WAZUH_DIR" ] || systemctl list-unit-files 2>/dev/null | grep -q '^wazu
         groupdel wazuh 2>/dev/null || true
         ok "Removed wazuh user/group (untracked install)"
     fi
-    rm -rf "$WAZUH_DIR"
-    ok "Removed $WAZUH_DIR"
+    for d in $WAZUH_DIRS; do
+        if [ -d "$d" ]; then
+            rm -rf "$d"
+            ok "Removed $d"
+        fi
+    done
 else
     info "Wazuh agent not installed"
 fi
