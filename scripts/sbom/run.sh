@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate Resistine's SBOM (sbom.cdx.json) + license attribution doc
+# Generate Phoenix's SBOM (sbom.cdx.json) + license attribution doc
 # (LICENSE-3rd-Party.md) from a clean production virtual environment.
 #
 # Why a wrapper? cyclonedx-py walks the active Python env. Running
@@ -13,8 +13,8 @@
 #   ./scripts/sbom/run.sh --check              # CI mode: fail if stale
 #   ./scripts/sbom/run.sh --rebuild-venv       # nuke .sbom-venv/ first
 #
-# Author: Resistine Team
-# Copyright (c) Resistine 2026
+# Author: Phoenix Team
+# Copyright (c) Phoenix 2026
 # Licensed under the GNU General Public License v2 or later
 
 set -euo pipefail

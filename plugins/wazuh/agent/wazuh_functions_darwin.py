@@ -2,8 +2,8 @@
 Wazuh Agent Functions for macOS
 Handles download, install, start/stop of the Wazuh SIEM agent via osascript
 privilege escalation.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -80,14 +80,12 @@ def needs_reenrollment():
     Returns False if no prior enrollment is recorded (safe to proceed normally).
     """
     enrolled = settings.get("wazuh", "enrolled_email", "")
-    current = settings.get("auth", "email", "")
+    current = enrollment.account_identity()
     if enrolled and current and enrolled != current:
         logger.info(f"[WAZUH] Enrollment mismatch: enrolled={enrolled!r} current={current!r}")
         return True
     return False
 
-
-_RESISTINE_API_BASE = "https://validate.resistine.work"
 
 
 def get_package_url():
@@ -465,6 +463,15 @@ _KEYCHAIN = "/Library/Keychains/System.keychain"
 _KC_SERVICE = "com.resistine.wazuh.agent"
 _KC_ACCOUNT = "client_key"
 
+# `security -i` command that stores the agent key in the System Keychain.
+# The key itself is appended as a quoted argument on security's *stdin* —
+# a `-w "$(cat ...)"` on the command line would put the key in argv, where
+# any local user can read it via ps (M2).
+_KC_ADD_CMD = (
+    f'add-generic-password -U -k "{_KEYCHAIN}" '
+    f'-s "{_KC_SERVICE}" -a "{_KC_ACCOUNT}" -w'
+)
+
 
 def remove_agent(wipe_keys: bool = False):
     """Stop the Wazuh agent and remove /Library/Phoenix/ with admin privileges.
@@ -499,9 +506,11 @@ def remove_agent(wipe_keys: bool = False):
         key_phase = (
             f"mkdir -p {_sh(backup_dir)} && "
             f"cp {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)} 2>/dev/null && "
-            f"security add-generic-password -U "
-            f"-k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
-            f"-w \"$(cat {_sh(_CLIENT_KEYS)})\" 2>/dev/null; "
+            # printf is a shell builtin, so the key (expanded by the command
+            # substitution) never reaches any process's argv; security reads
+            # the whole command, key included, from stdin (-i).
+            f"printf '%s \"%s\"\\n' {_sh(_KC_ADD_CMD)} \"$(cat {_sh(_CLIENT_KEYS)})\" "
+            f"| security -i 2>/dev/null; "
         )
 
     script = (
@@ -575,8 +584,9 @@ def reenroll_agent():
         f"'s|<agent_name>.*</agent_name>|<agent_name>{new_name}</agent_name>|' "
         f"{_sh(ossec_conf)} 2>/dev/null || true; "
         f"cp {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)} 2>/dev/null; "
-        f"security add-generic-password -U -k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} "
-        f"-a {_sh(_KC_ACCOUNT)} -w \"$(cat {_sh(_CLIENT_KEYS)})\" 2>/dev/null; "
+        # M2: key on security's stdin (-i), never in argv (ps-visible).
+        f"printf '%s \"%s\"\\n' {_sh(_KC_ADD_CMD)} \"$(cat {_sh(_CLIENT_KEYS)})\" "
+        f"| security -i 2>/dev/null; "
         # Bring it back up under launchd.
         f"launchctl enable system/com.wazuh.agent 2>/dev/null; "
         f"launchctl bootstrap system {_sh(WAZUH_LAUNCHD_PLIST)} 2>/dev/null; "
@@ -662,18 +672,12 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
 
     Returns (launched_ok, status_file_path).
     """
-    import shutil
     import uuid
 
     unique_id = uuid.uuid4().hex[:12]
     status_file = f"/tmp/resistine-wazuh-install-{unique_id}.status"
     log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
     script_path = _get_script_path()
-
-    # Copy script to /tmp/ to strip com.apple.provenance xattr
-    tmp_script = f"/tmp/resistine-wazuh-postinstall-{unique_id}.sh"
-    shutil.copy2(script_path, tmp_script)
-    os.chmod(tmp_script, 0o755)
 
     # Build the argument list for the script
     args = [
@@ -691,7 +695,18 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
         # line's shape, installs it as client.keys and deletes the file.
         args.append(f"--key-file {shlex.quote(key_file)}")
 
-    script_cmd = f"{shlex.quote(tmp_script)} {' '.join(args)}"
+    # The elevated command itself copies the install script from the trusted
+    # bundle path into a root-owned mktemp and executes THAT copy (stripping
+    # com.apple.provenance there). Root never executes a user-writable /tmp
+    # file, so same-user malware cannot swap the payload behind the admin
+    # prompt (same pattern as the ClamAV postinstall launcher).
+    script_cmd = (
+        f'S="$(/usr/bin/mktemp /tmp/phoenix-wz-run-XXXXXX.sh)" && '
+        f"/bin/cp {_sh(script_path)} \"$S\" && /bin/chmod 755 \"$S\" && "
+        f'{{ /usr/bin/xattr -d com.apple.provenance "$S" 2>/dev/null || true; }} && '
+        f"/bin/bash \"$S\" {' '.join(args)}; SRC=$?; "
+        f'/bin/rm -f "$S"; (exit $SRC)'
+    )
     # Wazuh's .pkg scripts read /tmp/wazuh_envs: stage it as root, run the
     # installer script, then remove it.  If staging fails, report through the
     # status file so the poller doesn't wait for the full timeout.
@@ -772,6 +787,8 @@ def full_install(progress_callback=None):
         agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
+        # Don't leak the enrollment key file when the install never launches.
+        enrollment.discard(enrolled)
         if progress_callback:
             progress_callback("Failed to write environment file")
         return False
@@ -863,9 +880,10 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback("Wazuh agent installed (agent may need manual start)")
 
-    # Record which email this enrollment belongs to so we can detect
-    # account changes (different user / org) on future startups.
-    settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+    # Record which account identity this enrollment belongs to so we can
+    # detect account changes (different user / org) on future startups —
+    # same bookkeeping as installer_service._install_succeeded().
+    settings.set("wazuh", "enrolled_email", enrollment.account_identity())
 
     logger.info("Wazuh full install completed successfully")
     return True

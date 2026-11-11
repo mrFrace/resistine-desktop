@@ -10,8 +10,8 @@ timer; the last result is cached on the plugin so a rebuild (any plugin's
 status change rebuilds this screen) paints immediately. Protection status
 is shown by the glow on the sidebar logo (green/red), driven from here.
 
-Author: P3, Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: P3, Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

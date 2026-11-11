@@ -145,6 +145,16 @@ class TestMasterKeyFallbackWrite:
         assert "/inheritance:r" in args
         assert "alice:(R,W)" in args
 
+    def test_windows_settings_write_applies_acl(self, tmp_config_dir, monkeypatch):
+        """_save_json on Windows must harden the file, not just open(w)."""
+        import utils.settings as s
+
+        restricted = []
+        monkeypatch.setattr(s.platform, "system", lambda: "Windows")
+        monkeypatch.setattr(s, "_restrict_file_permissions", restricted.append)
+        assert s._save_json("aclns", {"k": "v"})
+        assert restricted == [str(tmp_config_dir / "aclns.json")]
+
     def test_windows_icacls_failure_is_not_fatal(self, tmp_path, monkeypatch):
         import utils.settings as s
 

@@ -4,8 +4,8 @@ macOS Auto-Update Backend — Sparkle via PyObjC.
 Loads Sparkle.framework from the app bundle and provides update check
 functionality. Only used on macOS frozen (PyInstaller) builds.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

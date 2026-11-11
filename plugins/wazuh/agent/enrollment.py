@@ -53,6 +53,7 @@ import os
 import re
 import secrets
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -155,6 +156,14 @@ def request(agent_name: str) -> Optional[Enrollment]:
     try:
         from plugins.vpn import provisioning
         r = provisioning._authorized_request("POST", ENROLL_PATH, json={"name": agent_name})
+        if r.status_code == 409:
+            # The name is taken on the manager, usually by an earlier attempt
+            # whose install then failed. Try once under a unique name, the
+            # way reenroll_agent() recovers a dead key.
+            retry_name = f"{agent_name[:57]}-{str(int(time.time()))[-6:]}"
+            logger.warning(f"[ENROLL] {agent_name!r} already exists on the manager; "
+                           f"retrying as {retry_name!r}")
+            r = provisioning._authorized_request("POST", ENROLL_PATH, json={"name": retry_name})
     except Exception as e:  # noqa: BLE001 - ProvisioningError, import problems
         logger.warning(f"[ENROLL] API enrollment unavailable: {e}")
         return None
@@ -183,7 +192,13 @@ def request(agent_name: str) -> Optional[Enrollment]:
     return Enrollment(agent_id, name, group, line, _write_private(line))
 
 
-def _account() -> str:
+def account_identity() -> str:
+    """The signed-in account's identity for enrollment bookkeeping.
+
+    Under MAS/OIDC the authoritative identity is the Matrix user_id;
+    userinfo often carries no email at all (auth.email stays unset), so
+    anything gating on email alone silently fails for signed-in users.
+    """
     return settings.get("auth", "user_id", "") or settings.get("auth", "email", "") or ""
 
 
@@ -230,6 +245,9 @@ def link(key_line: str) -> bool:
         _remember_group(group)
     mark_enrolled(agent_id)
     return True
+
+
+_account = account_identity  # internal alias
 
 
 def _remember_group(group: str) -> None:

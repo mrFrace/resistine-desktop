@@ -17,8 +17,8 @@ Phases:
 Running from source (run.sh) there is no installed binary or .desktop entry to
 remove.  A packaged build should extend phase 1/3 with artifact removal.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

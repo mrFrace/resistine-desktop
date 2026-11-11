@@ -12,8 +12,8 @@ backends are called, not rewritten; status is refreshed by a re-arming
 ``app.after(5000, ...)`` poll that runs the blocking status check on a
 worker thread.
 
-Author: Javier Perez and Jacqueline Edoro (original); Resistine Team (Qt port)
-Copyright (c) Resistine 2025
+Author: Javier Perez and Jacqueline Edoro (original); Phoenix Team (Qt port)
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -154,6 +154,7 @@ def is_vpn_connected():
 
 # --- Config Manager (module-level for use in init) ---
 from plugins.vpn.config_manager import VPNConfigManager  # noqa: E402
+from utils.i18n import get_text
 
 _config_manager = VPNConfigManager(wireguard_folder)
 try:
@@ -194,6 +195,7 @@ def _list_wg_interfaces() -> list[str]:
             text=True,
             timeout=5,
             check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except FileNotFoundError:
         logger.info("WireGuard 'wg' tool not found; assuming no active interfaces")

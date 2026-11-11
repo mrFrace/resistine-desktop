@@ -53,8 +53,9 @@ class TestRequest:
             assert api.call_args.kwargs["json"] == {"name": "laptop-1a2b"}
             with open(e.key_file) as f:
                 assert f.read() == LINE + "\n"
-            assert stat.S_IMODE(os.stat(e.key_file).st_mode) == 0o600
-            assert stat.S_IMODE(os.stat(os.path.dirname(e.key_file)).st_mode) == 0o700
+            if os.name != "nt":  # POSIX modes; Windows ACLs are not comparable
+                assert stat.S_IMODE(os.stat(e.key_file).st_mode) == 0o600
+                assert stat.S_IMODE(os.stat(os.path.dirname(e.key_file)).st_mode) == 0o700
         finally:
             enrollment.discard(e)
         assert not os.path.exists(os.path.dirname(e.key_file))
@@ -160,11 +161,12 @@ def _enrolled(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(os.name == "nt", reason="Linux installer path uses os.getuid")
 class TestLinuxInstall:
-    def _script(self, enrolled):
+    def _script(self, enrolled, family="deb", pkg="/tmp/p.deb"):
         from plugins.wazuh.agent import wazuh_functions_linux as wl
-        with patch.object(wl, "download_package", return_value="/tmp/p.deb"), \
-                patch.object(wl, "_get_os_info", return_value="deb"), \
+        with patch.object(wl, "download_package", return_value=pkg), \
+                patch.object(wl, "_get_os_info", return_value=family), \
                 patch.object(wl, "get_agent_name", return_value="host-uuid"), \
                 patch.object(wl, "get_agent_group", return_value="grp"), \
                 patch.object(wl.enrollment, "request", return_value=enrolled), \
@@ -184,6 +186,15 @@ class TestLinuxInstall:
         assert "WAZUH_AGENT_GROUP='u_alice'" in script     # and its group
         assert "<groups>u_alice</groups>" in script and "'grp'" not in script
         assert LINE not in script  # the key itself never goes on a command line
+
+    def test_arch_installs_the_package_with_pacman(self, tmp_path):
+        # The Arch package runs the .deb's maintainer scripts, so it gets the
+        # same deployment variables (endpoint, name, group) dpkg does.
+        script = self._script(_enrolled(tmp_path), "arch", "/tmp/p.pkg.tar.zst")
+        assert "WAZUH_MANAGER='dashboard.phoenix.exposed' WAZUH_MANAGER_PORT='1517'" in script
+        assert "pacman -U --noconfirm '/tmp/p.pkg.tar.zst'" in script
+        assert "<endpoint>dashboard.phoenix.exposed:1517</endpoint>" in script
+        assert "bsdtar" not in script and "/var/ossec" not in script
 
     def test_fallback_agent_auth(self):
         script = self._script(None)
@@ -214,7 +225,11 @@ class TestMsiLog:
     def test_install_script_writes_a_verbose_msi_log(self):
         from plugins.wazuh.agent import wazuh_functions_windows as ww
         script = ww._build_install_script(None, r"C:\t\p.msi", "host", "grp", r"C:\b")
-        assert r"'/l*v','C:\t\p-install.log'" in script
+        # Start-Process does not quote -ArgumentList elements, so the paths
+        # carry literal double quotes.
+        assert r"""'/l*v','"C:\t\p-install.log"'""" in script
+        assert r"""'/i','"C:\t\p.msi"'""" in script
+        assert "-PassThru" in script and 'MSI_EXIT=' in script
 
     def test_summary_names_the_exit_code_and_failing_action(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_windows as ww

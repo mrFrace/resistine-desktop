@@ -93,6 +93,36 @@ class TestTurnAssembler:
                        error="The answer could not be delivered in full."))
         assert asm.status == "error" and "delivered" in asm.error
 
+    def test_size_cap_truncates_with_marker(self, monkeypatch):
+        monkeypatch.setattr(mt, "_MAX_TURN_TEXT", 10)
+        asm = TurnAssembler()
+        assert asm.feed(reply("abcdefghijKLM")) == "abcdefghij" + mt._TRUNCATED_MARKER
+        assert asm.truncated and asm.text == "abcdefghij" + mt._TRUNCATED_MARKER
+        # No more text is accepted after the cap...
+        assert asm.feed(edit("abcdefghijKLMNOP")["m.new_content"]) == ""
+        assert asm.text == "abcdefghij" + mt._TRUNCATED_MARKER
+        # ...but the turn can still end.
+        asm.feed(edit("abcdefghijKLMNOPQ", "final")["m.new_content"])
+        assert asm.done and asm.status == "final"
+
+    def test_part_cap_truncates_with_marker(self, monkeypatch):
+        monkeypatch.setattr(mt, "_MAX_TURN_PARTS", 2)
+        asm = TurnAssembler()
+        asm.feed(reply("a"))
+        asm.feed(reply("b", part=1))
+        assert asm.feed(reply("c", part=2)) == mt._TRUNCATED_MARKER
+        assert asm.truncated and asm.text == "ab" + mt._TRUNCATED_MARKER
+        assert asm.feed(reply("d", part=3)) == ""
+        assert asm.feed(reply("e", "final", part=4)) == ""
+        assert asm.done and asm.status == "final"
+
+    def test_marker_emitted_once(self, monkeypatch):
+        monkeypatch.setattr(mt, "_MAX_TURN_TEXT", 4)
+        asm = TurnAssembler()
+        asm.feed(reply("abcdef"))
+        assert asm.feed(edit("abcdefgh")["m.new_content"]) == ""
+        assert asm.text.count(mt._TRUNCATED_MARKER) == 1
+
 
 class FakeService:
     def __init__(self, typing=False):
@@ -156,6 +186,65 @@ class TestCollect:
         cancel = threading.Event()
         cancel.set()
         assert collect([("message", REPLY, reply("Hi"))], cancel=cancel) == []
+
+
+@pytest.mark.unit
+class TestOnMessageRequiresDecryption:
+    """A compromised homeserver can forge ``sender`` on plaintext events, so
+    only Megolm-decrypted room messages reach the turn queue or SIEM alerts."""
+
+    def _service(self):
+        svc = mt.MatrixService.__new__(mt.MatrixService)
+        svc.room_id = "!dm:hs"
+        svc.bot = "@secagent:hs"
+        svc.alerts_bot = "@siem:hs"
+        svc._alert_rooms = {"!alerts:hs"}
+        svc._turn_q = queue.Queue()
+        return svc
+
+    def _event(self, sender, decrypted):
+        e = MagicMock()
+        e.sender = sender
+        e.decrypted = decrypted
+        e.event_id = "$evt"
+        e.body = "body"
+        e.server_timestamp = 1
+        e.source = {"content": {"body": "body"}}
+        return e
+
+    def _room(self, room_id):
+        r = MagicMock()
+        r.room_id = room_id
+        return r
+
+    def _run(self, svc, room, event):
+        import asyncio
+        asyncio.run(svc._on_message(room, event))
+
+    def test_plaintext_bot_message_dropped(self):
+        svc = self._service()
+        self._run(svc, self._room("!dm:hs"), self._event("@secagent:hs", False))
+        assert svc._turn_q.empty()
+
+    def test_decrypted_bot_message_queued(self):
+        svc = self._service()
+        self._run(svc, self._room("!dm:hs"), self._event("@secagent:hs", True))
+        kind, event_id, content = svc._turn_q.get_nowait()
+        assert kind == "message" and content == {"body": "body"}
+
+    def test_plaintext_alert_not_published(self, monkeypatch):
+        publish = MagicMock()
+        monkeypatch.setattr(mt.siem_alerts, "publish", publish)
+        svc = self._service()
+        self._run(svc, self._room("!alerts:hs"), self._event("@siem:hs", False))
+        publish.assert_not_called()
+
+    def test_decrypted_alert_published(self, monkeypatch):
+        publish = MagicMock()
+        monkeypatch.setattr(mt.siem_alerts, "publish", publish)
+        svc = self._service()
+        self._run(svc, self._room("!alerts:hs"), self._event("@siem:hs", True))
+        publish.assert_called_once_with("!alerts:hs", "$evt", "body", 1)
 
 
 def key_check(published_ed25519, shared=True):
@@ -411,7 +500,7 @@ class TestSettingsTransportCard:
         from utils import settings
 
         p = self._card(qapp)
-        assert p.transport_combo.currentData() == "openai"
+        p.transport_combo.setCurrentIndex(p.transport_combo.findData("openai"))
         assert p.matrix_bot_entry.isHidden() and not p.api_base_entry.isHidden()
         p.transport_combo.setCurrentIndex(p.transport_combo.findData("matrix"))
         assert p.api_base_entry.isHidden() and not p.matrix_bot_entry.isHidden()

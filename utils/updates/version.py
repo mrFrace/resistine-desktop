@@ -6,8 +6,8 @@ Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
 Frozen builds also carry a BUILD file (UTC YYYYMMDDHHMM) that tells builds of
 one VERSION apart; source runs have none.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -84,14 +84,20 @@ def get_display_version() -> str:
 def compare_versions(current: str, remote: str) -> int:
     """Compare two dot-separated version strings.
 
-    Splits on '.' and compares each segment as an integer.
+    Splits on '.' and compares each segment as an integer. A segment's
+    pre-release suffix is ignored ("20-rc" counts as 20), and a segment with
+    no leading digits counts as 0 — one odd segment must not zero out the
+    whole version, or every remote version would look newer.
     Returns -1 if current < remote, 0 if equal, 1 if current > remote.
     """
     def _parts(v):
-        try:
-            return [int(x) for x in v.split(".")]
-        except (ValueError, AttributeError):
+        if not isinstance(v, str):
             return [0]
+        parts = []
+        for segment in v.split("."):
+            match = re.match(r"\d+", segment.strip())
+            parts.append(int(match.group()) if match else 0)
+        return parts or [0]
 
     c = _parts(current)
     r = _parts(remote)

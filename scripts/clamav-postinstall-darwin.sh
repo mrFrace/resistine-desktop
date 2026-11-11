@@ -12,6 +12,11 @@
 
 set -euo pipefail
 
+# Root-write hardening: everything this script creates starts root-only.
+# Paths that must be readable by the unprivileged app (status file, log,
+# configs, DB) are chmod'd to 644/755 explicitly below.
+umask 077
+
 # --- Argument Parsing ---
 APP_CONTENTS=""
 DB_SOURCE=""
@@ -61,6 +66,16 @@ if [ ! -d "$DB_SOURCE" ]; then
     exit 1
 fi
 
+# Caller-supplied paths this root script writes to live in /tmp. Refuse
+# pre-planted symlinks (and non-regular files) — writing through one would
+# be an arbitrary root file write.
+for p in "$STATUS_FILE" "$LOG_FILE"; do
+    if [ -L "$p" ] || { [ -e "$p" ] && [ ! -f "$p" ]; }; then
+        echo "Refusing to write to non-regular file or symlink: $p" >&2
+        exit 1
+    fi
+done
+
 # --- Constants ---
 SYSTEM_DIR="/Library/Application Support/Resistine/clamav"
 SYSTEM_DB_DIR="$SYSTEM_DIR/db"
@@ -71,14 +86,20 @@ FRESHCLAM_CONF="$SYSTEM_DIR/freshclam.conf"
 CLAMD_SOCKET="$SYSTEM_RUN_DIR/clamd.sock"
 LAUNCHD_DIR="$APP_CONTENTS/Library/LaunchDaemons"
 
-# Resolve console user
-CUSER=$(stat -f '%Su' /dev/console 2>/dev/null || echo root)
-
 # --- Helpers ---
 write_status() {
-    local tmp="${STATUS_FILE}.tmp"
+    # Re-check on every write: never follow a symlink planted after start
+    # (arbitrary root file write).
+    if [ -L "$STATUS_FILE" ]; then
+        echo "Refusing to write status through symlink: $STATUS_FILE" >&2
+        exit 1
+    fi
+    local tmp
+    tmp=$(mktemp "${STATUS_FILE}.XXXXXX") || exit 1
     printf '%s' "$1" > "$tmp"
-    mv "$tmp" "$STATUS_FILE"
+    # The unprivileged app polls this file — must be world-readable.
+    chmod 644 "$tmp"
+    mv -f "$tmp" "$STATUS_FILE"
 }
 
 CURRENT_STEP="init"
@@ -97,7 +118,16 @@ if [ "$APP_CONTENTS" != "/Applications/Phoenix.app/Contents" ]; then
 fi
 
 # --- Logging ---
+# Drop any pre-existing entry at the log path (removes an attacker's link,
+# never the target), then verify nothing reappeared before root opens it.
+rm -f "$LOG_FILE" 2>/dev/null || true
+if [ -L "$LOG_FILE" ] || [ -e "$LOG_FILE" ]; then
+    echo "Refusing to open log file: $LOG_FILE" >&2
+    exit 1
+fi
 exec 2>>"$LOG_FILE"
+# Log is for user-facing diagnostics — make it readable (umask made it 600).
+chmod 644 "$LOG_FILE" 2>/dev/null || true
 set -x
 
 # --- Cleanup on Failure ---
@@ -119,6 +149,11 @@ trap 'write_status "{\"status\":\"failed\",\"step\":\"$CURRENT_STEP\",\"error\":
 CURRENT_STEP="create_dirs"
 write_status '{"status":"running","step":"create_dirs","pid":'"$$"',"ts":'"$(date +%s)"'}'
 mkdir -p "$SYSTEM_DB_DIR" "$SYSTEM_LOG_DIR" "$SYSTEM_RUN_DIR"
+# umask 077 makes freshly created dirs 700 — open them up so the
+# unprivileged app can read configs/DB and reach the clamd socket.
+# All stay root-owned (mkdir as root); none are user-writable.
+chmod 755 "/Library/Application Support/Resistine" "$SYSTEM_DIR" \
+    "$SYSTEM_DB_DIR" "$SYSTEM_LOG_DIR" "$SYSTEM_RUN_DIR"
 
 # --- Step 2: Write Configs ---
 CURRENT_STEP="write_configs"
@@ -175,8 +210,14 @@ fi
 # --- Step 3: Set Permissions ---
 CURRENT_STEP="set_permissions"
 write_status '{"status":"running","step":"set_permissions","pid":'"$$"',"ts":'"$(date +%s)"'}'
-chown "$CUSER:staff" "$SYSTEM_DB_DIR" "$CLAMD_CONF" "$FRESHCLAM_CONF"
-chmod 775 "$SYSTEM_DB_DIR"
+# SECURITY: these configs are consumed by ROOT daemons (clamd, clamonacc,
+# freshclam). They must never be writable by a non-root user — a writable
+# clamd.conf (VirusEvent) or freshclam.conf (OnUpdateExecute) is direct
+# root code execution, and a group/world-writable DB dir lets any local
+# user replace the signature databases. Root-owned, world-readable only.
+chown root:wheel "$CLAMD_CONF" "$FRESHCLAM_CONF" "$SYSTEM_DB_DIR"
+chmod 644 "$CLAMD_CONF" "$FRESHCLAM_CONF"
+chmod 755 "$SYSTEM_DB_DIR"
 chmod 755 "$SYSTEM_LOG_DIR"
 
 # --- Step 4: Seed DB (local copy, no network) ---
@@ -185,8 +226,12 @@ write_status '{"status":"running","step":"seed_db","pid":'"$$"',"ts":'"$(date +%
 if ls "$DB_SOURCE"/*.cvd 1>/dev/null 2>&1; then
     cp "$DB_SOURCE"/*.cvd "$SYSTEM_DB_DIR/" 2>/dev/null || true
     cp "$DB_SOURCE"/*.cld "$SYSTEM_DB_DIR/" 2>/dev/null || true
-    chown "$CUSER:staff" "$SYSTEM_DB_DIR"/*.cvd 2>/dev/null || true
-    chown "$CUSER:staff" "$SYSTEM_DB_DIR"/*.cld 2>/dev/null || true
+    # Root-owned signatures; world-readable so user-level clamscan can
+    # still read the system DB. umask 077 would otherwise leave them 600.
+    chown root:wheel "$SYSTEM_DB_DIR"/*.cvd 2>/dev/null || true
+    chown root:wheel "$SYSTEM_DB_DIR"/*.cld 2>/dev/null || true
+    chmod 644 "$SYSTEM_DB_DIR"/*.cvd 2>/dev/null || true
+    chmod 644 "$SYSTEM_DB_DIR"/*.cld 2>/dev/null || true
 else
     write_status '{"status":"failed","step":"seed_db","error":"No CVD files in source directory","error_code":"NO_DB_FILES","exit_code":1,"pid":'"$$"',"ts":'"$(date +%s)"'}'
     cleanup_failed_install

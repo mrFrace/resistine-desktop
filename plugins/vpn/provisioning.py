@@ -70,7 +70,10 @@ def _authorized_request(method: str, path: str, **kwargs):
     extra_headers = kwargs.pop("headers", None) or {}
     for attempt in (1, 2):
         try:
+            # allow_redirects=False: the Bearer token must never follow a
+            # redirect off the provisioning host (parity with phoenix_packages._get).
             r = http.request(method, url, timeout=_TIMEOUT, verify=True,
+                             allow_redirects=False,
                              headers={**extra_headers, "Authorization": f"Bearer {token}"}, **kwargs)
         except Exception as e:  # noqa: BLE001
             raise ProvisioningError(

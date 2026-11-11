@@ -1,6 +1,15 @@
 # Release History
 
-Complete release history for Resistine Desktop across all platforms.
+> **DEPRECATED / DISABLED:** This document describes the legacy release and
+> auto-update pipeline (Sparkle/WinSparkle + the old appcast feed). That
+> channel is retired: Phoenix builds have updates hard-disabled
+> (`utils/updates/manager.py: UPDATES_ENABLED = False`) and carry no feed URL
+> or update-signing public key. Do not re-point anything at the old feed.
+> A new document will replace this one when Phoenix update infrastructure
+> (new feed host + fresh signing keys in CI) exists.
+
+
+Complete release history for Phoenix Desktop across all platforms.
 
 ## Version 2026.03.19
 
@@ -19,8 +28,8 @@ Complete release history for Resistine Desktop across all platforms.
 - Linux: Ctrl+A support, scrollbar fixes, and VPN page padding
 
 ### Platform Downloads
-- **macOS**: [Resistine-Desktop-Mac-2026.03.19.dmg](https://resistine.github.io/releases/mac/Resistine-Desktop-Mac-2026.03.19.dmg) (41.2 MB)
-- **Windows**: [Resistine-Setup-2026.03.19.exe](https://resistine.github.io/releases/windows/Resistine-Setup-2026.03.19.exe)
+- **macOS**: [phoenix-desktop-Mac-2026.03.19.dmg](https://resistine.github.io/releases/mac/phoenix-desktop-Mac-2026.03.19.dmg) (41.2 MB)
+- **Windows**: [Phoenix-Setup-2026.03.19.exe](https://resistine.github.io/releases/windows/Phoenix-Setup-2026.03.19.exe)
 - **Linux**: Available via package managers
 
 ---
@@ -41,7 +50,7 @@ Complete release history for Resistine Desktop across all platforms.
 - Fixed Wazuh agent signup bug on macOS
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer-1.0.5.dmg](https://resistine.github.io/releases/mac/Resistine-Installer-1.0.5.dmg) (42.5 MB)
+- **macOS**: [Phoenix-Installer-1.0.5.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.5.dmg) (42.5 MB)
 - **Windows**: Available from previous releases
 - **Linux**: Available via package managers
 
@@ -56,7 +65,7 @@ Complete release history for Resistine Desktop across all platforms.
 - Performance improvements
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer-1.0.4.dmg](https://resistine.github.io/releases/mac/Resistine-Installer-1.0.4.dmg) (36.9 MB)
+- **macOS**: [Phoenix-Installer-1.0.4.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.4.dmg) (36.9 MB)
 
 ---
 
@@ -68,7 +77,7 @@ Complete release history for Resistine Desktop across all platforms.
 - New macOS release with stability improvements
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer-1.0.3.dmg](https://resistine.github.io/releases/mac/Resistine-Installer-1.0.3.dmg) (36.8 MB)
+- **macOS**: [Phoenix-Installer-1.0.3.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.3.dmg) (36.8 MB)
 
 ---
 
@@ -84,7 +93,7 @@ Complete release history for Resistine Desktop across all platforms.
 - Replaced icons with Phosphor icon set
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer-1.0.2.dmg](https://resistine.github.io/releases/mac/Resistine-Installer-1.0.2.dmg) (42.3 MB)
+- **macOS**: [Phoenix-Installer-1.0.2.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.2.dmg) (42.3 MB)
 
 ---
 
@@ -97,7 +106,7 @@ Complete release history for Resistine Desktop across all platforms.
 - Added in-app uninstall option
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer-1.0.1.dmg](https://resistine.github.io/releases/mac/Resistine-Installer-1.0.1.dmg) (36.9 MB)
+- **macOS**: [Phoenix-Installer-1.0.1.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.1.dmg) (36.9 MB)
 
 ---
 
@@ -111,7 +120,7 @@ Complete release history for Resistine Desktop across all platforms.
 - Auto-update support via Sparkle
 
 ### Platform Downloads
-- **macOS**: [Resistine-Installer.dmg](https://github.com/Resistine/Resistine-Desktop/releases/download/v1.0.0/Resistine-Installer.dmg) (36.8 MB)
+- **macOS**: [Phoenix-Installer.dmg](https://github.com/Resistine/Resistine-Desktop/releases/download/v1.0.0/Phoenix-Installer.dmg) (36.8 MB)
 
 ---
 
@@ -142,7 +151,7 @@ Updates are delivered automatically via Sparkle. You'll be notified when an upda
 
 **Manual Update:**
 1. Download the latest DMG from the releases page
-2. Open the DMG and drag Resistine to Applications
+2. Open the DMG and drag Phoenix to Applications
 3. Restart the application
 
 ### Windows
@@ -158,13 +167,13 @@ Updates are delivered through your package manager:
 
 ```bash
 # Ubuntu/Debian
-sudo apt update && sudo apt upgrade resistine
+sudo apt update && sudo apt upgrade phoenix
 
 # Fedora
-sudo dnf upgrade resistine
+sudo dnf upgrade phoenix
 
 # Arch
-sudo pacman -Su resistine
+sudo pacman -Su phoenix
 ```
 
 ---
@@ -174,7 +183,7 @@ sudo pacman -Su resistine
 Found a bug? Have a feature request?
 
 - **GitHub Issues**: [Report on GitHub](https://github.com/Resistine/Resistine-Desktop/issues)
-- **Email**: support@resistine.dev
+- **Email**: support@phoenix.dev
 - **Community**: Join our community forum
 
 ---

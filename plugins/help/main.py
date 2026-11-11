@@ -6,8 +6,8 @@ Flat page layout (gui/page_kit.py): a "Help" header whose controls are the
 viewer's navigation (Back / Home / topic dropdown), a hairline, then the
 markdown content, with page history and in-document link navigation.
 
-Author: Petr and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

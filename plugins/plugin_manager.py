@@ -1,7 +1,7 @@
 """
 This script is used to manage the loading and downloading of plugins.
-Author: Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -30,6 +30,11 @@ class PluginManager:
     # Network timeouts (seconds)
     METADATA_TIMEOUT = 15
     DOWNLOAD_TIMEOUT = 30
+
+    # Plugin archives larger than this are refused; enforced while streaming
+    # the download, so an oversized body is never fully buffered.
+    MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
+    DOWNLOAD_CHUNK = 256 * 1024
 
     # Plugin downloads are fetched with allow_redirects=False. Redirects are
     # then followed manually, only over HTTPS, at most MAX_DOWNLOAD_REDIRECTS
@@ -247,9 +252,11 @@ class PluginManager:
                 allow_redirects=False,
                 timeout=self.DOWNLOAD_TIMEOUT,
                 verify=True,
+                stream=True,
             )
             if response.status_code in (301, 302, 303, 307, 308):
                 location = response.headers.get("Location")
+                response.close()
                 if not location:
                     raise requests.RequestException(
                         "Redirect without Location header refused"
@@ -298,31 +305,53 @@ class PluginManager:
             expected_sha256: SHA-256 hex digest to verify the archive against.
                 When omitted, the digest published in the optional-plugins
                 metadata (``sha256`` field, looked up by url, then id) is used.
-                If neither is available the archive is installed unverified
-                (a warning is logged); a mismatch always rejects the install.
+                If neither is available the install is REFUSED — plugin zips
+                are executable content and are never installed unverified.
+                A mismatch always rejects the install.
         """
         try:
-            logger.info(f"Downloading plugin from: {url}")
-            response = self._fetch_plugin_archive(url)
+            # Plugin zips are executable content (importlib.import_module runs
+            # them). Until archives are signed, at minimum: HTTPS only, a
+            # mandatory SHA-256 check, and size caps enforced while streaming
+            # so a hostile feed can't zip-bomb the client.
+            if not str(url).startswith("https://"):
+                logger.error(f"Refusing non-HTTPS plugin download: {url}")
+                return False, "Refused: plugin downloads must use HTTPS."
 
-            # Verify integrity when a hash is available
             if not expected_sha256:
                 expected_sha256 = self._published_hashes.get(url) or (
                     self._published_hashes.get(str(plugin_id)) if plugin_id is not None else None
                 )
-            if expected_sha256:
-                actual_hash = hashlib.sha256(response.content).hexdigest()
-                if not hmac.compare_digest(actual_hash, expected_sha256.strip().lower()):
-                    logger.error(
-                        f"Plugin hash mismatch: expected {expected_sha256}, "
-                        f"got {actual_hash}"
-                    )
-                    return False, "Plugin integrity check failed — download may have been tampered with."
-            else:
-                logger.warning(
+            if not expected_sha256:
+                logger.error(
                     f"No SHA-256 published for plugin {plugin_id or url}; "
-                    "installing without integrity verification"
+                    "refusing to install without integrity verification"
                 )
+                return False, (
+                    "Refused: no published SHA-256 for this plugin, "
+                    "so its integrity cannot be verified."
+                )
+
+            logger.info(f"Downloading plugin from: {url}")
+            response = self._fetch_plugin_archive(url)
+            buffer = bytearray()
+            try:
+                for chunk in response.iter_content(self.DOWNLOAD_CHUNK):
+                    buffer.extend(chunk)
+                    if len(buffer) > self.MAX_ARCHIVE_BYTES:
+                        logger.error("Refusing plugin download over 50 MB")
+                        return False, "Refused: plugin archive too large."
+            finally:
+                response.close()
+            archive = bytes(buffer)
+
+            actual_hash = hashlib.sha256(archive).hexdigest()
+            if not hmac.compare_digest(actual_hash, expected_sha256.strip().lower()):
+                logger.error(
+                    f"Plugin hash mismatch: expected {expected_sha256}, "
+                    f"got {actual_hash}"
+                )
+                return False, "Plugin integrity check failed — download may have been tampered with."
 
             # Determine target directory
             if plugin_name:
@@ -338,7 +367,11 @@ class PluginManager:
             if not os.path.exists(target_path):
                 os.makedirs(target_path, exist_ok=True)
             
-            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+            with zipfile.ZipFile(io.BytesIO(archive)) as zip_ref:
+                total_unpacked = sum(i.file_size for i in zip_ref.infolist())
+                if total_unpacked > 200 * 1024 * 1024:
+                    logger.error("Refusing plugin zip expanding over 200 MB")
+                    return False, "Refused: plugin archive expands too large."
                 # Check if all files in the zip are already inside a single top-level folder
                 # with the same name. If so, we extract to self.user_plugins_path directly.
                 first_file = zip_ref.namelist()[0]

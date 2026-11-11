@@ -3,8 +3,8 @@ This script is used to encrypt and decrypt data using the Fernet symmetric encry
 It securely stores the encryption key using the keyring module ONLY if a secure backend is available.
 The encrypted data is stored in a dictionary format and can be retrieved later.
 
-Author: Petr, Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr, Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

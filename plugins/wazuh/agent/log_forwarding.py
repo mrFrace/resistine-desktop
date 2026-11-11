@@ -13,8 +13,8 @@
 # any failure is logged without disturbing the caller. Requires one admin
 # prompt the first time (ossec.conf is root-owned).
 #
-# Author: Resistine Team
-# Copyright: Resistine (c) 2025
+# Author: Phoenix Team
+# Copyright: Phoenix (c) 2025
 # Licensed under the GNU General Public License v2 or later
 
 import os

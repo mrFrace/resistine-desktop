@@ -322,6 +322,7 @@ class TestWindowsPowerShellQuoting:
                 patch.object(wf.os.path, "exists", return_value=True), \
                 patch.object(wf, "get_agent_name", return_value="host-1"), \
                 patch.object(wf, "get_agent_group", return_value="grp"), \
+                patch.object(wf, "_backup_key_is_valid", return_value=True), \
                 patch.object(wf, "_run_privileged", return_value=(True, "")) as rp:
             wf.remove_agent()
             wf.remove_agent(wipe_keys=True)
@@ -390,11 +391,13 @@ class TestWindowsPowerShellQuoting:
 # ===========================================================================
 @pytest.mark.unit
 @pytest.mark.security
+@pytest.mark.skipif(sys.platform == "win32", reason="Linux installer path uses os.getuid")
 class TestLinuxDownload:
     def test_download_goes_through_phoenix_packages(self, tmp_path):
         from plugins.wazuh.agent import wazuh_functions_linux as wf
 
         with patch.object(wf, "_get_os_info", return_value="deb"), \
+                patch.object(wf.phoenix_packages, "platform_key", return_value="linux-amd64"), \
                 patch.object(wf.phoenix_packages, "manifest_url", return_value="https://x/m.json"), \
                 patch.object(wf.tempfile, "mkdtemp", return_value=str(tmp_path)), \
                 patch.object(wf.phoenix_packages, "download_or_none",
@@ -402,8 +405,8 @@ class TestLinuxDownload:
             assert wf.download_package() == str(tmp_path / "a.deb")
         assert dl.call_args.args[0] == str(tmp_path)
 
-    @pytest.mark.parametrize("os_type", ["arch", None])
-    def test_no_package_without_deb_or_rpm(self, os_type):
+    @pytest.mark.parametrize("os_type", [None])
+    def test_no_package_for_an_unknown_family(self, os_type):
         from plugins.wazuh.agent import wazuh_functions_linux as wf
 
         with patch.object(wf, "_get_os_info", return_value=os_type), \

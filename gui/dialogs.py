@@ -11,8 +11,8 @@ operation runs off the GUI thread). Qt widgets may only be touched on the GUI
 thread, so every dialog is marshalled onto it via :func:`_run_on_main`, which
 blocks the calling worker until the user responds and returns the result.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

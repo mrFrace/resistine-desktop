@@ -8,8 +8,8 @@ Usage:
     python tools/translate.py --from en --to de --plugin myplugin
     python tools/translate.py --list-missing --to es
 
-Author: Petr and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -157,7 +157,7 @@ def translate_file(source_lang, target_lang, base_dir, dry_run=False, force=Fals
             target_data[key] = translated
             logger.info(f"  ✓ {translated[:60]}{'...' if len(translated) > 60 else ''}")
         else:
-            logger.error(f"  ✗ Translation failed")
+            logger.error("  ✗ Translation failed")
     
     # Save updated target file
     with open(target_file, 'w', encoding='utf-8') as f:

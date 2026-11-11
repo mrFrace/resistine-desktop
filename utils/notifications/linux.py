@@ -11,8 +11,8 @@ Sending runs on a daemon thread because opening the bus and awaiting the reply
 blocks briefly; the macOS backend's send is async, so this keeps parity (never
 stalls the caller, which is usually the UI thread).
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -237,6 +237,7 @@ def send(title: str, body: str, urgency: str = "normal", on_click=None):
                          dbus_err)
             return
         # Both paths failed — surface it so a silent miss is diagnosable.
+        from utils.i18n import get_text
         logger.warning(
             "Desktop notification not delivered — D-Bus failed (%s) and "
             "notify-send is unavailable. Install libnotify-bin or ensure a "

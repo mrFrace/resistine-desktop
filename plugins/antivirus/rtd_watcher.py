@@ -5,8 +5,8 @@ whenever clamonacc (or clamd) logs a FOUND line.  It handles log
 rotation/truncation, deduplicates rapid-fire detections, and applies a
 global rate limit so the user isn't overwhelmed with notifications.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

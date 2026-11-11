@@ -1,8 +1,8 @@
 """
 Wazuh Agent Functions for Linux
 Handles download, install, start/stop of the Wazuh SIEM agent using systemd and package managers.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -11,6 +11,7 @@ import socket
 import subprocess
 import tempfile
 import shutil
+import re
 
 from utils import settings
 from utils.logger import logger
@@ -19,6 +20,7 @@ from gui.dialogs import CTkPasswordDialog
 from plugins.wazuh.agent import enrollment, phoenix_packages
 from plugins.wazuh.config import (
     WAZUH_MANAGER,
+    WAZUH_MANAGER_ENDPOINT,
     WAZUH_MANAGER_PORT,
     WAZUH_PROTOCOL,
     WAZUH_REGISTRATION_PORT,
@@ -26,10 +28,26 @@ from plugins.wazuh.config import (
     LINUX_WAZUH_DIR_CANDIDATES,
 )
 
+# Values interpolated into privileged `sh -c` strings (deploy env, sed
+# expressions in ossec.conf patching) must be plain tokens — no quotes,
+# spaces, `$`, `;`, `|` or other shell/sed metacharacters. Upstream callers
+# already validate names/groups, but these builders run as root, so they
+# re-check locally (defense in depth, mirroring wazuh_functions_darwin).
+_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _require_safe_tokens(**values):
+    """Raise ValueError if any value is unsafe to interpolate into root sh -c."""
+    for name, value in values.items():
+        if not _SAFE_TOKEN_RE.match(value or ""):
+            raise ValueError(f"unsafe {name} for privileged command: {value!r}")
+
+
 # Deployment-variable prefix passed to the package installer.  Carries the
 # manager address, ports, protocol, agent name, and group so the package's
 # preinstall hook patches ossec.conf accordingly.
 def _deploy_env(agent_name, agent_group):
+    _require_safe_tokens(agent_name=agent_name, agent_group=agent_group)
     return (
         f"WAZUH_MANAGER='{WAZUH_MANAGER}' "
         f"WAZUH_MANAGER_PORT='{WAZUH_MANAGER_PORT}' "
@@ -137,7 +155,7 @@ def get_agent_group():
 
 def needs_reenrollment():
     enrolled = settings.get("wazuh", "enrolled_email", "")
-    current = settings.get("auth", "email", "")
+    current = enrollment.account_identity()
     if enrolled and current and enrolled != current:
         return True
     return False
@@ -158,6 +176,7 @@ def _set_ossec_agent_name(ossec_conf, agent_name):
                                           at the end of <agent> (5.0), or of
                                           <client> in a config kept from 4.x
     """
+    _require_safe_tokens(agent_name=agent_name)
     return (
         f"if grep -q '<agent_name>' '{ossec_conf}'; then "
         f"sed -i 's|<agent_name>.*</agent_name>|<agent_name>{agent_name}</agent_name>|' '{ossec_conf}'; "
@@ -182,6 +201,7 @@ def _set_ossec_enrollment(ossec_conf, agent_name, agent_group):
     the same unique name AND the correct group. Runs after _set_ossec_agent_name
     so the <enrollment> block is guaranteed to exist for the <groups> insert.
     """
+    _require_safe_tokens(agent_name=agent_name, agent_group=agent_group)
     return (
         _set_ossec_agent_name(ossec_conf, agent_name)
         + "\n"
@@ -219,10 +239,12 @@ def _make_agent_state_readable():
     'unknown'. Make the dirs traversable and the files world-readable so
     get_agent_connection() can report connected/pending/disconnected. Guarded so
     a permissions quirk never fails the enroll. (wazuh-agentd truncate-writes
-    the state file, so the mode persists across updates.)
+    the state file, so the mode persists across updates.) The Phoenix packages
+    leave the install dir itself 0750, so it gets search (not read) permission.
     """
     run = f"{LINUX_WAZUH_DIR}/var/run"
     return (
+        f"chmod o+x '{LINUX_WAZUH_DIR}' 2>/dev/null || true; "
         f"chmod o+rx '{LINUX_WAZUH_DIR}/var' '{run}' '{LINUX_WAZUH_DIR}/logs' 2>/dev/null || true; "
         f"chmod o+r '{run}/wazuh-agentd.state' 2>/dev/null || true; "
         f"chmod o+r '{LINUX_WAZUH_DIR}/logs/ossec.log' 2>/dev/null || true"
@@ -247,14 +269,15 @@ def _get_os_info():
     return None
 
 # Package store platform per package family (amd64 only).
-_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm"}
+_PACKAGE_PLATFORMS = {"deb": "linux-amd64", "rpm": "linux-amd64-rpm",
+                      "arch": "linux-amd64-arch"}
 
 
 def package_platform():
     """The package store platform for this machine, or None when none is built.
 
     Debian/Ubuntu get the .deb (linux-amd64), Fedora/RHEL/openSUSE the .rpm
-    (linux-amd64-rpm).
+    (linux-amd64-rpm), Arch the .pkg.tar.zst (linux-amd64-arch).
     """
     if phoenix_packages.platform_key() != "linux-amd64":
         return None
@@ -362,15 +385,17 @@ def get_agent_connection():
         os.path.join(agent_dir, "logs", "ossec.log"),
     )
 
+_DOWNLOAD_TIMEOUT = 60  # seconds per socket operation
+
 def download_package(progress_callback=None):
-    """Download the signed Phoenix agent .deb or .rpm (needs a Phoenix sign-in).
+    """Download the signed Phoenix agent .deb, .rpm or Arch package (needs a Phoenix sign-in).
 
     Returns the verified local path, or None.
     """
     plat = package_platform()
     if not plat:
-        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu and "
-               "Fedora/RHEL/openSUSE (amd64) only.")
+        msg = ("Phoenix builds the Linux agent for Debian/Ubuntu, "
+               "Fedora/RHEL/openSUSE and Arch (amd64) only.")
         logger.error(msg)
         if progress_callback:
             progress_callback(msg)
@@ -385,12 +410,38 @@ def write_env_file(agent_name, agent_group):
 _KEY_BACKUP = os.path.join(settings.get_config_dir(), "wazuh_client.keys")
 _CLIENT_KEYS = f"{LINUX_WAZUH_DIR}/etc/client.keys"
 
+
+def _backup_key_is_valid():
+    """Re-validate the user-owned key backup before root restores it.
+
+    The backup lives in the (user-writable) app config dir but is copied back
+    into the agent's client.keys as root, so its content must be re-checked at
+    use time: read it once (capped at 512 bytes) and require exactly one
+    enrollment key line ("<id> <name> <ip|any> <64 hex>"). On mismatch the
+    restore is skipped — treated as if no backup existed.
+    """
+    try:
+        with open(_KEY_BACKUP, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(512)
+    except OSError as e:
+        logger.warning(f"Could not read client.keys backup: {e}")
+        return False
+    line = content.strip()
+    if "\n" in line or not enrollment._KEY_LINE_RE.match(line):
+        logger.warning(
+            "client.keys backup does not look like a valid enrollment key; "
+            "skipping restore"
+        )
+        return False
+    return True
+
+
 def start_agent():
     if get_agent_status() == "Running":
         return True
-        
-    # Restore key if missing
-    if os.path.exists(_KEY_BACKUP):
+
+    # Restore key if missing (only from a backup that re-validates)
+    if os.path.exists(_KEY_BACKUP) and _backup_key_is_valid():
         script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -414,7 +465,11 @@ def restore_client_key_if_needed():
         
     if not os.path.exists(_KEY_BACKUP):
         return True
-        
+
+    # A backup that fails re-validation is treated as no backup at all.
+    if not _backup_key_is_valid():
+        return True
+
     script = f"""
         if [ ! -s '{_CLIENT_KEYS}' ]; then
             if [ -s '{_KEY_BACKUP}' ]; then
@@ -489,13 +544,16 @@ def build_remove_script(wipe_keys: bool = False) -> str:
 
     # --- Package removal + orphan user/group cleanup ---
     # Recognized package managers run postrm/postun hooks that drop the wazuh
-    # user/group, so we let them handle it. Arch and the no-package-manager
-    # fallback are extraction-based, so they must remove the user/group by hand.
+    # user/group, so we let them handle it. Arch (older installs were
+    # extracted) and the no-package-manager fallback remove them by hand.
     manual_user_cleanup = (
         "userdel wazuh 2>/dev/null || true; groupdel wazuh 2>/dev/null || true"
     )
     if os_type == "arch":
-        pkg_remove = ""
+        # The Phoenix Arch package is pacman-managed; an older bsdtar
+        # extraction is not, so the user/group are still dropped by hand.
+        pkg_remove = ("pacman -Q wazuh-agent >/dev/null 2>&1 && "
+                      "pacman -R --noconfirm wazuh-agent || true")
         cleanup_users = manual_user_cleanup
     elif pkg_mgr == "apt":
         pkg_remove = "apt-get remove -y wazuh-agent || true"
@@ -550,8 +608,8 @@ def remove_agent(wipe_keys: bool = False):
 
     * Package-managed installs (deb/rpm/zypper) are removed by the package
       manager, whose postrm/postun hooks drop the wazuh user and group.
-    * Arch installs are bsdtar-extracted and tracked by no package manager, so
-      they are always torn down by path with a manual user/group cleanup.
+    * Arch installs are removed with pacman when it tracks them (the Phoenix
+      package), then torn down by path with a manual user/group cleanup.
     * Hosts with no recognized package manager fall back to the same manual
       teardown as Arch (the install can only have been extraction-based).
 
@@ -601,6 +659,13 @@ def full_install(progress_callback=None):
     if enrolled:
         agent_name = enrolled.agent_name
         agent_group = enrolled.group
+    # Both values land inside root `sh -c` strings below (deploy env + sed).
+    if not (_SAFE_TOKEN_RE.match(agent_name or "") and _SAFE_TOKEN_RE.match(agent_group or "")):
+        enrollment.discard(enrolled)
+        logger.error("Refusing to install: unsafe agent name or group")
+        if progress_callback:
+            progress_callback("Installation failed")
+        return False
 
     os_type = _get_os_info()
     ossec_conf = f"{LINUX_WAZUH_DIR}/etc/ossec.conf"
@@ -612,15 +677,16 @@ def full_install(progress_callback=None):
         # dnf/zypper pull in the package's dependencies; rpm -U also upgrades.
         install_cmd = _rpm_install_cmd(deploy_env, pkg_path)
     elif os_type == "arch":
-        # No postinst runs when extracting with bsdtar — create the wazuh user/group, extract,
-        # fix ownership, then stamp manager + group into ossec.conf manually
+        # The Arch package carries the .deb's maintainer scripts as its
+        # .INSTALL, so pacman creates the wazuh user and writes the endpoint
+        # and CA into ossec.conf like dpkg does. It is unsigned, hence the
+        # signed-manifest check before this runs; -U also upgrades. Should the
+        # deployment variables not reach the scriptlet, the shipped
+        # placeholder endpoint is replaced here.
         install_cmd = (
-            "(getent group wazuh >/dev/null || groupadd --system wazuh) && "
-            "(getent passwd wazuh >/dev/null || useradd --system --no-create-home "
-            "--home /var/ossec --shell /sbin/nologin -g wazuh wazuh) && "
-            f"bsdtar -xpf '{pkg_path}' -C / && "
-            "chown -R wazuh:wazuh /var/ossec && "
-            f"sed -i \"s|<address>.*</address>|<address>{WAZUH_MANAGER}</address>|\" '{ossec_conf}'"
+            f"{deploy_env} pacman -U --noconfirm '{pkg_path}' && "
+            f"sed -i 's|<endpoint>MANAGER_IP</endpoint>|<endpoint>{WAZUH_MANAGER_ENDPOINT}</endpoint>|' "
+            f"'{ossec_conf}'"
         )
 
     agent_auth = f"{LINUX_WAZUH_DIR}/bin/agent-auth"
@@ -662,7 +728,7 @@ def full_install(progress_callback=None):
 
     if success or is_agent_installed():
         settings.set("wazuh", _APP_INSTALLED, True)
-        settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+        settings.set("wazuh", "enrolled_email", enrollment.account_identity())
         if progress_callback:
             progress_callback("Wazuh agent installed and running")
         return True
@@ -700,6 +766,11 @@ def reenroll_agent():
     if enrolled:
         new_name = enrolled.agent_name
         group = enrolled.group
+    # new_name/group also land unquoted inside sed expressions below.
+    if not (_SAFE_TOKEN_RE.match(new_name or "") and _SAFE_TOKEN_RE.match(group or "")):
+        enrollment.discard(enrolled)
+        return (False, "Unsafe agent name or group")
+    if enrolled:
         register = enrollment.key_write_sh(enrolled.key_file, _CLIENT_KEYS)
     else:
         register = (f"'{agent_auth}' -m '{WAZUH_MANAGER}' -p '{WAZUH_REGISTRATION_PORT}' "

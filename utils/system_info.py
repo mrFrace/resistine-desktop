@@ -19,7 +19,8 @@ from typing import Optional
 def _run(*argv: str) -> Optional[str]:
     try:
         out = subprocess.run(  # nosec B603 - fixed argv, no shell
-            list(argv), capture_output=True, text=True, timeout=3)
+            list(argv), capture_output=True, text=True, timeout=3,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return out.stdout.strip() if out.returncode == 0 else None
     except Exception:
         return None

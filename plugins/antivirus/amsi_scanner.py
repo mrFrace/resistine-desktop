@@ -7,8 +7,8 @@ Each scan is ~1-10ms vs ~300-600ms for MpCmdRun process spawn.
 The module initializes lazily on first use and is safe to import on
 non-Windows platforms (all functions return safe defaults).
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

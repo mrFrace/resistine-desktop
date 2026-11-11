@@ -11,8 +11,8 @@ in main.py) and the notification ``desktop-entry`` hint.
 This is intentionally self-contained (writes to ~/.local/share/applications) so
 it works for an ad-hoc source checkout as well as a packaged build.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

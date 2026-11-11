@@ -4,8 +4,8 @@ A lightweight, non-blocking banner shown over the bottom of the content area —
 the Qt replacement for the CustomTkinter ``ToastNotification``. Used by
 ``AppWindow.show_notification``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

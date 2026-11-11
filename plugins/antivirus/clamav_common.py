@@ -7,8 +7,8 @@ Platform-specific functions (binary paths, daemon registration, FDA checks,
 etc.) live in clamav_platform_{darwin,linux,windows}.py and are accessed
 via the _get_platform() late-import helper.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

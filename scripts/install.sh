@@ -5,8 +5,8 @@
 # If the libraries/venv folder already exists, it prompts the user to delete it before proceeding.
 # Usage: ./install.sh
 
-# Author: P3, Peres J. and the Resistine Team
-# Copyright (c) Resistine 2025
+# Author: P3, Peres J. and the Phoenix Team
+# Copyright (c) Phoenix 2025
 # Licensed under the GNU General Public License v2 or later
 
 # Print commands and their arguments as they are executed
@@ -201,10 +201,10 @@ Darwin*)
 		python3 -m venv .venv
 	fi
 
-	# Build the distribution (sign, create DMG, notarize)
-	echo ""
-	echo "Running distribution build..."
-	./scripts/build/build-distribution.sh
+	# Dev install stops here — run.sh (called below) installs the Python
+	# dependencies into the venv and launches the app from source.
+	# For a signed/notarized release build run:
+	#   ./scripts/build/build-distribution.sh
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)

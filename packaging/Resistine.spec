@@ -21,7 +21,7 @@ IS_WINDOWS = sys.platform == "win32"
 APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
 BUNDLE_ID = 'com.resistine.desktop'
-VERSION = '2026.07.20-rc'
+VERSION = '2026.11.06'
 # Build ID: tells builds of one VERSION apart (package versions, file names,
 # the version line in the app). UTC minutes, so every rebuild sorts after the
 # one before. The build scripts set PHOENIX_BUILD so that every package made
@@ -95,6 +95,24 @@ hiddenimports = [
 # matrix_transport.available() is False ("lacks Matrix encryption support").
 # nio.crypto picks its E2EE backend at import time (vodozemac, a Rust
 # extension), so collect both packages whole.
+#
+# HARD GATE: collect_submodules() silently returns nothing when the package
+# isn't importable in the BUILD venv — that shipped a DMG with vodozemac but
+# no nio ("This build lacks Matrix encryption support" on every install).
+# A build without working E2EE must fail here, not on the customer's screen.
+try:
+    from nio.crypto import ENCRYPTION_ENABLED as _NIO_E2EE
+except ImportError as _exc:
+    raise SystemExit(
+        f"Build venv lacks matrix-nio[e2e] (import failed: {_exc}). "
+        "Install scripts/requirements/requirements-mac.txt into the build "
+        "venv — refusing to produce a chat-broken bundle."
+    )
+if not _NIO_E2EE:
+    raise SystemExit(
+        "matrix-nio is importable but its E2EE backend (vodozemac) is not "
+        "enabled in the build venv — refusing to produce a chat-broken bundle."
+    )
 hiddenimports += collect_submodules('nio')
 _vodozemac_datas, _vodozemac_binaries, _vodozemac_hidden = collect_all('vodozemac')
 datas += _vodozemac_datas
@@ -327,10 +345,10 @@ if IS_MACOS:
                 }
             ],
 
-            # Sparkle Auto-Update
-            'SUFeedURL': 'https://resistine.github.io/appcast.xml',
-            'SUPublicEDKey': '2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls=',
-            'SUEnableAutomaticChecks': True,
-            'SUScheduledCheckInterval': 14400,  # 4 hours (base; Python scheduler adds jitter)
+            # Sparkle Auto-Update — DISABLED for the Phoenix migration.
+            # No SUFeedURL and no SUPublicEDKey: the old feed and signing key
+            # belong to Resistine; a Phoenix build must never consult them.
+            # Re-enable only with a Phoenix-owned feed + a fresh EdDSA key.
+            'SUEnableAutomaticChecks': False,
         },
     )

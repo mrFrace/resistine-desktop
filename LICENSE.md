@@ -1,5 +1,5 @@
-    Resistine AI EndPoint Detection and Response (AI EDR) for Windows, Mac and Linux Desktops
-    Copyright (C) 2025 Resistine
+    Phoenix AI EndPoint Detection and Response (AI EDR) for Windows, Mac and Linux Desktops
+    Copyright (C) 2025-2026 Phoenix
 
     This program is free software; you can redistribute it and/or
     modify it under the terms of the GNU General Public License

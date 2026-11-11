@@ -84,8 +84,20 @@ class Manifest:
 
 
 def packages_url() -> str:
-    """Base URL of the package store (PHOENIX_PACKAGES_URL overrides it)."""
-    return (os.environ.get("PHOENIX_PACKAGES_URL") or PACKAGES_URL).rstrip("/")
+    """Base URL of the package store (PHOENIX_PACKAGES_URL overrides it).
+
+    _get() sends the MAS Bearer token to whatever this returns, so the
+    override must be https:// — anything else is rejected and the pinned
+    default is used instead.
+    """
+    override = os.environ.get("PHOENIX_PACKAGES_URL")
+    if override:
+        if override.startswith("https://"):
+            return override.rstrip("/")
+        logger.warning(
+            "[PKG] Ignoring PHOENIX_PACKAGES_URL: the override must start "
+            "with https:// (the MAS token is sent there). Using the default.")
+    return PACKAGES_URL.rstrip("/")
 
 
 def platform_key() -> Optional[str]:

@@ -1,7 +1,7 @@
 """
 VPN Functions for WireGuard on macOS
 Author: Jacqueline Edoro
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -643,6 +643,7 @@ def save_vpn_configuration(vpn_config_json, config_name="phoenix"):
 
 
 import time as _time
+from utils.i18n import get_text
 
 _extension_cache = {"value": None, "timestamp": 0}
 _EXTENSION_CACHE_TTL = 2  # seconds

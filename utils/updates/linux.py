@@ -6,8 +6,8 @@ Linux entries (sparkle:os="linux"), presents a rich update dialog, downloads
 a signed tarball, verifies its Ed25519 signature, extracts in-place over the
 running source tree, and restarts the app.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -28,7 +28,9 @@ from utils.updates.appcast import AppcastItem, get_latest_linux_update
 from utils.updates.version import get_current_version, get_project_root
 
 # Ed25519 public key (same key pair used by macOS Sparkle signatures)
-_ED25519_PUBLIC_KEY_B64 = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+# Intentionally empty: the old key belongs to Phoenix. A Phoenix
+# update key must be a FRESH pair generated in CI — never reuse this slot.
+_ED25519_PUBLIC_KEY_B64 = ""
 
 # Module state
 _app = None
@@ -191,11 +193,22 @@ def _start_download(item: AppcastItem, dialog):
 
 def _download_worker(item: AppcastItem, dialog):
     """Background thread: download, verify signature, apply update."""
-    tmp_dir = os.path.join(tempfile.gettempdir(), "resistine-update")
-    os.makedirs(tmp_dir, exist_ok=True)
+    # Fresh 0700 directory per download: a fixed, pre-creatable path in the
+    # shared /tmp lets another local user pre-plant a symlink (write-anywhere)
+    # or swap the archive between verify and extract (TOCTOU).
+    tmp_dir = tempfile.mkdtemp(prefix="phoenix-update-")
     tmp_path = os.path.join(tmp_dir, "update.tar.gz")
 
     try:
+        # The appcast is remote input: never fetch an enclosure over
+        # anything but HTTPS, whatever the XML says.
+        if not str(item.download_url).startswith("https://"):
+            _app.after(
+                0, dialog.show_error,
+                "Update refused: download URL is not HTTPS.", None,
+            )
+            return
+
         # --- Download with progress ---
         resp = requests.get(
             item.download_url, stream=True, timeout=(30, 120)
@@ -243,10 +256,16 @@ def _download_worker(item: AppcastItem, dialog):
                 _cleanup(tmp_path)
                 return
         else:
-            logger.warning(
-                "[UPDATE-LINUX] No signature in appcast entry, skipping "
-                "verification"
+            logger.error(
+                "[UPDATE-LINUX] Appcast entry has no edSignature — refusing "
+                "unsigned update."
             )
+            _app.after(
+                0, dialog.show_error,
+                "Update refused: the update feed entry is unsigned.", None,
+            )
+            _cleanup(tmp_path)
+            return
 
         # --- Apply update ---
         _app.after(
@@ -351,7 +370,9 @@ def _apply_update(archive_path: str) -> tuple[bool, str]:
                 dest = os.path.normpath(
                     os.path.join(project_root, member.name)
                 )
-                if not dest.startswith(os.path.normpath(project_root)):
+                root = os.path.normpath(project_root)
+                # commonpath, not startswith: "/app-evil" startswith "/app".
+                if os.path.commonpath([root, dest]) != root:
                     logger.warning(
                         f"[UPDATE-LINUX] Skipping path traversal: "
                         f"{member.name}"
@@ -406,9 +427,15 @@ def _restart_app():
 
 
 def _cleanup(path: str):
-    """Remove a temporary file, ignoring errors."""
+    """Remove a temporary file and its per-download directory, ignoring errors."""
     try:
         if os.path.exists(path):
             os.unlink(path)
+    except OSError:
+        pass
+    try:
+        parent = os.path.dirname(path)
+        if os.path.basename(parent).startswith("phoenix-update-"):
+            os.rmdir(parent)
     except OSError:
         pass

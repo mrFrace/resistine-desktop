@@ -5,8 +5,8 @@ All logic lives in clamav_common.py (shared) and clamav_platform_*.py
 call-sites (``clamav.scan_path()``, ``clamav.start_clamd()``, etc.)
 continue to work unchanged.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

@@ -5,8 +5,8 @@ plugin manager and every plugin's ``super().__init__(...)`` keep working
 unchanged; the difference is that icons are ``QIcon``/``QPixmap`` and
 ``create_main_screen()`` returns a ``QWidget`` instead of a CTk frame.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -22,6 +22,10 @@ from gui import theme
 
 class BasePlugin:
     """Base class for plugins, providing common metadata and helpers."""
+
+    # Hidden plugins stay installed and loaded but get no sidebar entry or
+    # Dashboard card (e.g. the Store).
+    hidden = False
 
     status_map = {
         "ok": "OK",

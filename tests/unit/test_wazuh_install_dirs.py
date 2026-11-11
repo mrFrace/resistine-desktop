@@ -89,3 +89,10 @@ class TestRemoveScriptSparesSystemManagedAgent:
             script = linux.build_remove_script(wipe_keys=True)
         assert "rm -rf '/opt/phoenix-agent'" in script
         assert "wazuh-control' stop" in script
+
+    def test_arch_install_is_removed_with_pacman(self):
+        with _only_dirs("/opt/phoenix-agent", app_installed=True), \
+                patch.object(linux, "_get_os_info", return_value="arch"):
+            script = linux.build_remove_script(wipe_keys=True)
+        assert "pacman -R --noconfirm wazuh-agent" in script
+        assert "rm -rf '/opt/phoenix-agent'" in script

@@ -6,8 +6,8 @@ new_version, release_notes_html, on_install, on_skip, on_remind_later,
 on_restart)`` plus ``cancelled``, ``set_download_progress(fraction, status)``,
 ``show_restart_prompt()`` and ``show_error(message, on_retry=None)``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

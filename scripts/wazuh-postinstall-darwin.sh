@@ -9,6 +9,12 @@
 
 set -euo pipefail
 
+# H1: everything this script creates in /tmp (xtrace log, status tmp files,
+# work dir) is private to its owner by default.  The status file is explicitly
+# opened up (chmod 644) for the unprivileged polling app; the log — which the
+# xtrace below writes to — stays 0600.
+umask 077
+
 # --- Argument Parsing ---
 PKG_PATH=""
 AGENT_NAME=""
@@ -83,11 +89,46 @@ if [ ! -f "$PKG_PATH" ]; then
     exit 1
 fi
 
+# --- H2: refuse pre-planted /tmp paths ---
+# This script runs as root while STATUS_FILE and LOG_FILE live in the sticky,
+# world-writable /tmp, where another local user can pre-create a symlink
+# (macOS follows symlinks in sticky directories) or a foreign-owned file.
+# Never write through such a path.
+refuse_unsafe_path() {
+    local p="$1"
+    if [ -L "$p" ]; then
+        echo "Refusing symlink: $p" >&2
+        exit 1
+    fi
+    if [ -e "$p" ]; then
+        local owner
+        owner="$(stat -f %u "$p" 2>/dev/null || stat -c %u "$p" 2>/dev/null || echo '')"
+        if [ "$owner" != "$(id -u)" ] && [ "$owner" != "0" ]; then
+            echo "Refusing foreign-owned path: $p" >&2
+            exit 1
+        fi
+    fi
+}
+refuse_unsafe_path "$STATUS_FILE"
+refuse_unsafe_path "$LOG_FILE"
+
 # --- Helpers ---
 write_status() {
-    local tmp="${STATUS_FILE}.tmp"
+    # H2: create the temp file with an unpredictable name via mktemp (O_EXCL,
+    # 0600 under umask 077) so a pre-planted "${STATUS_FILE}.tmp" symlink can
+    # never redirect a root write; rename over STATUS_FILE only after checking
+    # it has not been swapped for a symlink.
+    local tmp
+    tmp="$(mktemp "${STATUS_FILE}.XXXXXX")"
     printf '%s' "$1" > "$tmp"
-    mv "$tmp" "$STATUS_FILE"
+    # The unprivileged app polls this file — it must stay world-readable.
+    chmod 644 "$tmp"
+    if [ -L "$STATUS_FILE" ]; then
+        rm -f "$tmp"
+        echo "Refusing symlink: $STATUS_FILE" >&2
+        exit 1
+    fi
+    mv -f "$tmp" "$STATUS_FILE"
 }
 
 # Binary overrides — let the test harness substitute fakes without us having to
@@ -132,7 +173,11 @@ KEY_BACKUP="$KEY_BACKUP_OVERRIDE"
 KEYCHAIN="/Library/Keychains/System.keychain"
 KC_SERVICE="com.resistine.wazuh.agent"
 KC_ACCOUNT="client_key"
-AGENT_AUTH_LOG="${LOG_FILE%.log}-agent-auth.log"
+# H2: agent-auth output goes into a fresh private directory created by this
+# script (mktemp -d: 0700, unpredictable name), never a predictable bare-/tmp
+# path another local user could have pre-planted.
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/resistine-wazuh-postinstall.XXXXXX")"
+AGENT_AUTH_LOG="$WORK_DIR/agent-auth.log"
 
 # Never restore a stale client.keys: either the Phoenix API enrolled the agent
 # server side in the user's group (--key-file), or agent-auth registers it
@@ -148,6 +193,9 @@ MAX_ENROLL_ATTEMPTS=3
 ATTEMPTS="$(seq 1 "$MAX_ENROLL_ATTEMPTS")"
 
 if [ -n "$KEY_FILE" ]; then
+    # H1: suspend xtrace around every command that touches the key material,
+    # otherwise `set -x` writes the key into the install log on stderr.
+    { set +x
     # Same shape check as plugins/wazuh/agent/enrollment.py KEY_LINE_PATTERN:
     # the file sits in the user's temp dir, so only a key line is accepted.
     KEY_LINE="$(head -c 512 "$KEY_FILE" 2>/dev/null | head -n 1 || true)"
@@ -161,6 +209,7 @@ if [ -n "$KEY_FILE" ]; then
     else
         ENROLLMENT_ERROR="key_invalid"
     fi
+    set -x; } 2>/dev/null
     ATTEMPTS=""  # no agent-auth (BSD `seq 1 0` would count down)
 fi
 
@@ -236,9 +285,16 @@ write_status '{"status":"running","step":"key_backup","pid":'"$$"'}'
 if [ -s "$CLIENT_KEYS" ]; then
     mkdir -p "$(dirname "$KEY_BACKUP")"
     cp "$CLIENT_KEYS" "$KEY_BACKUP"
-    "$SECURITY_BIN" add-generic-password -U \
-        -k "$KEYCHAIN" -s "$KC_SERVICE" -a "$KC_ACCOUNT" \
-        -w "$(cat "$CLIENT_KEYS")" 2>/dev/null || true
+    # M2: `security -i` reads the command from stdin, so the key never appears
+    # in argv (where any local user can read it via ps).  H1: xtrace is
+    # suspended so the key does not land in the install log either.  printf is
+    # a shell builtin, so the command substitution's value stays in-process.
+    { set +x
+    printf '%s "%s"\n' \
+        "add-generic-password -U -k \"$KEYCHAIN\" -s \"$KC_SERVICE\" -a \"$KC_ACCOUNT\" -w" \
+        "$(cat "$CLIENT_KEYS")" \
+        | "$SECURITY_BIN" -i 2>/dev/null || true
+    set -x; } 2>/dev/null
 fi
 
 # --- Step 5: Bootstrap Launchd ---
@@ -299,3 +355,9 @@ if [ -f "$INSTALLER_PLIST" ]; then
     "$LAUNCHCTL_BIN" bootout system "$INSTALLER_PLIST" 2>/dev/null || true
     rm -f "$INSTALLER_PLIST"
 fi
+
+# --- H1: remove the install log on success ---
+# The log is only kept for support when the install fails (and even then it is
+# 0600 under umask 077, so no other user can read it).
+rm -rf "$WORK_DIR"
+rm -f "$LOG_FILE"

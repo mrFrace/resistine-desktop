@@ -118,12 +118,18 @@ def _copy_app_bundle(src: str, dest: str) -> bool:
     except PermissionError:
         pass
 
-    # Elevated fallback via osascript (prompts the user for password)
-    script = (
-        f'do shell script "rm -rf \\"{dest}\\" '
-        f'&& cp -pR \\"{src}\\" \\"{dest}\\"" '
-        f"with administrator privileges"
+    # Elevated fallback via osascript (prompts the user for password).
+    # Two quoting layers, both mandatory: shlex.quote so the shell treats the
+    # paths as literals ($(...) in a volume name must not run as root), then
+    # AppleScript string escaping for the generated command as a whole.
+    import shlex
+    sh_cmd = (
+        f"rm -rf {shlex.quote(dest)} && "
+        f"cp -pR {shlex.quote(src)} {shlex.quote(dest)}"
     )
+    as_literal = sh_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'do shell script "{as_literal}" with administrator privileges'
+
     result = subprocess.run(
         ["osascript", "-e", script],
         capture_output=True, timeout=120,

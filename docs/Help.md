@@ -48,7 +48,7 @@ connection. If a feature seems unavailable, connect the VPN first.
 Phoenix AI EndPoint Detection and Response (AI EDR)
 for Windows, macOS, and Linux desktops.
 
-Copyright (C) 2025 Resistine
+Copyright (C) 2025 Phoenix
 
 This program is free software under the terms of the GNU General Public
 License v2 or later. Phoenix comes with ABSOLUTELY NO WARRANTY.

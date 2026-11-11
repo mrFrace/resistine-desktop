@@ -60,6 +60,8 @@ class TestRequestPeer:
         assert kw["headers"]["Authorization"] == "Bearer tok-1"
         assert kw["json"] == {"public_key": "CLIENTPUB=", "hostname": "laptop"}
         assert kw["verify"] is True and kw["timeout"]
+        # The Bearer token must never follow a redirect off the host.
+        assert kw["allow_redirects"] is False
 
     def test_api_url_override(self, api, monkeypatch):
         monkeypatch.setenv("PHOENIX_API_URL", "http://127.0.0.1:8099/")

@@ -1,8 +1,8 @@
-# Resistine I18n System Documentation
+# Phoenix I18n System Documentation
 
 ## Overview
 
-The Resistine Internationalization (i18n) system provides centralized translation management using JSON files with automatic translation support via OpenAI.
+The Phoenix Internationalization (i18n) system provides centralized translation management using JSON files with automatic translation support via OpenAI.
 
 
 ## Quick Start
@@ -12,7 +12,7 @@ The Resistine Internationalization (i18n) system provides centralized translatio
     from utils.i18n import get_text
 
     # Simple text retrieval
-    print(get_text('main.app_title'))  # "Resistine"
+    print(get_text('main.app_title'))  # "Phoenix"
 
     # With formatting parameters
     error_msg = get_text('main.helper.registration_error', error="Permission denied")
@@ -45,8 +45,8 @@ The Resistine Internationalization (i18n) system provides centralized translatio
 
     {
       "category.key": "Text with {placeholder}",
-      "main.app_title": "Resistine",
-      "main.registration.welcome": "Welcome to Resistine"
+      "main.app_title": "Phoenix",
+      "main.registration.welcome": "Welcome to Phoenix"
     }
 
 **Naming Convention**: `module.category.specific_key`

@@ -12,8 +12,8 @@ fetch runs on a worker thread and is marshalled back via app.after(0, ...) — t
 build never blocks on it. Installed/local rows render immediately and remote-only
 ones fold in when they arrive.
 
-Author: Peres J., P3 and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Peres J., P3 and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

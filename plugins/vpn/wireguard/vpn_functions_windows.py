@@ -5,8 +5,8 @@ WireGuard installation checks, and service status wrappers.
 This module does NOT manage tunnel connect/disconnect directly.
 Use vpn_windows_client.py for all tunnel control.
 
-Authors: Merhawi, Johann Gawron, and the Resistine Team
-Copyright (c) Resistine 2025
+Authors: Merhawi, Johann Gawron, and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

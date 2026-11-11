@@ -12,8 +12,8 @@ worker-thread + ``app.after(0, ...)`` marshalling logic keeps working verbatim
 against Qt. ``after`` is thread-safe: a call from any thread is marshalled onto
 the GUI thread via a queued signal before a ``QTimer`` is armed.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

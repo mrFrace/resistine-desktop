@@ -173,6 +173,14 @@ if (Test-Path $vpnServiceSrc) {
 } else {
     Write-Warning "windows_vpn_service.py not found at $vpnServiceSrc"
 }
+# The service validates tunnel names with the shared validator; it runs as a
+# standalone script under the system Python, so ship the module next to it.
+$configValidationSrc = Join-Path $ProjectRoot "plugins\vpn\wireguard\config_validation.py"
+if (Test-Path $configValidationSrc) {
+    Copy-Item $configValidationSrc (Join-Path $vpnServiceDir "config_validation.py") -Force
+} else {
+    Write-Warning "config_validation.py not found at $configValidationSrc"
+}
 
 # Download bundled dependency installers (Python, WireGuard)
 Write-Host "Downloading bundled dependency installers..."
@@ -207,9 +215,42 @@ if (-not (Test-Path $issScript)) {
 # ArchitecturesInstallIn64BitMode and ArchitecturesAllowed correctly.
 $targetArch = if ($IsARM64) { "arm64" } else { "x64" }
 Write-Host "Building Windows installer (.exe) with Inno Setup ($targetArch)..."
-& $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DAppBuild=$build" "/DSourceDir=$sourceDir" "/DOutputDir=$outputDir" "/DTargetArch=$targetArch" $issScript
-if ($LASTEXITCODE -ne 0) {
-    throw "Inno Setup compilation failed with exit code $LASTEXITCODE."
+
+# ISCC writes Setup.exe, then re-opens it to stamp the icon/version resources.
+# That re-open fails with "EndUpdateResource failed (110)" when something still
+# holds the freshly written file: Defender's real-time scan, the Search indexer,
+# or Explorer previewing the folder. All of those are far more likely under a
+# user profile folder (Desktop, OneDrive) than under %TEMP%, so compile into a
+# fresh private temp folder, retry the transient lock a few times, and only
+# then move the finished .exe into dist\installers.
+$innoTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("phoenix-iscc-" + [System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Force -Path $innoTempDir | Out-Null
+$maxAttempts = 3
+try {
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        Get-ChildItem -Path $innoTempDir -File -ErrorAction SilentlyContinue | Remove-Item -Force
+        & $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DAppBuild=$build" "/DSourceDir=$sourceDir" "/DOutputDir=$innoTempDir" "/DTargetArch=$targetArch" $issScript
+        if ($LASTEXITCODE -eq 0) { break }
+        if ($attempt -eq $maxAttempts) {
+            throw ("Inno Setup compilation failed with exit code $LASTEXITCODE after $maxAttempts attempts. " +
+                   "If the error is 'EndUpdateResource failed (110)', exclude '$innoTempDir' (or `$env:TEMP) " +
+                   "from your antivirus real-time scanning and rerun.")
+        }
+        Write-Warning "Inno Setup exited with code $LASTEXITCODE (attempt $attempt of $maxAttempts); retrying in 5 s..."
+        Start-Sleep -Seconds 5
+    }
+
+    $built = @(Get-ChildItem -Path $innoTempDir -Filter "*.exe" -File)
+    if ($built.Count -eq 0) {
+        throw "Inno Setup reported success but produced no .exe in $innoTempDir"
+    }
+    foreach ($f in $built) {
+        $dest = Join-Path $outputDir $f.Name
+        if (Test-Path $dest) { Remove-Item $dest -Force }
+        Move-Item -Path $f.FullName -Destination $dest -Force
+    }
+} finally {
+    Remove-Item -Path $innoTempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ""

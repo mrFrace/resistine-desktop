@@ -20,14 +20,15 @@ Phase 2 — Privileged work (single admin prompt):
 Phase 3 — App bundle removal (privileged if needed):
   - Remove the .app bundle from /Applications (admin rm -rf)
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
 import os
 import shutil
 import subprocess
+import uuid
 import sys
 
 from utils.logger import logger
@@ -146,7 +147,11 @@ class _UserCancelled(Exception):
 # ---------------------------------------------------------------------------
 
 
-_STEP_LOG = "/tmp/resistine-uninstall.log"
+# Per-run unpredictable path: a FIXED name in world-writable /tmp lets any
+# local user pre-plant a symlink that root then truncates/appends to
+# (e.g. -> /etc/pam.d/sudo). 128 bits of uuid4 defeats pre-planting, and the
+# sticky bit stops other users renaming the file once it exists.
+_STEP_LOG = f"/tmp/phoenix-uninstall-{uuid.uuid4().hex}.log"
 
 
 def _instrument_cmds(cmds):

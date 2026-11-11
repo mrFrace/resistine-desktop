@@ -124,7 +124,8 @@ def _run(argv: list) -> Optional[subprocess.CompletedProcess]:
     try:
         return subprocess.run(  # nosec B603 - absolute path from shutil.which, validated args, no shell
             argv, capture_output=True, text=True, timeout=PROBE_TIMEOUT_S,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"})
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug(f"[MITIGATIONS] probe {argv[0]} failed: {e}")
         return None

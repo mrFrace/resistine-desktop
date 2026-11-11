@@ -19,8 +19,8 @@ Usage:
     updates.check_for_updates() # Manual "Check for Updates" button
     updates.shutdown()          # App closing
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -113,11 +113,28 @@ _scheduler = _UpdateScheduler()
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# UPDATES DISABLED — Phoenix migration.
+#
+# The old feed (resistine.github.io) belongs to Resistine and must never be
+# consulted by a Phoenix build: an update from that channel would be code we
+# no longer control. Every public entry point below is a hard no-op until
+# Phoenix-owned update infrastructure (new feed host + fresh signing keys)
+# exists. Re-enabling means: new appcast URL, new Ed25519/EdDSA keypair
+# generated in CI, and the backends re-wired — never just flipping this flag
+# with the old URLs still in place.
+# ---------------------------------------------------------------------------
+UPDATES_ENABLED = False
+
+
 def init(app):
     """Initialize the platform-specific update backend and start the scheduler.
 
     Call once from main.py after the window is created.
     """
+    if not UPDATES_ENABLED:
+        logger.info("[UPDATE] Updates disabled pending Phoenix update infrastructure")
+        return
     if _backend is None:
         logger.warning("[UPDATE] No update backend for this platform")
         return
@@ -125,8 +142,8 @@ def init(app):
     _backend.init_updater(app)
 
     if _backend.is_available():
-        # macOS Sparkle and Windows WinSparkle manage their own background
-        # check timers.  Only start the Python scheduler on Linux.
+        # The platform backends manage their own background check timers.
+        # Only start the Python scheduler on Linux.
         if _PLATFORM == "Linux":
             _scheduler.start()
 
@@ -136,14 +153,14 @@ def check_for_updates():
 
     Returns "update_available", "up_to_date", or "error".
     """
-    if _backend is None:
+    if not UPDATES_ENABLED or _backend is None:
         return "error"
     return _backend.check_for_updates()
 
 
 def is_available():
     """Return True if the update backend is operational on this platform."""
-    if _backend is None:
+    if not UPDATES_ENABLED or _backend is None:
         return False
     return _backend.is_available()
 

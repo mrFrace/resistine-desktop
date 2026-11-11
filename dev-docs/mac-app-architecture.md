@@ -1,17 +1,17 @@
-# Resistine macOS App Architecture
+# Phoenix macOS App Architecture
 
-This document describes the architecture of the Resistine macOS application, with a focus on how privileged components (like the VPN Network Extension) integrate with the main Python UI.
+This document describes the architecture of the Phoenix macOS application, with a focus on how privileged components (like the VPN Network Extension) integrate with the main Python UI.
 
 ## Overview
 
-Resistine is a cross-platform security application with a **Python/CustomTkinter UI** that embeds native **Swift components** for privileged macOS operations.
+Phoenix is a cross-platform security application with a **Python/CustomTkinter UI** that embeds native **Swift components** for privileged macOS operations.
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Resistine.app (PyInstaller)                  │
+│                    Phoenix.app (PyInstaller)                  │
 ├─────────────────────────────────────────────────────────────────┤
 │  Contents/                                                      │
 │  ├── MacOS/                                                     │
-│  │   ├── Resistine             ← Python executable              │
+│  │   ├── Phoenix             ← Python executable              │
 │  │   └── resistine-vpn-cli     ← Swift VPN Controller           │
 │  ├── Frameworks/               ← Python framework + deps        │
 │  ├── Resources/                                                 │
@@ -30,7 +30,7 @@ Python Plugin (UI)
        │
        │ subprocess.run(["resistine-vpn-cli", "start|stop|status"])
        ▼
-Swift CLI Tool (Resistine.app/Contents/MacOS/)
+Swift CLI Tool (Phoenix.app/Contents/MacOS/)
        │
        │ NetworkExtension / SystemConfiguration APIs
        ▼
@@ -56,7 +56,7 @@ macOS Kernel / System Services
 macOS requires strict code signing for privileged components. Here's the signing hierarchy:
 
 ```
-Resistine.app (signed with Developer ID Application)
+Phoenix.app (signed with Developer ID Application)
 ├── resistine-vpn-cli (signed with Developer ID + provisioning profile)
 └── network-extension.appex (signed with Developer ID + provisioning profile)
 ```
@@ -83,7 +83,7 @@ Follow this guide when adding a new macOS-specific privileged component (e.g., S
 1. **Create a new Xcode project** or add targets to the existing `wireguard-apple.xcodeproj`:
    ```
    parent-directory/
-   ├── Resistine-Desktop/        ← Python UI
+   ├── phoenix-desktop/        ← Python UI
    └── wireguard-apple/          ← Swift components (or new project)
    ```
 
@@ -305,11 +305,11 @@ security cms -D -i /path/to/embedded.provisionprofile | grep -A1 "Name"
 
 | Component | Source Location | Installed Location |
 |-----------|----------------|-------------------|
-| Python UI | `Resistine-Desktop/` | `Resistine.app/Contents/MacOS/` |
-| Python plugins | `plugins/` | `Resistine.app/Contents/Resources/plugins/` |
+| Python UI | `phoenix-desktop/` | `Phoenix.app/Contents/MacOS/` |
+| Python plugins | `plugins/` | `Phoenix.app/Contents/Resources/plugins/` |
 | Swift project | `vpn-apple/` | — |
-| CLI tool | `resistine-vpn-cli/` | `Resistine.app/Contents/MacOS/` |
-| Network Extension | `network-extension/` | `Resistine.app/Contents/PlugIns/` |
+| CLI tool | `resistine-vpn-cli/` | `Phoenix.app/Contents/MacOS/` |
+| Network Extension | `network-extension/` | `Phoenix.app/Contents/PlugIns/` |
 
 ---
 

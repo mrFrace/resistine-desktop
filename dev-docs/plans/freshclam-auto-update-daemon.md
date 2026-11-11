@@ -54,7 +54,7 @@ comments were updated to say "scheduled mark" instead of "StartInterval."
   branch must preserve today's exact behavior** — the in-process scheduler keeps starting unconditionally on
   those platforms as it does now ([main.py:240-241](plugins/antivirus/main.py#L240-L241),
   [:888-889](plugins/antivirus/main.py#L888-L889)). Net effect on Linux/Windows: **zero behavior change.**
-- **One repo only — Resistine-Desktop.** No work in the ClamAV-Mac sibling repo: the `freshclam` binary
+- **One repo only — phoenix-desktop.** No work in the ClamAV-Mac sibling repo: the `freshclam` binary
   already ships (`scripts/build/clamav-artifacts/binaries/freshclam` → copied to `Contents/Helpers/freshclam`
   and signed at build-distribution.sh:348 & :635). We only *schedule* the existing binary; we do not rebuild
   it, change its behavior, or touch CVD certs. ClamAV-Mac's role (compiling the binaries + certs) is unaffected.
@@ -65,7 +65,7 @@ comments were updated to say "scheduled mark" instead of "StartInterval."
 
 ClamAV's signature DBs (`daily.cvd`, `main.cvd`, `bytecode.cvd`) are published by Cisco/Talos
 continuously (event-driven, several times/day for `daily`); clients are expected to poll
-periodically. Today Resistine updates signatures two ways on macOS:
+periodically. Today Phoenix updates signatures two ways on macOS:
 
 1. **In-process scheduler** in `plugins/antivirus/main.py` (`_auto_update_loop`, lines 950–1019):
    a daemon thread that runs `freshclam` daily at 4 AM ±2h jitter — **only while the app is open**.
@@ -75,9 +75,9 @@ The gap: if the app isn't running, signatures go stale. We want **OS-level** upd
 even when the app is closed, on a rolling **4h + random(0–60min)** cadence ("since last check",
 minimum spacing always ≥4h).
 
-Verified on this machine: there is **no existing Resistine freshclam daemon** and **no
+Verified on this machine: there is **no existing Phoenix freshclam daemon** and **no
 clamd/clamonacc daemon currently loaded** (`launchctl print system/com.resistine.desktop.*`
-returns nothing; `/Library/LaunchDaemons/` has no Resistine plists). The system dir
+returns nothing; `/Library/LaunchDaemons/` has no Phoenix plists). The system dir
 `/Library/Application Support/Resistine/clamav/` *does* exist (postinstall ran here), and its
 `freshclam.conf` is the app's own. A separate **Homebrew** ClamAV exists in PATH
 (`/opt/homebrew/bin/freshclam`) — irrelevant to the app, different binary + DB dir, no service —
@@ -104,18 +104,18 @@ So this LaunchDaemon is genuinely new and won't collide with anything.
 Modeled on `com.resistine.desktop.clamd.plist`. Auto-bundles into `Contents/Library/LaunchDaemons/`
 via the existing `*.plist` glob in `build-distribution.sh:446-448` — no build-script change for the plist.
 - `Label`: `com.resistine.desktop.freshclam`
-- `ProgramArguments`: `["/bin/bash", "/Applications/Resistine.app/Contents/Helpers/freshclam-update.sh"]`
+- `ProgramArguments`: `["/bin/bash", "/Applications/Phoenix.app/Contents/Helpers/freshclam-update.sh"]`
   (explicit `/bin/bash` because the script uses `$RANDOM`, which POSIX `/bin/sh` lacks)
 - `RunAtLoad`: `true`; `KeepAlive`: `true` (bare bool — any exit of the infinite-loop script is
   unexpected → relaunch); `ThrottleInterval`: `30`
 - `UserName`: `root`, `GroupName`: `wheel`
-- `EnvironmentVariables`: `CVD_CERTS_DIR=/Applications/Resistine.app/Contents/certs`,
+- `EnvironmentVariables`: `CVD_CERTS_DIR=/Applications/Phoenix.app/Contents/certs`,
   `SSL_CERT_FILE=/etc/ssl/cert.pem` (matches `clamav_env()` / the clamd plist)
 - `StandardOutPath` / `StandardErrorPath`: `/Library/Application Support/Resistine/clamav/log/freshclam-daemon.{stdout,stderr}.log`
 
 ### `scripts/clamav/freshclam-update.sh`
 First-party wrapper (NOT a downloaded artifact, so no `checksums.txt` entry needed). Behavior:
-- `#!/bin/bash`, `set -u`. Constants: `FRESHCLAM=/Applications/Resistine.app/Contents/Helpers/freshclam`,
+- `#!/bin/bash`, `set -u`. Constants: `FRESHCLAM=/Applications/Phoenix.app/Contents/Helpers/freshclam`,
   `CONF=/Library/Application Support/Resistine/clamav/freshclam.conf`.
 - If `$FRESHCLAM` or `$CONF` missing: log + `sleep 3600; exit 0` (avoids KeepAlive hot-loop;
   retries ~hourly until postinstall has set things up).
