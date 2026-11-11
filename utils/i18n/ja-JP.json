@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "シグネチャ更新",
   "store.browse_and_install_plugins": "プラグインを閲覧・インストールして Phoenix を拡張できます。",
   "devices.vulns_filter_chip": "✕ {sev} のみ",
-  "devices.vulns_none_filtered": "このリストに {sev} の CVE はありません。{sev} フィルターを解除すると {total} 件すべて表示されます。"
+  "devices.vulns_none_filtered": "このリストに {sev} の CVE はありません。{sev} フィルターを解除すると {total} 件すべて表示されます。",
+  "devices.vulns_none_partial": "スキャンはこのデバイスで {sev} の CVE を {counted} 件検出しましたが、Phoenix API はまだ詳細を提供していません。ポスチャスキャンが名前を挙げた CVE のみ表示できます。"
 }

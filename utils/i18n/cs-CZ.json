@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "Aktualizace signatur",
   "store.browse_and_install_plugins": "Procházejte a instalujte pluginy pro rozšíření Phoenix.",
   "devices.vulns_filter_chip": "✕ Pouze {sev}",
-  "devices.vulns_none_filtered": "V tomto seznamu nejsou žádné CVE závažnosti {sev} — zrušte filtr {sev} a uvidíte všech {total}."
+  "devices.vulns_none_filtered": "V tomto seznamu nejsou žádné CVE závažnosti {sev} — zrušte filtr {sev} a uvidíte všech {total}.",
+  "devices.vulns_none_partial": "Sken napočítal {counted} CVE závažnosti {sev} na tomto zařízení, ale Phoenix API zatím neposkytuje jejich podrobnosti — zobrazit lze jen CVE jmenované posture skenem."
 }

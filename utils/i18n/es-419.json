@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "Actualizaciones de firmas",
   "store.browse_and_install_plugins": "Explora e instala plugins para ampliar Phoenix.",
   "devices.vulns_filter_chip": "✕ Solo {sev}",
-  "devices.vulns_none_filtered": "No hay CVE de gravedad {sev} en esta lista: quita el filtro {sev} para ver las {total}."
+  "devices.vulns_none_filtered": "No hay CVE de gravedad {sev} en esta lista: quita el filtro {sev} para ver las {total}.",
+  "devices.vulns_none_partial": "El análisis contó {counted} CVE de gravedad {sev} en este dispositivo, pero la API de Phoenix aún no proporciona sus detalles: solo se pueden listar las CVE nombradas por el análisis de postura."
 }

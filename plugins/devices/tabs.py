@@ -377,7 +377,16 @@ class VulnerabilitiesTab:
         for v in page_items:
             self._add_row(v)
         if not vulns:
-            if self._sev and not self.search.text().strip():
+            slot = self.ctx.store.slot("vulns")
+            partial = not (slot.ready and not slot.error and slot.data)
+            if self._sev and not self.search.text().strip() and partial:
+                # The scan's totals count this severity, but the API only
+                # names a handful of CVEs — clearing the filter won't
+                # conjure the missing ones, so say what's actually wrong.
+                counted = self._counts().get(self._sev, 0)
+                msg = self.t("vulns_none_partial",
+                             sev=self._sev.capitalize(), counted=counted)
+            elif self._sev and not self.search.text().strip():
                 msg = self.t("vulns_none_filtered",
                              sev=self._sev.capitalize(), total=total)
             else:

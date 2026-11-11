@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "Mises à jour des signatures",
   "store.browse_and_install_plugins": "Parcourez et installez des plugins pour étendre Phoenix.",
   "devices.vulns_filter_chip": "✕ {sev} uniquement",
-  "devices.vulns_none_filtered": "Aucune CVE {sev} dans cette liste — retirez le filtre {sev} pour voir les {total}."
+  "devices.vulns_none_filtered": "Aucune CVE {sev} dans cette liste — retirez le filtre {sev} pour voir les {total}.",
+  "devices.vulns_none_partial": "Le scan a compté {counted} CVE {sev} sur cet appareil, mais l'API Phoenix ne fournit pas encore leurs détails — seules les CVE nommées par le scan de posture peuvent être listées."
 }

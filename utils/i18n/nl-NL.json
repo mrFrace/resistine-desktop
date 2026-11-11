@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "Signatuur-updates",
   "store.browse_and_install_plugins": "Blader door en installeer plugins om Phoenix uit te breiden.",
   "devices.vulns_filter_chip": "✕ Alleen {sev}",
-  "devices.vulns_none_filtered": "Geen {sev}-CVE's in deze lijst — verwijder het {sev}-filter om alle {total} te zien."
+  "devices.vulns_none_filtered": "Geen {sev}-CVE's in deze lijst — verwijder het {sev}-filter om alle {total} te zien.",
+  "devices.vulns_none_partial": "De scan telde {counted} {sev}-CVE's op dit apparaat, maar de Phoenix-API levert hun details nog niet — alleen de CVE's die de posture-scan benoemt kunnen worden getoond."
 }

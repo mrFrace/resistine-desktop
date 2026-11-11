@@ -563,5 +563,6 @@
   "antivirus.ui_cards.signature_updates": "Atualizações de assinaturas",
   "store.browse_and_install_plugins": "Navegue e instale plugins para estender o Phoenix.",
   "devices.vulns_filter_chip": "✕ Somente {sev}",
-  "devices.vulns_none_filtered": "Nenhuma CVE {sev} nesta lista — remova o filtro {sev} para ver todas as {total}."
+  "devices.vulns_none_filtered": "Nenhuma CVE {sev} nesta lista — remova o filtro {sev} para ver todas as {total}.",
+  "devices.vulns_none_partial": "A varredura contou {counted} CVEs {sev} neste dispositivo, mas a API do Phoenix ainda não fornece seus detalhes — apenas as CVEs nomeadas pela varredura de postura podem ser listadas."
 }
