@@ -619,9 +619,27 @@ class Plugin(BasePlugin):
             scoped[0] if len(scoped) == 1 else (data.this_machine_row(rows) or rows[0])
         )
 
-        page.add(self._device_card(focus, fleet_view=self._scope == data.ALL_DEVICES))
+        fleet_view = self._scope == data.ALL_DEVICES
+        page.add(self._device_card(focus, fleet_view=fleet_view))
         page.spacing(16)
         page.add(self._stat_grid(scoped))
+
+        def _add_fleet():
+            page.section(_t("section_fleet"))
+            page.add(_plain(muted(_t("fleet_hint"))))
+            page.spacing(8)
+            fleet = RowList()
+            for r in rows:
+                fleet.add_row(
+                    _ClickRow(r, lambda host=r["hostname"]: self._set_scope(host))
+                )
+            page.add(fleet)
+
+        # Viewing all devices, the device list IS the point — put it right
+        # under the stats ("Show all devices" used to land on a page whose
+        # list was below the to-do and alert sections, reading as a no-op).
+        if fleet_view and len(rows) > 1:
+            _add_fleet()
 
         page.section(_t("section_todo"))
         page.add(self._todo_list(focus))
@@ -629,15 +647,8 @@ class Plugin(BasePlugin):
         page.section(_t("section_alerts"))
         page.add(self._alerts_block(scoped))
 
-        page.section(_t("section_fleet"))
-        page.add(_plain(muted(_t("fleet_hint"))))
-        page.spacing(8)
-        fleet = RowList()
-        for r in rows:
-            fleet.add_row(
-                _ClickRow(r, lambda host=r["hostname"]: self._set_scope(host))
-            )
-        page.add(fleet)
+        if not (fleet_view and len(rows) > 1):
+            _add_fleet()
 
         page.spacing(24)
         page.add(_plain(muted(_t("footer"))))

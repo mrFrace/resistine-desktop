@@ -8,7 +8,7 @@ reason that dependency existed, and it is gone.
 from __future__ import annotations
 
 from PyQt6.QtCore import QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter
+from PyQt6.QtGui import QPainterPath, QColor, QFont, QPainter
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from gui import theme
@@ -71,6 +71,13 @@ class SeverityBar(QWidget):
         p.setBrush(QColor(theme.color("track")))
         p.drawRoundedRect(QRectF(0, 0, w, bar_h), radius, radius)
         if total:
+            # One continuous bar: clip to the rounded outline, then lay the
+            # segments down as flush rectangles — only the bar's own ends
+            # are rounded, no per-segment pill gaps.
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, w, bar_h), radius, radius)
+            p.save()
+            p.setClipPath(path)
             x = 0.0
             for s in SEVERITIES:
                 n = self._counts[s]
@@ -78,8 +85,9 @@ class SeverityBar(QWidget):
                     continue
                 seg = max(3.0, w * n / total)
                 p.setBrush(severity_color(s))
-                p.drawRoundedRect(QRectF(x, 0, min(seg, w - x), bar_h), radius, radius)
+                p.drawRect(QRectF(x, 0, min(seg, w - x), bar_h))
                 x += seg
+            p.restore()
         f = p.font()
         f.setPointSizeF(max(7.0, f.pointSizeF() - 2))
         p.setFont(f)
