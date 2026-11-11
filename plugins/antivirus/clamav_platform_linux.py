@@ -505,8 +505,8 @@ def _shell_quote(s: str) -> str:
 def _prepare_config_script() -> str:
     """Shell snippet that normalises the distro-stock ClamAV configs.
 
-    Two fixups are applied so clamd can actually start after a fresh
-    package install:
+    These fixups are applied so clamd (and clamonacc) can actually start
+    after a fresh package install:
 
       1. Comment out the lone ``Example`` stanza that Fedora (and older
          Debian) ship at the top of clamd.conf / freshclam.conf — clamd
@@ -519,7 +519,10 @@ def _prepare_config_script() -> str:
          path only if no uncommented ``LocalSocket`` is already
          present, so this is idempotent and non-destructive.
 
-    Both steps are safe to re-run on every invocation.
+      3. Set the on-access options clamonacc refuses to start without
+         (an excluded UID/user and an include path), when none are set.
+
+    All steps are safe to re-run on every invocation.
     """
     cmds: list[str] = []
 
@@ -565,7 +568,28 @@ def _prepare_config_script() -> str:
             f"fi",
         )
 
-    # (3) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
+    # (3) Give clamonacc what it needs to start. Stock configs (Arch,
+    # Debian) set no on-access options, and clamonacc exits with
+    # "at least one of OnAccessExcludeUID, OnAccessExcludeUname, or
+    # OnAccessExcludeRootUID must be specified" (and with no include path
+    # it has nothing to watch). Exclude clamd's own user, as ClamAV
+    # recommends, so its reads don't trigger scans in a loop; watch /home.
+    # Each line is only added when the admin set none of that kind.
+    for conf, _sock in socket_targets:
+        cq = _shell_quote(conf)
+        cmds.append(
+            f"if [ -f {cq} ]; then "
+            f"grep -qE '^[[:space:]]*OnAccessIncludePath[[:space:]]' {cq} "
+            f"|| echo 'OnAccessIncludePath /home' >> {cq}; "
+            f"if ! grep -qE '^[[:space:]]*OnAccessExclude(UID|Uname|RootUID)[[:space:]]' {cq}; then "
+            f"u=$(awk '/^[[:space:]]*User[[:space:]]/ {{print $2; exit}}' {cq}); "
+            f"case \"$u\" in ''|*[!A-Za-z0-9_.-]*) u=clamav;; esac; "
+            f"echo \"OnAccessExcludeUname $u\" >> {cq}; "
+            f"fi; "
+            f"fi",
+        )
+
+    # (4) Loosen /run/clamd.scan mode on Fedora via an ExecStartPost chmod.
     #
     # The Fedora clamd@.service unit does NOT declare ``RuntimeDirectory=``
     # — it just runs clamd, which creates /run/clamd.scan itself when it

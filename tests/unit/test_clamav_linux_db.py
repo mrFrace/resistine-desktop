@@ -77,3 +77,36 @@ class TestFresherDbDirWins:
         monkeypatch.setattr(c, "stop_clamd", stop)
         c._restart_clamd_if_db_moved()
         stop.assert_not_called()
+
+
+@pytest.mark.unit
+class TestClamonaccConfig:
+    """clamonacc refuses to start unless an exclude UID/user is configured."""
+
+    def _run(self, tmp_path, monkeypatch, body):
+        import subprocess
+
+        from plugins.antivirus import clamav_platform_linux as linux
+
+        monkeypatch.setattr(linux, "_is_fedora_like", lambda: False)
+        conf = tmp_path / "clamd.conf"
+        conf.write_text(body)
+        script = linux._prepare_config_script().replace("/etc/clamav/clamd.conf", str(conf))
+        for _ in range(2):  # re-running must not add lines twice
+            subprocess.run(["sh", "-c", script.replace("sed -i", "true")], capture_output=True)
+        return conf.read_text()
+
+    def test_stock_config_gets_exclude_and_include(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, "User clamav\n")
+        assert out.count("OnAccessExcludeUname clamav\n") == 1
+        assert out.count("OnAccessIncludePath /home\n") == 1
+
+    def test_admin_settings_are_kept(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch,
+                        "User clamscan\nOnAccessIncludePath /srv\nOnAccessExcludeRootUID yes\n")
+        assert "OnAccessIncludePath /home" not in out
+        assert "OnAccessExcludeUname" not in out
+
+    def test_odd_user_value_is_not_interpolated(self, tmp_path, monkeypatch):
+        out = self._run(tmp_path, monkeypatch, "User $(id)\n")
+        assert "OnAccessExcludeUname clamav\n" in out
