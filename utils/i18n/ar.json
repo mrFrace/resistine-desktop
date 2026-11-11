@@ -564,5 +564,6 @@
   "store.browse_and_install_plugins": "تصفح وثبّت الإضافات لتوسيع Phoenix.",
   "devices.vulns_filter_chip": "✕ {sev} فقط",
   "devices.vulns_none_filtered": "لا توجد ثغرات CVE بخطورة {sev} في هذه القائمة — أزل مرشح {sev} لرؤية جميع {total}.",
-  "devices.vulns_none_partial": "أحصى الفحص {counted} ثغرة CVE بخطورة {sev} على هذا الجهاز، لكن Phoenix API لا توفر تفاصيلها بعد — يمكن سرد الثغرات التي سمّاها فحص الوضع الأمني فقط."
+  "devices.vulns_none_partial": "أحصى الفحص {counted} ثغرة CVE بخطورة {sev} على هذا الجهاز، لكن Phoenix API لا توفر تفاصيلها بعد — يمكن سرد الثغرات التي سمّاها فحص الوضع الأمني فقط.",
+  "devices.tab_failed": "تعذر تحميل علامة التبويب هذه: {error}"
 }

@@ -564,5 +564,6 @@
   "store.browse_and_install_plugins": "Phoenix'i genişletmek için eklentilere göz atın ve yükleyin.",
   "devices.vulns_filter_chip": "✕ Yalnızca {sev}",
   "devices.vulns_none_filtered": "Bu listede {sev} önem düzeyinde CVE yok — tümünü ({total}) görmek için {sev} filtresini kaldırın.",
-  "devices.vulns_none_partial": "Tarama bu cihazda {counted} adet {sev} CVE saydı, ancak Phoenix API henüz ayrıntılarını sağlamıyor — yalnızca duruş taramasının adlandırdığı CVE'ler listelenebilir."
+  "devices.vulns_none_partial": "Tarama bu cihazda {counted} adet {sev} CVE saydı, ancak Phoenix API henüz ayrıntılarını sağlamıyor — yalnızca duruş taramasının adlandırdığı CVE'ler listelenebilir.",
+  "devices.tab_failed": "Bu sekme yüklenemedi: {error}"
 }

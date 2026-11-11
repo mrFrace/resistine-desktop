@@ -564,5 +564,6 @@
   "store.browse_and_install_plugins": "Sfoglia e installa plugin per estendere Phoenix.",
   "devices.vulns_filter_chip": "✕ Solo {sev}",
   "devices.vulns_none_filtered": "Nessuna CVE {sev} in questo elenco — rimuovi il filtro {sev} per vederle tutte e {total}.",
-  "devices.vulns_none_partial": "La scansione ha contato {counted} CVE {sev} su questo dispositivo, ma l'API Phoenix non ne fornisce ancora i dettagli — è possibile elencare solo le CVE nominate dalla scansione di postura."
+  "devices.vulns_none_partial": "La scansione ha contato {counted} CVE {sev} su questo dispositivo, ma l'API Phoenix non ne fornisce ancora i dettagli — è possibile elencare solo le CVE nominate dalla scansione di postura.",
+  "devices.tab_failed": "Impossibile caricare questa scheda: {error}"
 }

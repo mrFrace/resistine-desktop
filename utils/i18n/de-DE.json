@@ -564,5 +564,6 @@
   "store.browse_and_install_plugins": "Durchsuche und installiere Plugins, um Phoenix zu erweitern.",
   "devices.vulns_filter_chip": "✕ Nur {sev}",
   "devices.vulns_none_filtered": "Keine {sev}-CVEs in dieser Liste — entferne den {sev}-Filter, um alle {total} zu sehen.",
-  "devices.vulns_none_partial": "Der Scan zählte {counted} {sev}-CVEs auf diesem Gerät, aber die Phoenix-API liefert ihre Details noch nicht — nur die vom Posture-Scan benannten CVEs können angezeigt werden."
+  "devices.vulns_none_partial": "Der Scan zählte {counted} {sev}-CVEs auf diesem Gerät, aber die Phoenix-API liefert ihre Details noch nicht — nur die vom Posture-Scan benannten CVEs können angezeigt werden.",
+  "devices.tab_failed": "Dieser Tab konnte nicht geladen werden: {error}"
 }

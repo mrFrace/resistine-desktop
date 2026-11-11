@@ -546,6 +546,18 @@ class Plugin(BasePlugin):
                 tab = cls(_Ctx(self))
             except Exception as e:  # noqa: BLE001
                 logger.error(f"[DEVICES] building the {key} tab failed: {e}")
+                # Returning here kept the PREVIOUS tab's widget on screen, so
+                # a broken tab silently impersonated its neighbour ("the
+                # Events page looks identical to Vulnerabilities"). Show an
+                # explicit failure panel instead.
+                fail = QLabel(_t("tab_failed", error=str(e)))
+                fail.setWordWrap(True)
+                fail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                fail.setStyleSheet(
+                    f"color: {theme.color('text_secondary')}; padding: 40px;")
+                page = scroll_page(fail)
+                self._stack.addWidget(page)
+                self._stack.setCurrentWidget(page)
                 return
             tab.page = scroll_page(tab.widget)
             self._tabs[key] = tab
