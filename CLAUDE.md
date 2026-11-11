@@ -118,7 +118,9 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Updates
 
-**Auto-updates are hard-disabled** (`utils/updates/manager.py: UPDATES_ENABLED = False`): the legacy feed and its signing keys belong to the old company, so Phoenix builds carry no feed URL and no update public key. Re-enabling requires Phoenix-owned feed infrastructure plus a FRESH signing keypair generated in CI — never re-point at the old endpoint. The platform backends (`utils/updates/{darwin,windows,linux}.py`) keep their verification logic: signatures are mandatory, unsigned entries are refused.
+The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed manifest at `auth.phoenix.exposed/packages/desktop/current/`, asked by Settings → Check for updates; it refuses builds at or below the running one.
+
+**The legacy Sparkle/appcast auto-updater is hard-disabled** (`utils/updates/manager.py: UPDATES_ENABLED = False`): that feed and its signing keys belong to the old company. Never re-point it at the old endpoint; re-enabling it needs Phoenix-owned feed infrastructure plus a FRESH signing keypair. The platform backends (`utils/updates/{darwin,windows,linux}.py`) keep their verification logic: signatures are mandatory, unsigned entries are refused.
 
 ### External Artifacts
 
