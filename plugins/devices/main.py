@@ -921,12 +921,13 @@ class Plugin(BasePlugin):
         lst = RowList()
         for item, state in states:
             hint = mitigations.detail_line(item)
-            status = mitigations.state_text(state)
+            status = mitigations.list_status(state)
+            sub = "\n".join(s for s in (hint, status) if s)
             lst.add_row(
                 MenuRow(
                     _MITIGATION_ICON.get(item["kind"], "shield-check"),
                     item["title"],
-                    f"{hint}\n{status}" if hint else status,
+                    sub,
                     on_click=lambda it=item, st=state, r=row: self._open_mitigation(
                         it, st, r
                     ),
@@ -959,12 +960,22 @@ class Plugin(BasePlugin):
         page.add(header)
         page.section(_t("section_details"))
         facts = KVList()
-        detail = mitigations.detail_line(item)
-        if detail:
-            facts.add(_t("mitigation_evidence"), detail)
+        structured = mitigations.detail_facts(item)
+        if structured:
+            for label, value in structured:
+                facts.add(label, value)
+        else:
+            detail = mitigations.detail_line(item)
+            if detail:
+                facts.add(_t("mitigation_evidence"), detail)
         facts.add(_t("mitigation_status"), mitigations.state_text(state))
         page.add(facts)
-        steps = mitigations.fix_steps(item)
+        if item["kind"] == "agent_connection" and row["this_machine"]:
+            open_ep = QPushButton(_t("open_endpoint"))
+            open_ep.setCursor(Qt.CursorShape.PointingHandCursor)
+            open_ep.clicked.connect(lambda: self.app.navigate("Endpoint"))
+            page.add(open_ep)
+        steps = mitigations.fix_steps(item, row.get("os") or "")
         if steps:
             page.section(_t("mitigation_fix"))
             lst = RowList()

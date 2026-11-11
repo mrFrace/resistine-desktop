@@ -322,13 +322,62 @@ def state_text(state) -> str:
     return _STATE_TEXT.get(state, _STATE_TEXT[None])
 
 
+# States worth a line in the TO-DO list itself. REMOTE/SERVER/OPEN are the
+# default expectation for every row of a remote device — repeating "Fix this
+# on that machine; its next daily scan confirms it." under all four items is
+# noise; those read once on the detail page instead.
+_LIST_STATES = {FIXED_HERE, REBOOT, UNKNOWN, None}
+
+
+def list_status(state) -> str:
+    """Status line for the TO-DO list row; '' when it adds nothing."""
+    return _STATE_TEXT.get(state, _STATE_TEXT[None]) if state in _LIST_STATES else ""
+
+
+def detail_facts(item: dict) -> list:
+    """Evidence as (label, value) pairs for the detail page's fact list.
+
+    detail_line() crams severity counts, truncated CVEs and versions into
+    one string — fine for a row subtitle, cramped as the page's "Evidence".
+    """
+    ev, c = item["evidence"], item["check"]
+    facts = []
+    if item["kind"] == "package_update":
+        sev_bits = []
+        if ev["critical"]:
+            sev_bits.append(f"{ev['critical']} critical")
+        if ev["high"]:
+            sev_bits.append(f"{ev['high']} high")
+        if sev_bits:
+            facts.append(("Severity", " · ".join(sev_bits)))
+        if ev["cves"]:
+            shown = ev["cves"][:10]
+            more = len(ev["cves"]) - len(shown)
+            facts.append(("CVEs", ", ".join(shown)
+                          + (f" (+{more} more)" if more > 0 else "")))
+        facts.append(("Installed", str(c["version"])))
+        if ev["fixed_version"]:
+            facts.append(("Fixed in", str(ev["fixed_version"])))
+        elif ev["fix_available"] is False:
+            facts.append(("Fixed in", "no fixed version released yet"))
+    elif item["kind"] == "cis_checks":
+        facts.append(("Failing checks", f"{ev['failed_checks']} of {ev['checks']}"))
+    return facts
+
+
 def _is_kernel(c: dict) -> bool:
     return bool(_DEB_KERNEL.fullmatch(c.get("package", ""))) or c.get("package") in _RPM_KERNEL
 
 
-def fix_steps(item: dict) -> list:
-    """How to fix an item, as short plain lines (never run by Phoenix)."""
+def fix_steps(item: dict, os_name: str = "") -> list:
+    """How to fix an item, as short plain lines (never run by Phoenix).
+
+    ``os_name`` (the posture card's OS string) picks a concrete command on
+    platforms the package_type doesn't identify — a Windows "Update Git"
+    deserves a winget line, not pip/npm guesses.
+    """
     c, ev = item["check"], item["evidence"]
+    osl = (os_name or "").lower()
     if item["kind"] == "package_update":
         pkg = c["package"]
         if ev["fix_available"] is False and not ev["fixed_version"]:
@@ -338,6 +387,14 @@ def fix_steps(item: dict) -> list:
             steps = [f"sudo apt update && sudo apt install --only-upgrade {pkg}"]
         elif c["package_type"] == "rpm":
             steps = [f"sudo dnf upgrade {pkg}"]
+        elif "windows" in osl:
+            steps = [f"winget upgrade {pkg}",
+                     f"If winget doesn't know it, update {pkg} from inside the app "
+                     "or re-download its installer."]
+        elif "macos" in osl or "darwin" in osl:
+            steps = [f"brew upgrade {pkg}",
+                     f"If it wasn't installed with Homebrew, update {pkg} from "
+                     "inside the app or the tool that installed it (pip, npm…)."]
         else:
             steps = [f"Update {pkg} where it was installed from: the system's software updater, "
                      "or the tool that installed it (pip, npm, a container image…)."]
