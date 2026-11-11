@@ -208,8 +208,22 @@ def _fixed_unless_running(pkg: str, version: str, ptype: str) -> str:
 
 
 def _service_state() -> str:
+    """State of the "reconnect the Endpoint agent" item on this machine.
+
+    Checks the live manager CONNECTION, not just that the service process
+    is alive — an agent can run forever with a server-side-invalidated key
+    and still not report ("it shows reconnect when it's already
+    reconnected" was the inverse: stale card + healthy connection).
+    """
     try:
-        from plugins.wazuh.main import is_agent_running
+        from plugins.wazuh.main import get_agent_connection, is_agent_running
+        conn = get_agent_connection()
+        if conn == "connected":
+            return FIXED_HERE
+        if conn == "disconnected":
+            return OPEN
+        # pending/unknown: the state file may be unreadable from a user
+        # session — fall back to the service check rather than alarming.
         return FIXED_HERE if is_agent_running() else OPEN
     except Exception:  # noqa: BLE001
         return UNKNOWN

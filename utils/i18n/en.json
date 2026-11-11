@@ -189,5 +189,7 @@
   "devices.vulns_none_filtered": "No {sev} CVEs in this list — clear the {sev} filter to see all {total}.",
   "devices.vulns_none_partial": "The scan counted {counted} {sev} CVEs on this device, but the Phoenix API doesn't deliver their details yet — only the few CVEs named by the posture scan can be listed.",
   "devices.tab_failed": "This tab failed to load: {error}",
-  "devices.view_in_vulns": "View these CVEs in Vulnerabilities"
+  "devices.view_in_vulns": "View these CVEs in Vulnerabilities",
+  "devices.reenrolled_label": "Re-enrolled",
+  "devices.reenrolled_stale": "Data shown is from previous agent {old}; this device re-enrolled as agent {new}. Fresh data arrives with the next posture scan."
 }

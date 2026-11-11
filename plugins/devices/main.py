@@ -745,6 +745,14 @@ class Plugin(BasePlugin):
             local = self._local_agent_text()
             if local:
                 facts.add(_t("local_agent"), local)
+            enrolled = settings.get("wazuh", "enrolled_agent_id", "")
+            if enrolled and row.get("agent_id") and enrolled != row["agent_id"]:
+                # Re-registered (dev reinstall, key wipe): the posture card
+                # is the OLD agent's. Flag it until the first new scan lands.
+                facts.add(
+                    _t("reenrolled_label"),
+                    _t("reenrolled_stale", old=row["agent_id"], new=enrolled),
+                )
         if not row["vulns_available"]:
             facts.add(
                 _t("card_vulns"),

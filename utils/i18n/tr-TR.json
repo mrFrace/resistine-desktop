@@ -566,5 +566,7 @@
   "devices.vulns_none_filtered": "Bu listede {sev} önem düzeyinde CVE yok — tümünü ({total}) görmek için {sev} filtresini kaldırın.",
   "devices.vulns_none_partial": "Tarama bu cihazda {counted} adet {sev} CVE saydı, ancak Phoenix API henüz ayrıntılarını sağlamıyor — yalnızca duruş taramasının adlandırdığı CVE'ler listelenebilir.",
   "devices.tab_failed": "Bu sekme yüklenemedi: {error}",
-  "devices.view_in_vulns": "Bu CVE'leri Güvenlik Açıkları'nda görüntüle"
+  "devices.view_in_vulns": "Bu CVE'leri Güvenlik Açıkları'nda görüntüle",
+  "devices.reenrolled_label": "Yeniden kaydedildi",
+  "devices.reenrolled_stale": "Gösterilen veriler önceki aracı {old} aittir; bu cihaz aracı {new} olarak yeniden kaydedildi. Yeni veriler bir sonraki duruş taramasıyla gelecek."
 }

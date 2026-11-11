@@ -566,5 +566,7 @@
   "devices.vulns_none_filtered": "Geen {sev}-CVE's in deze lijst — verwijder het {sev}-filter om alle {total} te zien.",
   "devices.vulns_none_partial": "De scan telde {counted} {sev}-CVE's op dit apparaat, maar de Phoenix-API levert hun details nog niet — alleen de CVE's die de posture-scan benoemt kunnen worden getoond.",
   "devices.tab_failed": "Dit tabblad kon niet worden geladen: {error}",
-  "devices.view_in_vulns": "Bekijk deze CVE's in Kwetsbaarheden"
+  "devices.view_in_vulns": "Bekijk deze CVE's in Kwetsbaarheden",
+  "devices.reenrolled_label": "Opnieuw geregistreerd",
+  "devices.reenrolled_stale": "De getoonde gegevens zijn van de vorige agent {old}; dit apparaat is opnieuw geregistreerd als agent {new}. Nieuwe gegevens komen met de volgende posture-scan."
 }

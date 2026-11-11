@@ -566,5 +566,7 @@
   "devices.vulns_none_filtered": "V tomto seznamu nejsou žádné CVE závažnosti {sev} — zrušte filtr {sev} a uvidíte všech {total}.",
   "devices.vulns_none_partial": "Sken napočítal {counted} CVE závažnosti {sev} na tomto zařízení, ale Phoenix API zatím neposkytuje jejich podrobnosti — zobrazit lze jen CVE jmenované posture skenem.",
   "devices.tab_failed": "Tuto kartu se nepodařilo načíst: {error}",
-  "devices.view_in_vulns": "Zobrazit tyto CVE ve Zranitelnostech"
+  "devices.view_in_vulns": "Zobrazit tyto CVE ve Zranitelnostech",
+  "devices.reenrolled_label": "Znovu zaregistrováno",
+  "devices.reenrolled_stale": "Zobrazená data patří předchozímu agentovi {old}; toto zařízení je nyní registrováno jako agent {new}. Nová data přijdou s příštím skenem."
 }

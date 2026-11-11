@@ -566,5 +566,7 @@
   "devices.vulns_none_filtered": "このリストに {sev} の CVE はありません。{sev} フィルターを解除すると {total} 件すべて表示されます。",
   "devices.vulns_none_partial": "スキャンはこのデバイスで {sev} の CVE を {counted} 件検出しましたが、Phoenix API はまだ詳細を提供していません。ポスチャスキャンが名前を挙げた CVE のみ表示できます。",
   "devices.tab_failed": "このタブを読み込めませんでした: {error}",
-  "devices.view_in_vulns": "これらの CVE を脆弱性タブで表示"
+  "devices.view_in_vulns": "これらの CVE を脆弱性タブで表示",
+  "devices.reenrolled_label": "再登録済み",
+  "devices.reenrolled_stale": "表示中のデータは以前のエージェント {old} のものです。このデバイスはエージェント {new} として再登録されました。次のポスチャスキャンで新しいデータが届きます。"
 }

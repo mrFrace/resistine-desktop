@@ -566,5 +566,7 @@
   "devices.vulns_none_filtered": "Nenhuma CVE {sev} nesta lista — remova o filtro {sev} para ver todas as {total}.",
   "devices.vulns_none_partial": "A varredura contou {counted} CVEs {sev} neste dispositivo, mas a API do Phoenix ainda não fornece seus detalhes — apenas as CVEs nomeadas pela varredura de postura podem ser listadas.",
   "devices.tab_failed": "Não foi possível carregar esta aba: {error}",
-  "devices.view_in_vulns": "Ver essas CVEs em Vulnerabilidades"
+  "devices.view_in_vulns": "Ver essas CVEs em Vulnerabilidades",
+  "devices.reenrolled_label": "Reinscrito",
+  "devices.reenrolled_stale": "Os dados exibidos são do agente anterior {old}; este dispositivo foi reinscrito como agente {new}. Dados novos chegam na próxima varredura de postura."
 }
