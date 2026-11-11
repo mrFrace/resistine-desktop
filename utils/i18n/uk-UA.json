@@ -565,5 +565,6 @@
   "devices.vulns_filter_chip": "✕ Лише {sev}",
   "devices.vulns_none_filtered": "У цьому списку немає CVE рівня {sev} — зніміть фільтр {sev}, щоб побачити всі {total}.",
   "devices.vulns_none_partial": "Сканування нарахувало {counted} CVE рівня {sev} на цьому пристрої, але Phoenix API ще не надає їхніх деталей — показати можна лише CVE, названі посчер-скануванням.",
-  "devices.tab_failed": "Не вдалося завантажити цю вкладку: {error}"
+  "devices.tab_failed": "Не вдалося завантажити цю вкладку: {error}",
+  "devices.view_in_vulns": "Переглянути ці CVE у вкладці Вразливості"
 }

@@ -99,7 +99,11 @@ def validate(raw) -> Optional[dict]:
     fixed = ev.get("fixed_version")
     evidence = {
         "critical": _int(ev.get("critical")), "high": _int(ev.get("high")),
-        "cves": [c for c in (ev.get("cves") or [])[:5] if isinstance(c, str) and CVE_RE.fullmatch(c)],
+        # Keep the full list the scanner sent (sanity-capped): the detail
+        # page, the Vulnerabilities tab and Ask AI all want more than the
+        # row subtitle's three. Truncation is a display decision, not a
+        # parse decision.
+        "cves": [c for c in (ev.get("cves") or [])[:100] if isinstance(c, str) and CVE_RE.fullmatch(c)],
         "fixed_version": fixed if isinstance(fixed, str) and VERSION_RE.fullmatch(fixed) else None,
         # None: the scanner didn't say whether a fix exists.
         "fix_available": ev["fix_available"] if isinstance(ev.get("fix_available"), bool) else None,

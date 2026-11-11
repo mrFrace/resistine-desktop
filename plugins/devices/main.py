@@ -103,6 +103,7 @@ class _ClickRow(QFrame):
     def __init__(self, row: dict, on_click):
         super().__init__()
         self.setObjectName("MenuRow")
+        self.setProperty("interactive", True)  # this row IS clickable
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -975,6 +976,14 @@ class Plugin(BasePlugin):
             open_ep.setCursor(Qt.CursorShape.PointingHandCursor)
             open_ep.clicked.connect(lambda: self.app.navigate("Endpoint"))
             page.add(open_ep)
+        if item["kind"] == "package_update" and item["check"].get("package"):
+            view = QPushButton(_t("view_in_vulns"))
+            view.setObjectName("Secondary")
+            view.setCursor(Qt.CursorShape.PointingHandCursor)
+            view.clicked.connect(
+                lambda _=False, pkg=item["check"]["package"]:
+                self._jump_to_vulns(pkg))
+            page.add(view)
         steps = mitigations.fix_steps(item, row.get("os") or "")
         if steps:
             page.section(_t("mitigation_fix"))
@@ -984,6 +993,19 @@ class Plugin(BasePlugin):
             page.add(lst)
         page.stretch()
         self._push(page.widget)
+
+    def _jump_to_vulns(self, package: str) -> None:
+        """Leave the mitigation page for the Vulnerabilities tab, searched
+        to this package, so every one of its CVEs is listed individually."""
+        self._pop()
+        self._switch_tab("vulns")
+        tab = self._tabs.get("vulns")
+        if tab is not None:
+            try:
+                tab._clear_sev()
+                tab.search.setText(package)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[DEVICES] vulns jump failed: {e}")
 
     @staticmethod
     def _step_row(n: int, text: str) -> QWidget:

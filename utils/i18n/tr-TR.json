@@ -565,5 +565,6 @@
   "devices.vulns_filter_chip": "✕ Yalnızca {sev}",
   "devices.vulns_none_filtered": "Bu listede {sev} önem düzeyinde CVE yok — tümünü ({total}) görmek için {sev} filtresini kaldırın.",
   "devices.vulns_none_partial": "Tarama bu cihazda {counted} adet {sev} CVE saydı, ancak Phoenix API henüz ayrıntılarını sağlamıyor — yalnızca duruş taramasının adlandırdığı CVE'ler listelenebilir.",
-  "devices.tab_failed": "Bu sekme yüklenemedi: {error}"
+  "devices.tab_failed": "Bu sekme yüklenemedi: {error}",
+  "devices.view_in_vulns": "Bu CVE'leri Güvenlik Açıkları'nda görüntüle"
 }

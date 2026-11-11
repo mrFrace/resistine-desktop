@@ -565,5 +565,6 @@
   "devices.vulns_filter_chip": "✕ {sev} uniquement",
   "devices.vulns_none_filtered": "Aucune CVE {sev} dans cette liste — retirez le filtre {sev} pour voir les {total}.",
   "devices.vulns_none_partial": "Le scan a compté {counted} CVE {sev} sur cet appareil, mais l'API Phoenix ne fournit pas encore leurs détails — seules les CVE nommées par le scan de posture peuvent être listées.",
-  "devices.tab_failed": "Impossible de charger cet onglet : {error}"
+  "devices.tab_failed": "Impossible de charger cet onglet : {error}",
+  "devices.view_in_vulns": "Voir ces CVE dans Vulnérabilités"
 }

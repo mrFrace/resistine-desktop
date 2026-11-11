@@ -25,6 +25,7 @@ import os
 
 from PyQt6.QtCore import (
     QByteArray,
+    QMetaMethod,
     QEasingCurve,
     QParallelAnimationGroup,
     QPoint,
@@ -319,11 +320,14 @@ class MenuRow(QFrame):
                  on_click=None, danger: bool = False, chevron: bool = True):
         super().__init__()
         self.setObjectName("MenuRow")
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Hover highlight and the pointing cursor are promises of a click.
+        # Rows are inert until something connects to ``clicked`` (callers may
+        # connect after construction — see connectNotify), so static info
+        # rows no longer light up under the cursor.
+        self.setProperty("interactive", False)
         # Tab focus only: a clicked row must not keep the focus highlight
         # (it read as a second "hovered" row).
-        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Fixed)
         self._icon_name = icon
@@ -361,6 +365,25 @@ class MenuRow(QFrame):
         self._paint_icon()
         if on_click is not None:
             self.clicked.connect(on_click)
+
+    def connectNotify(self, signal):  # noqa: N802 (Qt override)
+        super().connectNotify(signal)
+        try:
+            if signal == QMetaMethod.fromSignal(self.clicked):
+                self._set_interactive()
+        except Exception:
+            self._set_interactive()  # fail interactive, never dead
+
+    def _set_interactive(self) -> None:
+        if self.property("interactive"):
+            return
+        self.setProperty("interactive", True)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
 
     def _paint_icon(self) -> None:
         if not self.isEnabled():

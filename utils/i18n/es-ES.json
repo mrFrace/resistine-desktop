@@ -565,5 +565,6 @@
   "devices.vulns_filter_chip": "✕ Solo {sev}",
   "devices.vulns_none_filtered": "No hay CVE de gravedad {sev} en esta lista: quita el filtro {sev} para ver las {total}.",
   "devices.vulns_none_partial": "El análisis contó {counted} CVE de gravedad {sev} en este dispositivo, pero la API de Phoenix aún no proporciona sus detalles: solo se pueden listar las CVE nombradas por el análisis de postura.",
-  "devices.tab_failed": "No se pudo cargar esta pestaña: {error}"
+  "devices.tab_failed": "No se pudo cargar esta pestaña: {error}",
+  "devices.view_in_vulns": "Ver estas CVE en Vulnerabilidades"
 }
