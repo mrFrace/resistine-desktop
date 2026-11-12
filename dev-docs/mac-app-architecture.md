@@ -97,10 +97,15 @@ Follow this guide when adding a new macOS-specific privileged component (e.g., S
 Choose a bundle ID hierarchy that matches your team:
 
 ```
-com.resistine.desktop                              ← Main Python app
-com.resistine.desktop.network-extension            ← Network Extension
-com.resistine.desktop.vpnxpc                       ← CLI Tool (reusing ID)
+exposed.phoenix.desktop                            ← Main Python app
+exposed.phoenix.desktop.network-extension          ← Network Extension
+exposed.phoenix.desktop.vpnxpc                     ← CLI Tool (reusing ID)
+exposed.phoenix.desktop.clamonacc                  ← ClamAV on-access helper
 ```
+
+Until 2026-11-12 these were `com.resistine.desktop.*`. The Swift VPN build
+must use the same IDs: `build-distribution.sh` refuses a network extension
+whose `CFBundleIdentifier` is not `exposed.phoenix.desktop.network-extension`.
 
 ### Step 3: Register App IDs in Apple Developer Portal
 

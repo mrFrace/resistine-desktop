@@ -374,7 +374,7 @@ class TestIsExtensionEnabled:
         vfd._extension_cache["timestamp"] = 0
 
         output = (
-            "2  com.resistine.desktop.network-extension "
+            "2  exposed.phoenix.desktop.network-extension "
             "[activated enabled]\n"
         )
         mock_run.return_value = MagicMock(stdout=output, stderr="", returncode=0)
@@ -387,7 +387,7 @@ class TestIsExtensionEnabled:
         vfd._extension_cache["timestamp"] = 0
 
         output = (
-            "2  com.resistine.desktop.network-extension "
+            "2  exposed.phoenix.desktop.network-extension "
             "[activated waiting for user]\n"
         )
         mock_run.return_value = MagicMock(stdout=output, stderr="", returncode=0)

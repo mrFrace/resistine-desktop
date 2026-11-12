@@ -33,7 +33,7 @@ import sys
 
 from utils.logger import logger
 
-_EXTENSION_BUNDLE_ID = "com.resistine.desktop.network-extension"
+_EXTENSION_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
 
 
 def is_available():
@@ -716,7 +716,7 @@ def _remove_app_config(admin_cmds):
     containers_dir = os.path.join(home, "Library", "Containers")
     if os.path.isdir(containers_dir):
         for entry in os.listdir(containers_dir):
-            if entry.startswith("com.resistine"):
+            if entry.startswith(("exposed.phoenix", "com.resistine")):
                 container_path = os.path.join(containers_dir, entry)
                 try:
                     shutil.rmtree(container_path)

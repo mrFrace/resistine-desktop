@@ -15,12 +15,14 @@ IS_MACOS = sys.platform == "darwin"
 IS_WINDOWS = sys.platform == "win32"
 
 # Application metadata
-# Bundle / executable file name (Phoenix.app, Phoenix.exe). The bundle ID,
-# app group and service names keep the old name: they are tied to the Apple
-# signing profiles and to state on installed machines, and users never see them.
+# Bundle / executable file name (Phoenix.app, Phoenix.exe). The bundle IDs
+# are exposed.phoenix.* (registered under the Phoenix Apple team); the app
+# group, launchd labels and keychain service names keep the old name: they are
+# compiled into the Swift VPN build or tied to state on installed machines,
+# and users never see them.
 APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
-BUNDLE_ID = 'com.resistine.desktop'
+BUNDLE_ID = 'exposed.phoenix.desktop'
 VERSION = '2026.11.06'
 # Build ID: tells builds of one VERSION apart (package versions, file names,
 # the version line in the app). UTC minutes, so every rebuild sorts after the
@@ -309,11 +311,6 @@ if IS_MACOS:
             # XPC Services (will be populated by build script)
             'NSXPCServices': ['ResistineVPNXPC'],
 
-            # Helper registration for privileged operations
-            'SMPrivilegedExecutables': {
-                'com.resistine.vpn.xpc': 'identifier "com.resistine.vpn.xpc" and anchor apple generic and certificate leaf[subject.CN] = "Resistine" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */'
-            },
-
             # URL schemes (if needed for OAuth, deep links, etc.)
             'CFBundleURLTypes': [
                 {
@@ -327,7 +324,7 @@ if IS_MACOS:
                 {
                     'CFBundleTypeName': 'WireGuard Configuration',
                     'CFBundleTypeRole': 'Editor',
-                    'LSItemContentTypes': ['com.resistine.wireguard-config'],
+                    'LSItemContentTypes': ['exposed.phoenix.wireguard-config'],
                     'LSHandlerRank': 'Owner',
                 }
             ],
@@ -335,7 +332,7 @@ if IS_MACOS:
             # Export type for .conf files
             'UTExportedTypeDeclarations': [
                 {
-                    'UTTypeIdentifier': 'com.resistine.wireguard-config',
+                    'UTTypeIdentifier': 'exposed.phoenix.wireguard-config',
                     'UTTypeConformsTo': ['public.data', 'public.content'],
                     'UTTypeDescription': 'WireGuard Configuration File',
                     'UTTypeTagSpecification': {

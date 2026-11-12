@@ -78,14 +78,16 @@ def restore_system_library_path() -> None:
 
 
 LEGACY_BUNDLE = "/Applications/Resistine.app"
+# Bundle ID of Resistine.app and of Phoenix.app before the exposed.phoenix rename.
+LEGACY_BUNDLE_ID = "com.resistine.desktop"
 
 
 def remove_legacy_bundle() -> bool:
     """Delete the pre-rename /Applications/Resistine.app once Phoenix.app runs.
 
     A DMG install drops Phoenix.app next to the old bundle instead of
-    replacing it. Only removes a bundle with our bundle ID, and never the
-    one that is running. Best effort: returns True if it removed it.
+    replacing it. Only removes a bundle with our bundle ID (current or
+    LEGACY_BUNDLE_ID), and never the one that is running. Best effort: returns True if it removed it.
     """
     import plistlib
 
@@ -99,7 +101,7 @@ def remove_legacy_bundle() -> bool:
             ours = plistlib.load(f).get("CFBundleIdentifier")
         with open(os.path.join(LEGACY_BUNDLE, "Contents", "Info.plist"), "rb") as f:
             theirs = plistlib.load(f).get("CFBundleIdentifier")
-        if not ours or ours != theirs:
+        if not ours or theirs not in (ours, LEGACY_BUNDLE_ID):
             return False
         shutil.rmtree(LEGACY_BUNDLE)
         return True

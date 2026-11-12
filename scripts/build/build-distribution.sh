@@ -30,7 +30,9 @@ BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
 APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
-BUNDLE_ID="com.resistine.desktop"
+BUNDLE_ID="exposed.phoenix.desktop"
+NE_BUNDLE_ID="$BUNDLE_ID.network-extension"  # system extension; name of its .systemextension too
+CLI_BUNDLE_ID="$BUNDLE_ID.vpnxpc"             # ResistineCLI.app wrapping resistine-vpn-cli
 
 # ============================================================
 # Step 1: Verify Developer ID certificate (REQUIRED for distribution)
@@ -59,6 +61,8 @@ fi
 
 # Notarization toggle — set to true to skip for faster builds
 SKIP_NOTARIZE=${SKIP_NOTARIZE:-false}
+# notarytool keychain profile holding the Apple ID + app-specific password
+NOTARY_PROFILE=${NOTARY_PROFILE:-phoenix-notarize}
 
 if [ "$SKIP_NOTARIZE" = true ]; then
     echo "  Skipping notarization (SKIP_NOTARIZE=true)"
@@ -78,7 +82,7 @@ else
     # errors before we ever get to print a diagnostic. Wrapping the
     # assignment in an `if` block catches the failure so `set -e`
     # doesn't trip, AND lets us record the exit code AND the output.
-    if notarize_probe="$(xcrun notarytool history --keychain-profile "resistine-notarize" 2>&1)"; then
+    if notarize_probe="$(xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" 2>&1)"; then
         notarize_rc=0
     else
         notarize_rc=$?
@@ -98,8 +102,8 @@ else
             echo "    3. Re-run this script — no credential re-storage needed"
         elif echo "$notarize_probe" | grep -qiE "could not find|no such keychain|profile not found"; then
             echo "  Notarization keychain profile is missing. Store it with:"
-            echo "    xcrun notarytool store-credentials \"resistine-notarize\" \\"
-            echo "      --apple-id \"jackie@resistine.com\" \\"
+            echo "    xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\"
+            echo "      --apple-id \"<Apple ID of a team Admin or Account Holder>\" \\"
             echo "      --team-id \"$TEAM_ID\" \\"
             echo "      --password \"<app-specific-password from appleid.apple.com>\""
         elif echo "$notarize_probe" | grep -qiE "401|unauthorized|invalid credentials"; then
@@ -146,7 +150,7 @@ if [ -f "$SCRIPT_DIR/download-vpn-artifacts.sh" ] && command -v gh &> /dev/null;
 fi
 
 if [ -f "$VPN_ARTIFACTS_DIR/resistine-vpn-cli" ] && \
-   [ -d "$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+   compgen -G "$VPN_ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
     echo "  Using pre-built VPN artifacts from $VPN_ARTIFACTS_DIR"
     USE_PREBUILT_VPN=true
 elif [ -d "$VPN_PROJECT_PATH" ]; then
@@ -301,7 +305,9 @@ echo "    Python framework OK (version $_PYVERS)"
 # Resolve VPN component sources (pre-built artifacts or local archive)
 if [ "$USE_PREBUILT_VPN" = true ]; then
     CLI_SOURCE="$VPN_ARTIFACTS_DIR/resistine-vpn-cli"
-    NE_SOURCE="$VPN_ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension"
+    # The artifact keeps the name the Swift CI gave it; it is renamed to
+    # $NE_BUNDLE_ID.systemextension below.
+    NE_SOURCE=$(compgen -G "$VPN_ARTIFACTS_DIR/*network-extension.systemextension" | head -1)
 else
     VPN_ARCHIVE="$BUILD_DIR/wireguard-apple.xcarchive/Products/Applications/wireguard-apple.app"
 
@@ -343,15 +349,26 @@ cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/resistine-vpn-cli"
 # CRITICAL: System Extensions MUST use .systemextension extension, not .appex!
 echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
 
-# Use the full bundle name: com.resistine.desktop.network-extension.systemextension
-DEST_EXTENSION="$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
+# Use the full bundle name: $NE_BUNDLE_ID.systemextension
+DEST_EXTENSION="$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension"
 mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 rm -rf "$DEST_EXTENSION"
 cp -R "$NE_SOURCE" "$DEST_EXTENSION"
 
 # Verify placement
-if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
+if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" ]; then
     echo "  Error: System Extension not in Contents/Library/SystemExtensions/"
+    exit 1
+fi
+
+# The extension's identifier is compiled into the Swift build (its
+# Info.plist, and the CLI's providerBundleIdentifier). A build from before
+# the exposed.phoenix rename would be signed under the new profile but never
+# activate, so refuse it rather than ship a dead VPN.
+NE_ACTUAL_ID=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$DEST_EXTENSION/Contents/Info.plist" 2>/dev/null || true)
+if [ "$NE_ACTUAL_ID" != "$NE_BUNDLE_ID" ]; then
+    echo "  Error: the network extension is '$NE_ACTUAL_ID', expected '$NE_BUNDLE_ID'."
+    echo "  Rebuild the Swift VPN components with the exposed.phoenix bundle IDs."
     exit 1
 fi
 
@@ -362,7 +379,7 @@ cat > "$CLI_APP/Contents/Info.plist" << PLISTEOF
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.resistine.desktop.vpnxpc</string>
+    <string>$CLI_BUNDLE_ID</string>
     <key>CFBundleName</key>
     <string>Phoenix VPN</string>
     <key>CFBundleDisplayName</key>
@@ -402,7 +419,7 @@ if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.resistine.desktop.clamonacc</string>
+    <string>exposed.phoenix.desktop.clamonacc</string>
     <key>CFBundleName</key>
     <string>Phoenix Antivirus</string>
     <key>CFBundleDisplayName</key>
@@ -625,7 +642,7 @@ fi
 
 # Embedding Developer ID profiles into components
 echo "  - Embedding Developer ID profile into system extension..."
-cp "$NE_PROFILE" "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension/Contents/embedded.provisionprofile"
+cp "$NE_PROFILE" "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension/Contents/embedded.provisionprofile"
 
 echo "  - Embedding Developer ID profile into main app..."
 cp "$MAIN_PROFILE" "$PYTHON_APP/Contents/embedded.provisionprofile"
@@ -707,7 +724,7 @@ cat > "$NE_DIST_ENTITLEMENTS" << ENTEOF
 <plist version="1.0">
 <dict>
 	<key>com.apple.application-identifier</key>
-	<string>${TEAM_ID}.com.resistine.desktop.network-extension</string>
+	<string>${TEAM_ID}.${NE_BUNDLE_ID}</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
 	<key>com.apple.developer.networking.networkextension</key>
@@ -740,7 +757,7 @@ cat > "$CLI_DIST_ENTITLEMENTS" << ENTEOF
 <plist version="1.0">
 <dict>
 	<key>com.apple.application-identifier</key>
-	<string>${TEAM_ID}.com.resistine.desktop.vpnxpc</string>
+	<string>${TEAM_ID}.${CLI_BUNDLE_ID}</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
 	<key>com.apple.developer.networking.networkextension</key>
@@ -829,7 +846,7 @@ codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
     --entitlements "$NE_DIST_ENTITLEMENTS" \
-    "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" || {
+    "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" || {
     echo "  System Extension signing failed"
     exit 1
 }
@@ -955,7 +972,7 @@ echo ""
 echo "  Verifying signatures..."
 VERIFY_FAILED=false
 
-codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>&1 && \
+codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" 2>&1 && \
     echo "    network-extension.systemextension: valid" || { echo "    network-extension.systemextension: INVALID"; VERIFY_FAILED=true; }
 
 codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
@@ -1114,7 +1131,7 @@ cat > "$DIST_DIR/distribution.xml" << DISTEOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
     <title>$DISPLAY_NAME</title>
-    <organization>com.resistine</organization>
+    <organization>exposed.phoenix</organization>
     <domains enable_localSystem="true"/>
     <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
     <welcome file="welcome.html" mime-type="text/html"/>
@@ -1243,11 +1260,11 @@ echo "Step 7: Notarization..."
 notarize_and_staple() {
     local artifact="$1"
     local label="$2"
-    local log_file="/tmp/resistine-notarize-${label}.txt"
+    local log_file="/tmp/phoenix-notarize-${label}.txt"
 
     echo "  Submitting $label for notarization..."
     xcrun notarytool submit "$artifact" \
-        --keychain-profile "resistine-notarize" \
+        --keychain-profile "$NOTARY_PROFILE" \
         --wait 2>&1 | tee "$log_file"
 
     if grep -q "status: Accepted" "$log_file"; then
@@ -1267,7 +1284,7 @@ notarize_and_staple() {
         if [ -n "$SUBMISSION_ID" ]; then
             echo ""
             xcrun notarytool log "$SUBMISSION_ID" \
-                --keychain-profile "resistine-notarize" 2>&1
+                --keychain-profile "$NOTARY_PROFILE" 2>&1
         fi
         rm -f "$log_file"
         return 1
@@ -1279,7 +1296,7 @@ if [ "$SKIP_NOTARIZE" = true ]; then
     echo ""
     echo "  To notarize manually later:"
     echo "    xcrun notarytool submit $DIST_DIR/$DISPLAY_NAME-Installer.pkg \\"
-    echo "      --keychain-profile \"resistine-notarize\" --wait"
+    echo "      --keychain-profile \"$NOTARY_PROFILE\" --wait"
     echo "    xcrun stapler staple $DIST_DIR/$DISPLAY_NAME-Installer.pkg"
 else
     # Notarize PKG (primary)

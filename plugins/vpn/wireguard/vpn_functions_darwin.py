@@ -56,6 +56,10 @@ def get_writable_wireguard_dir():
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
 
+# The packet-tunnel system extension (packaging/Resistine.spec BUNDLE_ID +
+# ".network-extension"; build-distribution.sh checks the Swift build carries it).
+NE_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
+
 
 class HelperToolManager:
     """Manages CLI communication with the resistine-vpn-cli tool"""
@@ -146,7 +150,7 @@ class VPNHelper:
             logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
             
             # Store reference to keep delegate alive
-            VPNHelper._activator_ref = run_activation("com.resistine.desktop.network-extension")
+            VPNHelper._activator_ref = run_activation(NE_BUNDLE_ID)
             return True
         except ImportError:
             logger.error("❌ [VPN] PyObjC ExtensionActivator not found (ImportError)")
@@ -674,7 +678,7 @@ def is_extension_enabled():
         output = result.stdout + result.stderr
         enabled = False
         for line in output.splitlines():
-            if "com.resistine.desktop.network-extension" in line:
+            if NE_BUNDLE_ID in line:
                 if "[activated enabled]" in line:
                     enabled = True
                 else:

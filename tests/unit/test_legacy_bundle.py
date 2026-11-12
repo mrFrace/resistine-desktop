@@ -17,13 +17,19 @@ def _bundle(path, bundle_id):
 @pytest.fixture
 def apps(tmp_path, monkeypatch):
     monkeypatch.setattr(functions.sys, "platform", "darwin")
-    new = _bundle(tmp_path / "Phoenix.app", "com.resistine.desktop")
+    new = _bundle(tmp_path / "Phoenix.app", "exposed.phoenix.desktop")
     monkeypatch.setattr(functions, "_get_bundle_path", lambda: str(new))
     monkeypatch.setattr(functions, "LEGACY_BUNDLE", str(tmp_path / "Resistine.app"))
     return tmp_path
 
 
 def test_removes_old_bundle_with_our_id(apps):
+    old = _bundle(apps / "Resistine.app", "exposed.phoenix.desktop")
+    assert functions.remove_legacy_bundle() is True
+    assert not old.exists()
+
+
+def test_removes_old_bundle_with_the_pre_rename_id(apps):
     old = _bundle(apps / "Resistine.app", "com.resistine.desktop")
     assert functions.remove_legacy_bundle() is True
     assert not old.exists()
