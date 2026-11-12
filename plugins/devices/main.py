@@ -12,9 +12,11 @@ new system provides:
   * the SIEM alerts siem-bot sends over Matrix (plugins/chat/siem_alerts.py);
   * this machine's own agent state, from the Endpoint plugin's cache.
 
-Layout: a header with a device scope selector, the focused device's card,
-four stat cards, the to-do list, the week's alerts with a chart, and the
-fleet list. Sub-pages (an alert, a mitigation) slide in over the page.
+Layout: a header with a device scope selector over the tabs. Overview: the
+focused device's card, four stat cards, the to-do list, the week's alerts
+with a chart, and the fleet list. Fixes (fixes_tab.py): the posture's
+package items as upgrades across devices. Vulnerabilities, Events and
+Inventory: tabs.py. Sub-pages (an alert, a mitigation) slide in over the page.
 Network and probes run on worker threads; the page always paints at once
 from the cached posture and refreshes in place.
 
@@ -60,7 +62,8 @@ from gui.qt_widgets import Card, CardGrid, scroll_page, set_pill
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture
-from plugins.devices import data, remote
+from plugins.devices import data, fixes, remote
+from plugins.devices.fixes_tab import FixesTab
 from plugins.devices.tabs import EventsTab, InventoryTab, VulnerabilitiesTab
 from plugins.devices.widgets import DailyBars, GradeBadge, SeverityBar, StatCard
 from utils import settings
@@ -199,6 +202,18 @@ class _Ctx:
 
     def alerts(self, hosts) -> list:
         return self._p._parsed_alerts(hosts)
+
+    def push(self, page: QWidget) -> None:
+        self._p._push(page)
+
+    def pop(self) -> None:
+        self._p._pop()
+
+    def ask_ai(self, text: str) -> None:
+        self._p._ask_ai_text(text)
+
+    def step_row(self, n: int, text: str) -> QWidget:
+        return self._p._step_row(n, text)
 
 
 class Plugin(BasePlugin):
@@ -366,6 +381,7 @@ class Plugin(BasePlugin):
                 if mine is not None:
                     mitigations.check(mine, True, force=force)
                     posture.record_score(mine)
+                fixes.record(st.get("cards") or [])
                 # The tabs' datasets, once per screen (and on explicit refresh).
                 if force or not self._remote_kicked:
                     self._remote_kicked = True
@@ -454,6 +470,7 @@ class Plugin(BasePlugin):
 
     _TABS = (
         ("overview", "tab_overview"),
+        ("fixes", "tab_fixes"),
         ("vulns", "tab_vulns"),
         ("events", "tab_events"),
         ("inventory", "tab_inventory"),
@@ -538,6 +555,7 @@ class Plugin(BasePlugin):
         tab = self._tabs.get(key)
         if tab is None:
             cls = {
+                "fixes": FixesTab,
                 "vulns": VulnerabilitiesTab,
                 "events": EventsTab,
                 "inventory": InventoryTab,
