@@ -42,6 +42,8 @@ _SECRET_KEYS = {
     "code_verifier", "device_code", "client_secret", "password", "otp",
     "privatekey", "private_key", "key", "presharedkey", "secret", "state",
     "user_code",
+    # secret-storage entries (cross-signing keys, encrypted with the recovery key)
+    "ciphertext",
 }
 _JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
 # Bearer tokens, MAS tokens and query-string secrets inside free text.
