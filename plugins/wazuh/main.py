@@ -170,7 +170,7 @@ class Plugin(BasePlugin):
                 return
             self._cached_state = s
             self._cached_conn = c
-            new_status = self.check_status()
+            new_status = self.get_status()
             if new_status != self.status:
                 self.status = new_status
                 self.app.update_plugin(self.id)
@@ -183,10 +183,19 @@ class Plugin(BasePlugin):
     # ── Status ─────────────────────────────────────────────────────────
 
     def check_status(self):
-        """Cheap, non-blocking status from the cached state string."""
+        """Cheap, non-blocking status from the cached state string. Before
+        the first poll lands the state is unknown, not a warning."""
+        from plugins.base_plugin import ERROR, OFF, OK, UNKNOWN, WARNING, Status
+        from utils.i18n import get_text
+
+        def st(kind, key):
+            return Status(kind, get_text(f"wazuh.status_{key}"))
+
         if not _platform_supported:
-            return None
+            return st(OFF, "unsupported")
         state = self._cached_state
+        if state is None:
+            return st(UNKNOWN, "not_checked")
         if state == "Running":
             # "Running" only means the daemon is alive. If we positively know
             # it's not connected to the manager (e.g. its key was invalidated
@@ -202,11 +211,13 @@ class Plugin(BasePlugin):
                     conn = "unknown"
                 self._cached_conn = conn
             if conn == "disconnected":
-                return "Warning"
-            return "OK"
+                return st(WARNING, "disconnected")
+            return st(OK, "running")
         if state == "Stopped":
-            return "Error"
-        return "Warning"
+            return st(ERROR, "stopped")
+        if state == "Not Installed":
+            return st(WARNING, "not_installed")
+        return Status(WARNING, str(state))
 
     def on_theme_changed(self):
         """Rebuild the Wazuh screen on theme toggle."""
@@ -589,7 +600,7 @@ class Plugin(BasePlugin):
         state = _safe(get_agent_status)
         if state is not None and state != self._cached_state:
             self._cached_state = state
-            new_status = self.check_status()
+            new_status = self.get_status()
             if new_status != self.status:
                 self.status = new_status
                 self.app.after(0, self._refresh_screen)
@@ -909,7 +920,7 @@ class Plugin(BasePlugin):
             self._cached_conn = conn
             changed = True
         if changed:
-            new_status = self.check_status()
+            new_status = self.get_status()
             logger.info(
                 f"SIEM agent poll: state={state} conn={conn} "
                 f"tile {self.status} -> {new_status}")
@@ -940,7 +951,7 @@ class Plugin(BasePlugin):
         away.
         """
         try:
-            self.status = self.check_status()
+            self.status = self.get_status()
         except Exception:
             pass
         try:

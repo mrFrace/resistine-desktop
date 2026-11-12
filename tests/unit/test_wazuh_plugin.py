@@ -78,24 +78,24 @@ class TestCheckStatus:
     def test_running_connected_returns_ok(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Running"
         wazuh_plugin._cached_conn = "connected"
-        assert wazuh_plugin.check_status() == "OK"
+        assert wazuh_plugin.check_status().label == "OK"
 
     def test_running_unknown_connection_is_not_downgraded(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Running"
         wazuh_plugin._cached_conn = "unknown"
-        assert wazuh_plugin.check_status() == "OK"
+        assert wazuh_plugin.check_status().label == "OK"
 
     def test_running_but_disconnected_returns_warning(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Running"
         wazuh_plugin._cached_conn = "disconnected"
-        assert wazuh_plugin.check_status() == "Warning"
+        assert wazuh_plugin.check_status().label == "Warning"
 
     def test_running_without_cached_conn_reads_live_once(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Running"
         wazuh_plugin._cached_conn = None
         with patch("plugins.wazuh.main.get_agent_connection",
                    return_value="disconnected") as conn:
-            assert wazuh_plugin.check_status() == "Warning"
+            assert wazuh_plugin.check_status().label == "Warning"
             assert wazuh_plugin._cached_conn == "disconnected"
             wazuh_plugin.check_status()
             conn.assert_called_once()
@@ -105,20 +105,22 @@ class TestCheckStatus:
         wazuh_plugin._cached_conn = None
         with patch("plugins.wazuh.main.get_agent_connection",
                    side_effect=RuntimeError("fail")):
-            assert wazuh_plugin.check_status() == "OK"
+            assert wazuh_plugin.check_status().label == "OK"
         assert wazuh_plugin._cached_conn == "unknown"
 
     def test_stopped_returns_error(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Stopped"
-        assert wazuh_plugin.check_status() == "Error"
+        assert wazuh_plugin.check_status().label == "Error"
 
     def test_not_installed_returns_warning(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Not Installed"
-        assert wazuh_plugin.check_status() == "Warning"
+        assert wazuh_plugin.check_status().label == "Warning"
 
-    def test_unpopulated_cache_returns_warning(self, wazuh_plugin):
+    def test_unpopulated_cache_is_unknown_not_warning(self, wazuh_plugin):
         wazuh_plugin._cached_state = None
-        assert wazuh_plugin.check_status() == "Warning"
+        st = wazuh_plugin.check_status()
+        assert st.kind == "unknown" and st.reason == "Not checked yet"
+        assert wazuh_plugin.get_status() == "Unknown"
 
     def test_does_not_call_get_agent_status(self, wazuh_plugin):
         wazuh_plugin._cached_state = "Stopped"
@@ -133,9 +135,10 @@ class TestCheckStatus:
         assert wazuh_plugin.status == "Error"
         wazuh_plugin.app.update_plugin.assert_called_with(wazuh_plugin.id)
 
-    def test_unsupported_platform_returns_none(self, wazuh_plugin):
+    def test_unsupported_platform_is_off(self, wazuh_plugin):
         with patch("plugins.wazuh.main._platform_supported", False):
-            assert wazuh_plugin.check_status() is None
+            st = wazuh_plugin.check_status()
+            assert st.kind == "off" and wazuh_plugin.get_status() is None
 
 
 @pytest.mark.unit

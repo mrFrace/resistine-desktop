@@ -86,19 +86,20 @@ def _send(p, text):
 class TestCheckStatus:
     def test_returns_warning_when_client_is_none(self, plugin):
         plugin.client = None
-        assert plugin.check_status() == "Warning"
+        assert plugin.check_status().label == "Warning"
 
     def test_ok_when_client_set_and_agent_running(self, plugin, monkeypatch):
         monkeypatch.setattr(chat_main.Plugin, "_chat_access_status",
                             staticmethod(lambda: True))
         plugin.client = MagicMock()
-        assert plugin.check_status() == "OK"
+        assert plugin.check_status().label == "OK"
 
     def test_warning_when_agent_not_running(self, plugin, monkeypatch):
         monkeypatch.setattr(chat_main.Plugin, "_chat_access_status",
                             staticmethod(lambda: False))
         plugin.client = MagicMock()
-        assert plugin.check_status() == "Warning"
+        st = plugin.check_status()
+        assert st.label == "Warning" and st.reason == "Endpoint agent not running"
 
     def test_access_follows_wazuh_agent_running(self, monkeypatch):
         from plugins.wazuh import main as wz

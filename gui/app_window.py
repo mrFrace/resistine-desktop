@@ -55,6 +55,7 @@ from PyQt6.QtWidgets import (
 from gui import theme
 from gui.qt_toast import Toast
 from gui.qt_widgets import resource
+from plugins.base_plugin import UNKNOWN, Status
 from utils.logger import logger
 
 
@@ -64,11 +65,14 @@ NAV_ICON = 24
 NAV_GLOW_PAD = 8
 
 # Plugin status (BasePlugin.get_status) -> glow colour; others = no glow.
+# "Unknown" (not checked, check failed, stale) is amber: not fine, not an
+# emergency, the app simply has no data.
 STATUS_GLOW = {
     "OK": "#2CC985",
     "Warning": "#FF4040",
     "Error": "#FF4040",
     "Critical": "#FF4040",
+    "Unknown": "#F5B623",
 }
 
 
@@ -117,18 +121,55 @@ class NavRail(QFrame):
         self._open_timer.timeout.connect(lambda: self._animate_to(1.0))
         parent.installEventFilter(self)  # follow the shell's height
         self.setGeometry(0, 0, self.COLLAPSED, parent.height())
+        self._labels: dict[QPushButton, tuple[QLabel, QLabel]] = {}
 
     def add_label(self, btn: QPushButton, text: str) -> None:
-        """Give ``btn`` a name label that is revealed as the rail opens."""
+        """Give ``btn`` a name label that is revealed as the rail opens,
+        with a caption line under it for the status reason (set_caption)."""
         label = QLabel(text, btn)
         label.setObjectName("NavLabel")
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        caption = QLabel("", btn)
+        caption.setObjectName("NavCaption")
+        caption.setTextFormat(Qt.TextFormat.PlainText)
+        caption.hide()
+        for w in (label, caption):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            fade = QGraphicsOpacityEffect(w)
+            fade.setOpacity(self._label_opacity(self._open))
+            w.setGraphicsEffect(fade)
+            self._fades.append(fade)
+        self._labels[btn] = (label, caption)
+        self._place(btn)
+
+    def set_caption(self, btn: QPushButton, text: str) -> None:
+        """The second line under ``btn``'s name: why its status is what it
+        is ("not installed", "checked 3 h ago"). Empty hides it."""
+        pair = self._labels.get(btn)
+        if pair is None:
+            return
+        label, caption = pair
+        try:
+            if caption.text() == text:
+                return
+            caption.setText(text)
+            caption.setVisible(bool(text))
+            self._place(btn)
+        except RuntimeError:  # button deleted by a shell rebuild
+            self._labels.pop(btn, None)
+
+    def _place(self, btn: QPushButton) -> None:
+        label, caption = self._labels[btn]
         label.adjustSize()
-        label.move(self.COLLAPSED - 24, (btn.height() - label.height()) // 2)
-        fade = QGraphicsOpacityEffect(label)
-        fade.setOpacity(self._label_opacity(self._open))
-        label.setGraphicsEffect(fade)
-        self._fades.append(fade)
+        x = self.COLLAPSED - 24
+        if not caption.text():
+            label.move(x, (btn.height() - label.height()) // 2)
+            return
+        caption.adjustSize()
+        caption.setMaximumWidth(self.EXPANDED - x - 12)
+        total = label.height() + caption.height()
+        top = (btn.height() - total) // 2
+        label.move(x, top)
+        caption.move(x, top + label.height())
 
     def eventFilter(self, obj, event):  # noqa: N802 (Qt override)
         if obj is self.parent() and event.type() == QEvent.Type.Resize:
@@ -417,12 +458,13 @@ class AppWindow(QMainWindow):
     # ---- Nav status glow --------------------------------------------------
     def _nav_icon(self, plugin) -> QIcon:
         """The plugin's nav icon with a glow in its status colour."""
-        status = self._nav_status.get(plugin.get_name())
-        return glow_icon(plugin.get_nav_icon(), STATUS_GLOW.get(status))
+        info = self._nav_status.get(plugin.get_name())
+        label = info.label if info is not None else None
+        return glow_icon(plugin.get_nav_icon(), STATUS_GLOW.get(label))
 
     def _refresh_nav_status(self) -> None:
         """Read plugin statuses off the GUI thread (some checks shell out),
-        then repaint only the icons whose status changed."""
+        then repaint only the icons whose status or reason changed."""
         if self._nav_status_busy:
             return
         plugins = [self._plugin_by_name(n) for n in self._nav_buttons]
@@ -435,25 +477,28 @@ class AppWindow(QMainWindow):
             statuses = {}
             for p in plugins:
                 try:
-                    statuses[p.get_name()] = p.get_status()
+                    statuses[p.get_name()] = p.status_info()
                 except Exception:  # noqa: BLE001
-                    statuses[p.get_name()] = None
+                    statuses[p.get_name()] = Status(UNKNOWN)
             self.after(0, lambda: self._apply_nav_status(statuses))
 
         threading.Thread(target=work, daemon=True).start()
 
     def _apply_nav_status(self, statuses: dict) -> None:
         self._nav_status_busy = False
-        for name, status in statuses.items():
-            if self._nav_status.get(name, "?") == status:
+        for name, info in statuses.items():
+            old = self._nav_status.get(name)
+            if old is not None and (old.kind, old.reason) == (info.kind, info.reason):
                 continue
-            self._nav_status[name] = status
+            self._nav_status[name] = info
             btn = self._nav_buttons.get(name)
             plugin = self._plugin_by_name(name)
             if btn is None or plugin is None:
                 continue
             try:
-                btn.setIcon(self._nav_icon(plugin))
+                if old is None or old.label != info.label:
+                    btn.setIcon(self._nav_icon(plugin))
+                self.sidebar.set_caption(btn, info.reason)
             except RuntimeError:  # sidebar rebuilt meanwhile
                 pass
 
@@ -482,11 +527,12 @@ class AppWindow(QMainWindow):
         self._apply_logo_glow()
         return label
 
-    # Glow colour per protection state; None (unknown) = no glow.
-    _GLOW = {"ok": "#2CC985", "error": "#FF4040"}
+    # Glow colour per protection state; None (not applicable) = no glow.
+    _GLOW = {"ok": "#2CC985", "error": "#FF4040", "unknown": STATUS_GLOW["Unknown"]}
 
     def set_protection_status(self, state: str | None) -> None:
-        """Make the sidebar logo glow green ("ok") or red ("error")."""
+        """Make the sidebar logo glow green ("ok"), red ("error") or amber
+        ("unknown": the agent's state could not be read)."""
         if state == getattr(self, "_protection", None):
             return
         self._protection = state
@@ -511,8 +557,9 @@ class AppWindow(QMainWindow):
             glow.setColor(QColor(colour))
             glow.setBlurRadius(22)
             label.setGraphicsEffect(glow)
-            label.setToolTip("Phoenix — protected" if state == "ok"
-                             else "Phoenix — not protected")
+            label.setToolTip({"ok": "Phoenix — protected",
+                              "unknown": "Phoenix — protection status unknown"}
+                             .get(state, "Phoenix — not protected"))
             if state == "error":
                 # Unprotected: a slow breathing pulse to draw the eye.
                 anim = QPropertyAnimation(glow, b"blurRadius", label)

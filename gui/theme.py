@@ -139,6 +139,10 @@ QLabel#NavLabel {{
     background: transparent; color: {c('text_primary')};
     font-size: 14px; font-weight: 600;
 }}
+QLabel#NavCaption {{
+    background: transparent; color: {c('text_secondary')};
+    font-size: 11px; font-weight: 500;
+}}
 
 #Card {{
     background-color: {c('card_bg')}; border: 1px solid {c('border')};

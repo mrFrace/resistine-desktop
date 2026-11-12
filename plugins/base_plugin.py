@@ -13,11 +13,52 @@ Licensed under the GNU General Public License v2 or later
 from __future__ import annotations
 
 import os
+import time
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QIcon, QPixmap
 
 from gui import theme
+
+# Status kinds. "off" is nothing to report (VPN not connected by choice, a
+# feature this platform does not have): no glow. "unknown" is the app not
+# knowing (not checked yet, a check that failed, data older than the plugin
+# says it should be): amber glow, never green and never red.
+OK, WARNING, ERROR, OFF, UNKNOWN = "ok", "warning", "error", "off", "unknown"
+_KINDS = {OK, WARNING, ERROR, OFF, UNKNOWN}
+# Status kind -> the legacy get_status() string the Dashboard and Store read.
+_LEGACY = {OK: "OK", WARNING: "Warning", ERROR: "Error", OFF: None, UNKNOWN: "Unknown"}
+
+
+@dataclass(frozen=True)
+class Status:
+    """What a plugin knows about itself: ``kind`` (one of OK, WARNING, ERROR,
+    OFF, UNKNOWN), a short ``reason`` for the rail caption ("not installed",
+    "checked 3 h ago") and ``at``, when that fact was established (epoch
+    seconds; None = just now)."""
+
+    kind: str
+    reason: str = ""
+    at: float | None = None
+
+    @property
+    def label(self) -> str | None:
+        """The legacy ``get_status()`` string ("OK", "Warning", ...)."""
+        return _LEGACY.get(self.kind, "Unknown")
+
+
+def _age(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h"
+    return f"{int(seconds // 86400)} d"
+
+
+def _status_text(key: str, **fmt) -> str:
+    from utils.i18n import get_text
+    return get_text(f"status.{key}", **fmt)
 
 
 class BasePlugin:
@@ -83,19 +124,55 @@ class BasePlugin:
     def set_status(self, status):
         self.status = status
 
+    # An OK whose ``Status.at`` is older than this (seconds) is reported as
+    # unknown: the plugin's own check cadence. None = never ages.
+    status_fresh_for: float | None = None
+
     def check_status(self):
+        """A ``Status``, a legacy string ("OK", "Warning", ...) or None (off)."""
         return self.status
 
-    def get_status(self):
+    def status_info(self) -> Status:
+        """``check_status()`` as a ``Status``, aged: a failed check and an
+        OK past ``status_fresh_for`` are unknown, not a warning and not
+        a stale green."""
         try:
-            status = self.check_status()
-            if status is None:
-                return None
-            return self.status_map.get(status.lower(), status)
+            raw = self.check_status()
         except Exception as e:
             from utils.logger import logger
             logger.error(f"Status check failed for plugin {self.name}: {e}")
-            return "Warning"
+            return Status(UNKNOWN, _status_text("check_failed"))
+        if raw is None:
+            return Status(OFF)
+        if isinstance(raw, Status):
+            st = raw
+        elif isinstance(raw, str):
+            kind = raw.lower()
+            if kind == "info":
+                kind = OFF
+            st = Status(kind) if kind in _KINDS else Status(UNKNOWN, raw)
+        else:
+            return Status(UNKNOWN)
+        if st.kind == OK and st.at is not None and self.status_fresh_for is not None:
+            age = time.time() - st.at
+            if age > self.status_fresh_for:
+                return Status(UNKNOWN, _status_text("stale", age=_age(age)), at=st.at)
+        return st
+
+    def get_status(self):
+        """Legacy string status: "OK", "Warning", "Error", "Unknown", or None
+        (nothing to report). Unmapped strings pass through."""
+        try:
+            raw = self.check_status()
+        except Exception as e:
+            from utils.logger import logger
+            logger.error(f"Status check failed for plugin {self.name}: {e}")
+            return "Unknown"
+        if raw is None:
+            return None
+        if isinstance(raw, Status):
+            return raw.label
+        return self.status_map.get(raw.lower(), raw)
 
     # ---- Metadata accessors ----------------------------------------------
     def set_id(self, id):
