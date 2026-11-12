@@ -221,7 +221,7 @@ class Plugin(BasePlugin):
 
     def __init__(self, app):
         super().__init__(
-            id="013",
+            id="014",
             version="2026.11.04",
             order=5.5,
             name="Devices",
