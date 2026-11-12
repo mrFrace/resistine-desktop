@@ -38,8 +38,8 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.page_kit import (
-    KVList, MenuRow, Page, PageHeader, RowList, SlideStack, back_link, icon_button, line_icon,
-    muted)
+    KVList, MenuRow, Page, PageHeader, RowList, SlideStack, as_of_text, back_link, icon_button,
+    line_icon, muted)
 from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
@@ -76,7 +76,9 @@ def _endpoint_info() -> dict:
     state = wz._safe(wz.get_agent_status, "Unknown")
     conn = (wz._safe(wz.get_agent_connection, "unknown")
             if state == "Running" else "unknown")
-    if state != "Running":
+    if state == "Unknown":  # the status read failed: not known, not stopped
+        badge = ("unknown", "Not checked")
+    elif state != "Running":
         badge = ("error", "Stopped")
     elif conn == "connected":
         badge = ("ok", "Connected")
@@ -87,7 +89,7 @@ def _endpoint_info() -> dict:
     else:
         badge = ("ok", "Running")
     rows = {
-        "Service": state,
+        "Service": "—" if state == "Unknown" else state,
         "Connection": "—" if conn == "unknown" else conn.capitalize(),
         "Agent name": wz._safe(wz.get_agent_name, "—"),
         "Group": wz._safe(wz.get_agent_group, "—"),
@@ -399,6 +401,11 @@ class _Panel(QFrame):
         for i, (k, val) in enumerate(data.get("rows", {}).items()):
             row_id = ids.get(k) if self._on_row else None
             self._row(i, k, str(val), (lambda r=row_id: self._on_row(r)) if row_id else None)
+        if data.get("as_of"):
+            at, next_at = data["as_of"]
+            age = QLabel(as_of_text(at, next_at))
+            age.setStyleSheet(f"color: {theme.color('text_secondary')}; font-size: 11px;")
+            self._extras.addWidget(age)
         if data.get("strip"):
             self._extras.addWidget(_DayStrip(data["strip"]))
         if data.get("spark"):

@@ -43,7 +43,7 @@ def antivirus_panel(status: Optional[dict], db: Optional[dict], last_scan: Optio
     if status is None:
         return {"badge": ("info", "Not installed"),
                 "rows": {"Antivirus": "The Antivirus plugin is not installed."}}
-    kind, text, protection = _AV_STATE.get(str(status.get("state") or ""), ("warning", "Checking", "Checking…"))
+    kind, text, protection = _AV_STATE.get(str(status.get("state") or ""), ("unknown", "Checking", "Checking…"))
     rows = {"Protection": protection}
     if status.get("state") == "protected":
         rows["Real-time"] = "On" if status.get("clamonacc_running") else "Off (scheduled and manual scans)"
