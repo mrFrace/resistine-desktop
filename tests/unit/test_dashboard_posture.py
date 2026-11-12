@@ -188,3 +188,11 @@ def test_state_names_the_next_fetch(monkeypatch):
     assert posture.state()["next_at"] == 100.0 + posture.MIN_INTERVAL_S
     monkeypatch.setitem(posture._last, "tried_at", 0.0)
     assert posture.state()["next_at"] is None
+
+
+@pytest.mark.unit
+def test_other_machines_show_their_age_when_stale():
+    cards = [card(), card("laptop", "A", 99, computed="2026-10-06T06:00:00"),
+             card("noclock", "B", 80, computed="")]
+    rows = posture.panel_data(st(cards=cards), {"francispc"}, NOW)["rows"]
+    assert rows["Other machines"] == "laptop: A · 99 · 6 days ago\nnoclock: B · 80 · age unknown"

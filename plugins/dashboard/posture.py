@@ -149,6 +149,18 @@ def split_cards(cards: list, names: Iterable[str]) -> tuple:
     return mine, [c for c in cards if c is not mine]
 
 
+def _other_line(card: dict, now: datetime) -> str:
+    """"host: A · 99", or "host: A · 99 · 6 days ago" when its card is
+    older than a missed daily run (a laptop that stayed closed)."""
+    line = f"{card.get('hostname') or card.get('agent_id')}: {card.get('grade') or '?'} · {card.get('score', '—')}"
+    when = _computed(card)
+    if when is None:
+        return line + " · age unknown"
+    if (now.replace(tzinfo=None) - when.replace(tzinfo=None)).total_seconds() > STALE_AFTER_S:
+        line += " · " + _age_text(when, now).lower()
+    return line
+
+
 def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
                todo: Optional[str] = None, score_trend: Optional[dict] = None) -> Optional[dict]:
     """The Security posture panel's badge and rows (None: still loading).
@@ -213,9 +225,7 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
         elif recs:
             rows["To do"] = "\n".join(recs)
     if others:
-        rows["Other machines"] = "\n".join(
-            f"{c.get('hostname') or c.get('agent_id')}: {c.get('grade') or '?'} · {c.get('score', '—')}"
-            for c in others)
+        rows["Other machines"] = "\n".join(_other_line(c, now) for c in others)
     if status == "error" and st.get("error"):
         rows["Note"] = f"Showing the last known posture. {st['error']}"
     out = {"badge": badge, "rows": rows, "as_of": (st.get("fetched_at"), st.get("next_at"))}
