@@ -227,3 +227,24 @@ def test_os_and_ago_helpers():
     now = time.time()
     assert sessions_tab.seconds_since("not a date") is None
     assert 0 <= sessions_tab.seconds_since(_iso(timedelta(minutes=5)), now) - 300 < 5
+
+
+def test_stale_install_row_removes_every_earlier_install(tab, monkeypatch):
+    monkeypatch.setattr(sessions_tab.socket, "gethostname", lambda: "old-box")
+    t = tab()
+    titles = _titles(t.widget)
+    assert titles[2] == t.t("stale_row")   # under this device, after Verify
+    removed = []
+    monkeypatch.setattr(sessions_api, "remove_device",
+                        lambda dev: (removed.append(dev), (True, None))[1])
+    next(r for r in _rows(t.widget) if r.text() == t.t("stale_row")).clicked.emit()
+    page = t.ctx.pushed[-1]
+    assert any("10.42.20.9" in lbl.text() for lbl in page.findChildren(QLabel))
+    next(r for r in page.findChildren(MenuRow) if r.text() == t.t("stale_remove")).clicked.emit()
+    assert removed == ["PHX_AAAAAAAAAAAAAAAA"] and t.ctx.popped == 1
+
+
+def test_no_stale_row_on_another_hostname(tab, monkeypatch):
+    monkeypatch.setattr(sessions_tab.socket, "gethostname", lambda: "somewhere-else")
+    t = tab()
+    assert t.t("stale_row") not in _titles(t.widget)

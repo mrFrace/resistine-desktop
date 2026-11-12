@@ -1,9 +1,12 @@
 # Signed-in devices: list, verify, remove
 
-Status (2026-11-12): desktop sections 1-4 implemented
-(`plugins/login/cross_signing.py`, `plugins/devices/sessions_api.py`,
-`plugins/devices/sessions_tab.py`, tests); section 5 (display name,
-stale-install prompt) and section 6 (docs) open. The server side
+Status (2026-11-12): desktop side done
+(`plugins/login/cross_signing.py`, `plugins/login/device_name.py`,
+`plugins/devices/sessions_api.py`, `plugins/devices/sessions_tab.py`,
+tests, contract and decision docs). Synapse accepts the display name under
+MAS (checked live). The stale-install prompt is a toast after sign-in
+pointing at a "Remove the old installation" row in the tab (toasts take
+no clicks, and there are no dialogs). The server side
 (`~/flakes/packages/phoenix-provisioning/PLAN-device-sessions.md`) is
 implemented but not deployed: until it is, the tab says the server does not
 list devices yet (404), or shows its 503 while the MAS admin client is not
