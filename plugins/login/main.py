@@ -235,6 +235,12 @@ class Plugin(BasePlugin):
         self.app.show_notification(
             f"Signed in as {account.get('user_id') or 'Phoenix user'}",
             type="info")
+        try:
+            from plugins.login import device_name
+            device_name.name_in_background()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Device name after sign-in failed: {e}")
+        self._check_stale_installs()
 
         # First login on this machine: run the unified setup wizard instead
         # of dropping the user on the dashboard with everything unconfigured.
@@ -250,6 +256,25 @@ class Plugin(BasePlugin):
                 sign_in.ensure_in_background()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Agent check after sign-in failed: {e}")
+
+    def _check_stale_installs(self):
+        """Point at Devices → Sessions when an earlier install of this
+        computer is still on the account. Never removes anything itself."""
+        def work():
+            try:
+                import socket
+
+                from plugins.devices import sessions_api
+                rows, _ = sessions_api.list_devices()
+                if not sessions_api.stale_installs(rows, socket.gethostname()):
+                    return
+                from utils.i18n import get_text
+                text = get_text("devices.sessions_stale_toast")
+                self.app.after(0, lambda: self.app.show_notification(text, type="warning"))
+            except Exception as e:  # noqa: BLE001 - a hint, never a failure
+                logger.info(f"Stale-install check skipped: {e}")
+
+        threading.Thread(target=work, name="stale-installs", daemon=True).start()
 
     def skip_login(self):
         self.cancel_login()

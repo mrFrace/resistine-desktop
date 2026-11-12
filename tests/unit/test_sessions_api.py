@@ -132,3 +132,16 @@ def test_remove_statuses(http, status, body, expected):
 def test_remove_validates_the_id_before_any_request(http, bad):
     assert sa.remove_device(bad) == (False, "invalid device id")
     assert http[0] == []
+
+
+def test_stale_installs_match_this_hostname_only():
+    rows = sa.parse_devices(FULL) + sa.parse_devices({"devices": [
+        {"device_id": "PHX_BBBBBBBBBBBBBBBB", "kind": "phoenix",
+         "session": {"client_name": "Phoenix Desktop"}, "vpn": {"hostname": "Drake-Laptop "}},
+        {"device_id": "PHX_CCCCCCCCCCCCCCCC", "kind": "phoenix", "vpn": {"hostname": "other"}},
+        {"device_id": "PHONE", "kind": "matrix", "vpn": {"hostname": "drake-laptop"}},
+    ]})
+    # the current device carries the hostname too, and is never stale
+    assert [r.device_id for r in sa.stale_installs(rows, "drake-laptop")] == ["PHX_BBBBBBBBBBBBBBBB"]
+    assert [r.device_id for r in sa.stale_installs(rows, "old-box")] == ["PHX_AAAAAAAAAAAAAAAA"]
+    assert sa.stale_installs(rows, "") == [] and sa.stale_installs(None, "x") == []

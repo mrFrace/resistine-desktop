@@ -99,6 +99,17 @@ def parse_devices(payload) -> list[DeviceRow]:
     return rows
 
 
+def stale_installs(rows, hostname: str) -> list[DeviceRow]:
+    """Earlier Phoenix installs of this computer: PHX rows other than this
+    one whose VPN peer carries this hostname. A reinstall gets a new device
+    id; the old one keeps its VPN address and agent until removed."""
+    host = (hostname or "").strip().casefold()
+    if not host:
+        return []
+    return [r for r in rows or [] if r.phoenix and not r.current
+            and r.vpn and r.vpn.hostname.strip().casefold() == host]
+
+
 def list_devices():
     """(rows, error): error is None, NOT_AVAILABLE, or a short reason."""
     from plugins.vpn.provisioning import ProvisioningError, _authorized_request, _error_detail
