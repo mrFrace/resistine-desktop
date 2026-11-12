@@ -275,13 +275,32 @@ class Plugin(BasePlugin):
             self._local_agent_ids(),
         )
 
+    # A posture card older than one missed daily run is stale: unknown.
+    status_fresh_for = posture.STALE_AFTER_S
+
     def check_status(self):
-        rows = self._rows(posture.state())
+        """This machine's posture grade; without a card the status is
+        unknown (or off while signed out), with the reason."""
+        from datetime import timezone
+
+        from plugins.base_plugin import ERROR, OFF, OK, UNKNOWN, WARNING, Status
+
+        st = posture.state()
+        rows = self._rows(st)
         mine = data.this_machine_row(rows)
         if mine is None:
-            return None
-        kind = data.grade_kind(mine["grade"])
-        return {"ok": "OK", "warning": "Warning"}.get(kind, "Error")
+            fetched = st.get("status")
+            if fetched == "signed_out":
+                return Status(OFF, _t("status_signed_out"))
+            if fetched is None:
+                return Status(UNKNOWN, _t("status_checking"))
+            if fetched == "error":
+                return Status(UNKNOWN, _t("status_unreachable"))
+            return Status(UNKNOWN, _t("status_no_posture"))
+        kind = {"ok": OK, "warning": WARNING}.get(data.grade_kind(mine["grade"]), ERROR)
+        when = mine.get("computed_at")
+        at = when.replace(tzinfo=timezone.utc).timestamp() if when else None
+        return Status(kind, _t("status_grade", grade=mine["grade"]) if kind != OK else "", at=at)
 
     def on_theme_changed(self):
         if getattr(self, "app", None):
@@ -431,7 +450,7 @@ class Plugin(BasePlugin):
             logger.error(f"[DEVICES] rebuild failed: {e}")
             return
         try:
-            new_status = self.check_status()
+            new_status = self.get_status()
             if new_status != self.status:
                 self.status = new_status
                 self.app._refresh_nav_status()  # repaint the sidebar glow

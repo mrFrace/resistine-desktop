@@ -301,7 +301,7 @@ class Plugin(BasePlugin):
                 return
             self._last_state = status.get("state")
             self._last_status = status
-            new_status = self.check_status()
+            new_status = self.get_status()
             # Refresh the dashboard tile when the real status finally lands.
             # Without this, the tile keeps the stale "Warning" set in __init__
             # (before this async poll ran) — visible on macOS, where the poll
@@ -337,12 +337,17 @@ class Plugin(BasePlugin):
             logger.debug("Antivirus: clamd warm-up errored")
 
     def check_status(self):
-        """Cheap, cached status — never calls the blocking backend."""
+        """Cheap, cached status — never calls the blocking backend. Before
+        the first poll lands the state is unknown, not a warning."""
+        from plugins.base_plugin import ERROR, OK, UNKNOWN, WARNING, Status
+        from utils.i18n import get_text
+        if self._last_state is None:
+            return Status(UNKNOWN, get_text("antivirus.status_not_checked"))
         if self._last_state == "protected":
-            return "OK"
+            return Status(OK, get_text("antivirus.status_protected"))
         if self._last_state == "error":
-            return "Error"
-        return "Warning"
+            return Status(ERROR, get_text("antivirus.status_error"))
+        return Status(WARNING, get_text("antivirus.status_attention"))
 
     def on_theme_changed(self):
         """Rebuild the AV screen on theme toggle to re-evaluate hardcoded colours."""
@@ -516,7 +521,7 @@ class Plugin(BasePlugin):
         state = status.get("state")
         self._last_state = state
         self._last_status = status
-        self.status = self.check_status()
+        self.status = self.get_status()
         try:
             self._apply_realtime_status_ui(status)
         except Exception:

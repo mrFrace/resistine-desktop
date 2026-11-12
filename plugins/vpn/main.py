@@ -378,9 +378,13 @@ class Plugin(BasePlugin):
         """Dynamic check of the VPN status from cheap cached state.
 
         The VPN is optional: connected glows green, anything else leaves the
-        nav icon plain (None), never a warning.
+        nav icon plain (off), never a warning.
         """
-        return "OK" if my_vpn_status == "Running" else None
+        from plugins.base_plugin import OFF, OK, Status
+        from utils.i18n import get_text
+        if my_vpn_status == "Running":
+            return Status(OK, get_text("vpn.status_connected"))
+        return Status(OFF, get_text("vpn.status_off"))
 
     def on_theme_changed(self):
         """Rebuild the VPN screen on theme toggle (icons bake in theme colours)."""

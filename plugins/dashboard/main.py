@@ -1356,7 +1356,7 @@ class Plugin(BasePlugin):
         # Endpoint badge kind -> logo glow: ok = green, info (unsupported
         # platform) = none, anything else (stopped / not installed /
         # disconnected) = red.
-        state = {"ok": "ok", "info": None}.get(kind, "error")
+        state = {"ok": "ok", "info": None, "unknown": "unknown"}.get(kind, "error")
         setter = getattr(self.app, "set_protection_status", None)
         if setter is not None:
             setter(state)

@@ -7,7 +7,7 @@ QApplication (QT_QPA_PLATFORM=offscreen).
 Covers:
 - Initialization and attribute storage
 - get_status / check_status normalization
-- Exception in check_status returns "Warning"
+- Exception in check_status returns "Unknown" (the app does not know)
 - Status map coverage (ok, info, warning, error, critical)
 - create_main_screen raises NotImplementedError
 - destroy is a no-op
@@ -126,11 +126,59 @@ class TestGetStatus:
         p = ConcretePlugin.make(status=None)
         assert p.get_status() is None
 
-    def test_exception_in_check_status_returns_warning(self, plugin):
+    def test_exception_in_check_status_is_unknown(self, plugin):
         def _crash():
             raise RuntimeError("status check failed")
         plugin.check_status = _crash
-        assert plugin.get_status() == "Warning"
+        assert plugin.get_status() == "Unknown"
+        assert plugin.status_info().kind == "unknown"
+
+    def test_status_object_maps_to_legacy_label(self):
+        from plugins.base_plugin import Status
+        for kind, label in (("ok", "OK"), ("warning", "Warning"), ("error", "Error"),
+                            ("unknown", "Unknown"), ("off", None)):
+            assert ConcretePlugin.make(status=Status(kind, "why")).get_status() == label
+
+
+@pytest.mark.unit
+class TestStatusInfo:
+    """status_info(): the three-state answer the nav rail glows from."""
+
+    def test_legacy_strings_and_none(self):
+        from plugins.base_plugin import Status
+        assert ConcretePlugin.make(status="OK").status_info() == Status("ok")
+        assert ConcretePlugin.make(status="warning").status_info() == Status("warning")
+        assert ConcretePlugin.make(status="Info").status_info().kind == "off"
+        assert ConcretePlugin.make(status=None).status_info().kind == "off"
+        custom = ConcretePlugin.make(status="CustomStatus").status_info()
+        assert custom.kind == "unknown" and custom.reason == "CustomStatus"
+
+    def test_status_passes_through_with_reason(self):
+        from plugins.base_plugin import Status
+        st = Status("warning", "not installed")
+        assert ConcretePlugin.make(status=st).status_info() is st
+
+    def test_ok_past_fresh_for_is_unknown(self, monkeypatch):
+        import time
+
+        from plugins.base_plugin import Status
+        p = ConcretePlugin.make(status=Status("ok", "Grade A", at=time.time() - 3 * 3600))
+        p.status_fresh_for = 3600
+        st = p.status_info()
+        assert st.kind == "unknown" and st.reason == "Last checked 3 h ago"
+        assert st.at == p.check_status().at
+        p.status_fresh_for = None
+        assert p.status_info().kind == "ok"
+        p.status_fresh_for = 4 * 3600
+        assert p.status_info().kind == "ok"
+
+    def test_only_ok_ages(self):
+        import time
+
+        from plugins.base_plugin import Status
+        p = ConcretePlugin.make(status=Status("error", "stopped", at=time.time() - 9e6))
+        p.status_fresh_for = 1
+        assert p.status_info().kind == "error"
 
 
 # ===========================================================================
