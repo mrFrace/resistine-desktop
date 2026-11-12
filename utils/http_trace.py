@@ -14,7 +14,7 @@ root scripts) are added with ``event()``.
 
 The trace never goes through the logger: the logger can ship records to
 telemetry, and this file holds payloads. Tokens, codes and keys are masked to
-a short prefix and their length; JWTs are decoded (header and claims) with
+a fixed redaction marker and their length; JWTs are decoded (header and claims) with
 the signature dropped. Public keys, user IDs and addresses stay readable.
 """
 
@@ -80,10 +80,8 @@ def enable(log_dir: str) -> str:
 # --------------------------------------------------------------------------
 
 def mask(value: Any) -> str:
-    s = str(value)
-    if len(s) <= 6:
-        return f"<{len(s)} chars>"
-    return f"{s[:6]}…<{len(s)} chars>"
+    """Fixed-form redaction: never leaks any characters of the secret."""
+    return f"<redacted:len={len(str(value))}>"
 
 
 def _b64json(part: str) -> Any:

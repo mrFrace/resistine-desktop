@@ -167,7 +167,7 @@ class TestTraySendCommand:
 
 
 # ===========================================================================
-# ResistineTray state machine
+# PhoenixTray state machine
 # ===========================================================================
 @pytest.mark.unit
 class TestResistineTrayState:

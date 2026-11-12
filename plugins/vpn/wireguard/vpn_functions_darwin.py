@@ -1,7 +1,7 @@
 """
 VPN Functions for WireGuard on macOS
 Author: Jacqueline Edoro
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -55,6 +55,10 @@ def get_writable_wireguard_dir():
 
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
+
+# The packet-tunnel system extension (packaging/Resistine.spec BUNDLE_ID +
+# ".network-extension"; build-distribution.sh checks the Swift build carries it).
+NE_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
 
 
 class HelperToolManager:
@@ -146,7 +150,7 @@ class VPNHelper:
             logger.info("🔌 [VPN] Triggering System Extension activation via Main App...")
             
             # Store reference to keep delegate alive
-            VPNHelper._activator_ref = run_activation("com.resistine.desktop.network-extension")
+            VPNHelper._activator_ref = run_activation(NE_BUNDLE_ID)
             return True
         except ImportError:
             logger.error("❌ [VPN] PyObjC ExtensionActivator not found (ImportError)")
@@ -643,6 +647,7 @@ def save_vpn_configuration(vpn_config_json, config_name="phoenix"):
 
 
 import time as _time
+from utils.i18n import get_text
 
 _extension_cache = {"value": None, "timestamp": 0}
 _EXTENSION_CACHE_TTL = 2  # seconds
@@ -673,7 +678,7 @@ def is_extension_enabled():
         output = result.stdout + result.stderr
         enabled = False
         for line in output.splitlines():
-            if "com.resistine.desktop.network-extension" in line:
+            if NE_BUNDLE_ID in line:
                 if "[activated enabled]" in line:
                     enabled = True
                 else:

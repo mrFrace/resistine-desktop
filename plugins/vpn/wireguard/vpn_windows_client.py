@@ -3,7 +3,7 @@ Windows VPN client — thin IPC wrapper over the ResistineVPN service.
 All tunnel control on Windows goes through here.
 
 Authors: Merhawi
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025
 """
 
 from plugins.vpn.wireguard.service_client import send_command

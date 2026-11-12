@@ -9,6 +9,7 @@ Covers:
 - plugins sorted by order attribute
 - get_available_plugins: returns [] on network error
 """
+import hashlib
 import io
 import json
 import os
@@ -34,6 +35,22 @@ def _make_nested_zip(folder: str, files: dict) -> bytes:
     """Create a zip where all files are inside a single top-level folder."""
     nested = {f"{folder}/{name}": content for name, content in files.items()}
     return _make_zip(nested)
+
+
+def _mock_resp(content: bytes):
+    """A streamed 200 response whose body is ``content``."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status.return_value = None
+    resp.content = content
+    resp.iter_content = lambda chunk_size=8192: iter(
+        [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    )
+    return resp
+
+
+def _sha(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 def _make_fake_plugin_class(plugin_id: str, order: int = 50):
@@ -159,9 +176,7 @@ class TestDownloadPlugin:
     def test_valid_zip_extracts_to_user_plugins_dir(self, mgr, tmp_path):
         """A valid flat zip should be extracted into the user plugins directory."""
         zip_bytes = _make_zip({"main.py": "# plugin code\n", "config.json": "{}"})
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = zip_bytes
+        mock_resp = _mock_resp(zip_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
             with patch.object(mgr, "load_plugins", return_value=[]):
@@ -169,6 +184,7 @@ class TestDownloadPlugin:
                     "https://example.com/plugin.zip",
                     plugin_id="myplugin",
                     plugin_name="My Plugin",
+                    expected_sha256=_sha(zip_bytes),
                 )
 
         assert ok is True
@@ -177,15 +193,14 @@ class TestDownloadPlugin:
     def test_nested_zip_extracted_without_double_nesting(self, mgr, tmp_path):
         """A zip with a top-level folder should be extracted without creating nested dirs."""
         zip_bytes = _make_nested_zip("my_plugin_folder", {"main.py": "# code\n"})
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = zip_bytes
+        mock_resp = _mock_resp(zip_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
             with patch.object(mgr, "load_plugins", return_value=[]):
                 ok, _ = mgr.download_plugin(
                     "https://example.com/plugin.zip",
                     plugin_id="my_plugin_folder",
+                    expected_sha256=_sha(zip_bytes),
                 )
 
         assert ok is True
@@ -201,7 +216,9 @@ class TestDownloadPlugin:
             "plugins.plugin_manager.requests.get",
             side_effect=req_lib.RequestException("connection refused"),
         ):
-            ok, msg = mgr.download_plugin("https://bad-host.example.com/plugin.zip")
+            ok, msg = mgr.download_plugin(
+                "https://bad-host.example.com/plugin.zip", expected_sha256="0" * 64
+            )
 
         assert ok is False
         assert isinstance(msg, str)
@@ -209,12 +226,13 @@ class TestDownloadPlugin:
 
     def test_bad_zip_returns_false_with_message(self, mgr):
         """If response content is not a valid zip, return (False, message)."""
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = b"this is not a zip file at all!!"
+        bad_bytes = b"this is not a zip file at all!!"
+        mock_resp = _mock_resp(bad_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
-            ok, msg = mgr.download_plugin("https://example.com/corrupt.zip")
+            ok, msg = mgr.download_plugin(
+                "https://example.com/corrupt.zip", expected_sha256=_sha(bad_bytes)
+            )
 
         assert ok is False
         assert isinstance(msg, str)
@@ -227,7 +245,9 @@ class TestDownloadPlugin:
         err.response = MagicMock(status_code=404)
 
         with patch("plugins.plugin_manager.requests.get", side_effect=err):
-            ok, msg = mgr.download_plugin("https://example.com/missing.zip")
+            ok, msg = mgr.download_plugin(
+                "https://example.com/missing.zip", expected_sha256="0" * 64
+            )
 
         assert ok is False
 
@@ -239,15 +259,14 @@ class TestDownloadPlugin:
         mgr.state_file = str(state_file)
 
         zip_bytes = _make_zip({"main.py": "# code\n"})
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = zip_bytes
+        mock_resp = _mock_resp(zip_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
             with patch.object(mgr, "load_plugins", return_value=[]):
                 mgr.download_plugin(
                     "https://example.com/my_plugin.zip",
                     plugin_id="my_plugin",
+                    expected_sha256=_sha(zip_bytes),
                 )
 
         saved = json.loads(state_file.read_text())

@@ -2,8 +2,8 @@
 Wazuh Agent Functions for Windows
 Handles download, install, start/stop of the Wazuh SIEM agent and Sysmon
 using PowerShell privilege escalation.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -40,7 +40,35 @@ _KEY_BACKUP = os.path.join(os.environ.get("APPDATA", ""), "Phoenix", "wazuh_clie
 _AGENT_AUTH = os.path.join(WINDOWS_WAZUH_DIR, "agent-auth.exe")
 _SERVICE_NAME = "WazuhSvc"
 
-_RESISTINE_API_BASE = "https://validate.resistine.work"
+# Where Windows flags a pending restart. The agent MSI carries the launch
+# condition "Installed OR NOT MsiSystemRebootPending", so it fails with 1603
+# while any of these is set; checking first saves a UAC prompt for an install
+# that cannot succeed and lets the UI say what to do.
+_REBOOT_PENDING_KEYS = (
+    (r"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending", None),
+    (r"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired", None),
+    (r"SYSTEM\CurrentControlSet\Control\Session Manager", "PendingFileRenameOperations"),
+)
+
+RESTART_REQUIRED_MSG = (
+    "Windows needs to restart before the endpoint agent can be installed. "
+    "Restart your PC, then try again."
+)
+
+
+def pending_reboot_reason():
+    """Return which Windows marker says a restart is pending ('' if none)."""
+    for subkey, value_name in _REBOOT_PENDING_KEYS:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, subkey) as key:
+                if value_name is None:
+                    return subkey.rsplit("\\", 1)[-1]
+                value, _ = winreg.QueryValueEx(key, value_name)
+                if value:
+                    return value_name
+        except OSError:
+            continue
+    return ""
 
 # Sysmon paths
 _SYSMON_DIR = os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Resistine", "Sysmon")
@@ -131,8 +159,15 @@ def _run_privileged(command, timeout=300):
             tempfile.gettempdir(), f"phoenix-wazuh-{os.getpid()}-{time.time_ns()}.result"
         )
         rf = _ps_quote(result_file)
+        # The command runs in a script block so what it writes (MSI_EXIT=...,
+        # the KEY_RESTORED / REENROLL_OK markers) reaches Python after the
+        # SUCCESS line, as stdout does on the already-admin path above.
         script_path = _write_temp_ps1(
-            f"try {{\n{command}\n'SUCCESS' | Out-File -FilePath {rf} -Encoding utf8\n}}\n"
+            "try {\n"
+            f"$__out = & {{\n{command}\n}} 2>&1 | Out-String\n"
+            f"'SUCCESS' | Out-File -FilePath {rf} -Encoding utf8\n"
+            f"$__out | Out-File -FilePath {rf} -Encoding utf8 -Append\n"
+            "}\n"
             f"catch {{ $_.Exception.Message | Out-File -FilePath {rf} -Encoding utf8 }}\n"
         )
         # Start-Process joins -ArgumentList with spaces without quoting, so the
@@ -199,7 +234,7 @@ def get_agent_group():
 def needs_reenrollment():
     """Return True if the agent was enrolled under a different email."""
     enrolled = settings.get("wazuh", "enrolled_email", "")
-    current = settings.get("auth", "email", "")
+    current = enrollment.account_identity()
     if enrolled and current and enrolled != current:
         logger.info(f"[WAZUH] Enrollment mismatch: enrolled={enrolled!r} current={current!r}")
         return True
@@ -353,12 +388,32 @@ def _prepare_sysmon_download(progress_callback=None):
 
 
 def _sysmon_install_ps(sysmon):
-    """PowerShell that installs Sysmon from a prepared download dict."""
+    """PowerShell that installs Sysmon from a prepared download dict.
+
+    The binary came off the network, so it runs elevated only with a valid
+    Microsoft Authenticode signature. A driver left behind by an earlier
+    install (SysmonDrv registered, no Sysmon64/Sysmon service) makes ``-i``
+    fail, so that is uninstalled first. The exit code is echoed for Python.
+    """
+    src_exe = _ps_quote(sysmon["exe"])
+    dest_exe = _ps_quote(os.path.join(_SYSMON_DIR, os.path.basename(sysmon["exe"])))
+    dest_cfg = _ps_quote(os.path.join(_SYSMON_DIR, os.path.basename(sysmon["config"])))
     return (
-        f"New-Item -ItemType Directory -Path {_ps_quote(_SYSMON_DIR)} -Force | Out-Null; "
-        f"Copy-Item -Path {_ps_quote(os.path.join(sysmon['dir'], '*'))} "
-        f"-Destination {_ps_quote(_SYSMON_DIR)} -Recurse -Force; "
-        f"& {_ps_quote(sysmon['exe'])} -accepteula -i {_ps_quote(sysmon['config'])}"
+        f"$sig = Get-AuthenticodeSignature -FilePath {src_exe}\n"
+        "if ($sig.Status -ne 'Valid' -or "
+        "$sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') "
+        "{ Write-Output 'SYSMON_EXIT=unsigned'; throw 'Sysmon binary is not signed by Microsoft' }\n"
+        f"New-Item -ItemType Directory -Path {_ps_quote(_SYSMON_DIR)} -Force | Out-Null\n"
+        f"Copy-Item -Path {src_exe},{_ps_quote(sysmon['config'])} "
+        f"-Destination {_ps_quote(_SYSMON_DIR)} -Force\n"
+        "if ((Get-Service -Name SysmonDrv -ErrorAction SilentlyContinue) -and "
+        "-not (Get-Service -Name Sysmon64,Sysmon -ErrorAction SilentlyContinue)) "
+        f"{{ & {dest_exe} -u force 2>$null | Out-Null }}\n"
+        # Sysmon prints its banner on stderr even on success; PowerShell would
+        # report that as NativeCommandError noise, so drop stderr and keep the
+        # exit code as the signal.
+        f"& {dest_exe} -accepteula -i {dest_cfg} 2>$null | Out-Null\n"
+        'Write-Output "SYSMON_EXIT=$LASTEXITCODE"'
     )
 
 
@@ -503,6 +558,32 @@ def _ensure_ossec_address():
     _run_privileged(patch_cmd)
 
 
+def _backup_key_is_valid():
+    """Re-validate the user-owned key backup before SYSTEM restores it.
+
+    The backup lives in the (user-writable) %APPDATA%\\Phoenix dir but is
+    copied back into the agent's client.keys by an elevated PowerShell, so its
+    content must be re-checked at use time: read it once (capped at 512
+    bytes) and require exactly one enrollment key line
+    ("<id> <name> <ip|any> <64 hex>"). On mismatch the restore is skipped —
+    treated as if no backup existed.
+    """
+    try:
+        with open(_KEY_BACKUP, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(512)
+    except OSError as e:
+        logger.warning(f"Could not read client.keys backup: {e}")
+        return False
+    line = content.strip()
+    if "\n" in line or not enrollment._KEY_LINE_RE.match(line):
+        logger.warning(
+            "client.keys backup does not look like a valid enrollment key; "
+            "skipping restore"
+        )
+        return False
+    return True
+
+
 def start_agent():
     """Start the Wazuh agent Windows service."""
     if get_agent_status() == "Running":
@@ -510,8 +591,9 @@ def start_agent():
 
     _ensure_ossec_address()
 
-    # Restore key if missing
-    if os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS):
+    # Restore key if missing (only from a backup that re-validates)
+    if (os.path.exists(_KEY_BACKUP) and not os.path.exists(_CLIENT_KEYS)
+            and _backup_key_is_valid()):
         restore_cmd = (
             f"Copy-Item -Path {_ps_quote(_KEY_BACKUP)} -Destination {_ps_quote(_CLIENT_KEYS)} -Force"
         )
@@ -553,6 +635,10 @@ def restore_client_key_if_needed():
 
     if not os.path.exists(_KEY_BACKUP):
         logger.info("No client.keys backup found")
+        return True
+
+    # A backup that fails re-validation is treated as no backup at all.
+    if not _backup_key_is_valid():
         return True
 
     # Only restore if missing
@@ -735,14 +821,14 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir,
     def _guard(ps):
         return f"try {{\n{ps}\n}} catch {{ }}"
 
-    # msiexec args as a PowerShell ARRAY so Start-Process quotes each element
-    # itself. Passing a single pre-joined string makes Start-Process re-split on
-    # spaces, which corrupts an MSI path that contains spaces (e.g. a user named
-    # "Jane Doe"). Property values are space-free (see config.py); the package
-    # path is its own element so its spaces survive.
+    # Start-Process joins -ArgumentList with spaces and does NOT quote the
+    # elements (checked on Windows PowerShell 5.1), so the two paths carry
+    # literal double quotes; Windows paths cannot contain ". Property values
+    # are space-free (see config.py).
+    msi_log = _msi_log_path(msi_path)
     msi_args = ",".join([
         "'/i'",
-        _ps_quote(msi_path),
+        _ps_quote(f'"{msi_path}"'),
         "'/qn'",
         _ps_quote(f"WAZUH_MANAGER={WAZUH_MANAGER}"),
         _ps_quote(f"WAZUH_MANAGER_PORT={WAZUH_MANAGER_PORT}"),
@@ -752,7 +838,7 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir,
         _ps_quote(f"WAZUH_AGENT_NAME={agent_name}"),
         _ps_quote(f"WAZUH_AGENT_GROUP={agent_group}"),
         "'/l*v'",
-        _ps_quote(_msi_log_path(msi_path)),
+        _ps_quote(f'"{msi_log}"'),
     ])
 
     parts = ["$ErrorActionPreference = 'Continue'"]
@@ -769,9 +855,15 @@ def _build_install_script(sysmon, msi_path, agent_name, agent_group, backup_dir,
         f"{{ {_PS_UNINSTALL_AGENT_MSI} }}"
     ))
 
-    # Wazuh MSI — wait for full completion before configuring/enrolling.
+    # Wazuh MSI — wait for full completion before configuring/enrolling. The
+    # exit code is echoed for Python, and the verbose log (which msiexec
+    # creates with an ACL the unelevated app cannot read) is opened to the
+    # invoking user so msi_failure_summary() can explain a failure.
     parts.append(_guard(
-        f"Start-Process -FilePath 'msiexec.exe' -Wait -ArgumentList @({msi_args})"
+        f"$msi = Start-Process -FilePath 'msiexec.exe' -Wait -PassThru -ArgumentList @({msi_args})\n"
+        'Write-Output "MSI_EXIT=$($msi.ExitCode)"\n'
+        f"if (Test-Path {_ps_quote(msi_log)}) {{ icacls {_ps_quote(msi_log)} "
+        "/grant ($env:USERDOMAIN + '\\' + $env:USERNAME + ':(R)') | Out-Null }"
     ))
 
     # Stop the service before enrollment so the final Start-Service loads the
@@ -822,6 +914,17 @@ def full_install(progress_callback=None):
         if progress_callback:
             progress_callback(msg)
 
+    # Agent MSIs built before the pending-reboot launch condition was stripped
+    # (upstream Wazuh 5.0 wazuh-installer.wxs) refuse to install while Windows
+    # has a restart pending. Log it for support, but don't block: the fixed
+    # package installs regardless, and with an old package msiexec's own
+    # "restart is pending" line in the (now readable) log produces the
+    # restart message below.
+    reason = pending_reboot_reason()
+    if reason:
+        logger.warning(f"[WAZUH] Windows restart pending ({reason}); "
+                       "an agent MSI with the pending-reboot launch condition will refuse")
+
     # --- Unprivileged downloads (no prompt) ---
     sysmon = _prepare_sysmon_download(progress_callback)
 
@@ -847,13 +950,23 @@ def full_install(progress_callback=None):
         sysmon, msi_path, agent_name, agent_group, backup_dir, enrolled)
     success, output = _run_privileged(script, timeout=600)
     enrollment.discard(enrolled)
-    logger.info(f"[WAZUH] combined install ok={success} output={output!r}")
+    output = output or ""
+    m = re.search(r"MSI_EXIT=(\d+)", output)
+    msi_exit = int(m.group(1)) if m else None
+    logger.info(f"[WAZUH] combined install ok={success} msi_exit={msi_exit} output={output!r}")
 
     if not is_agent_installed():
         logger.error(f"Install failed (agent not present): {output}")
         why = msi_failure_summary(_msi_log_path(msi_path))
-        logger.error(f"[WAZUH] MSI log {_msi_log_path(msi_path)}:\n{why or 'no MSI log written'}")
-        _p("Installation failed")
+        logger.error(f"[WAZUH] MSI log {_msi_log_path(msi_path)}:\n{why or 'no MSI log readable'}")
+        if "restart is pending" in why.lower():
+            _p(RESTART_REQUIRED_MSG)
+        elif msi_exit in _MSI_EXIT_MEANING:
+            _p(f"Installation failed: {_MSI_EXIT_MEANING[msi_exit]}")
+        elif msi_exit is not None:
+            _p(f"Installation failed: msiexec exit code {msi_exit}")
+        else:
+            _p("Installation failed")
         return False
 
     # --- Unprivileged verify (no prompt) ---
@@ -873,7 +986,7 @@ def full_install(progress_callback=None):
         _p("Wazuh agent installed (may need manual start)")
 
     # Record enrollment email
-    settings.set("wazuh", "enrolled_email", settings.get("auth", "email", ""))
+    settings.set("wazuh", "enrolled_email", enrollment.account_identity())
 
     logger.info("Wazuh full install completed successfully")
     return True

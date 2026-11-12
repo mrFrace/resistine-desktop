@@ -12,11 +12,12 @@ agent after a reinstall). Reading the real status lets the UI show
 This module is pure (no platform imports, no I/O side effects beyond reading
 the caller-supplied paths) so it is trivially unit-testable on any OS.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
+import contextlib
 import os
 import platform
 import subprocess
@@ -29,8 +30,21 @@ UNKNOWN = "unknown"
 
 _VALID_STATES = (CONNECTED, PENDING, DISCONNECTED)
 
-# TCP port the Wazuh agent keeps its persistent manager session on.
+# TCP port a 4.x Wazuh agent keeps its persistent manager session on. 5.0
+# agents talk to the manager on the HTTPS port from plugins.wazuh.config
+# (1517), so the probe checks the configured port first and this one second.
 AGENT_TCP_PORT = 1514
+
+
+def manager_ports() -> tuple:
+    """Ports an ESTABLISHED session to the manager may use, configured first."""
+    ports = [AGENT_TCP_PORT]
+    # Config unavailable or unparsable: fall back to the 4.x port alone.
+    with contextlib.suppress(ImportError, ValueError, TypeError):
+        from plugins.wazuh.config import WAZUH_MANAGER_PORT
+
+        ports.insert(0, int(WAZUH_MANAGER_PORT))
+    return tuple(dict.fromkeys(ports))
 
 
 def parse_agentd_state(text: str) -> str:
@@ -111,26 +125,30 @@ def established_in_proc_net(text: str, port: int = AGENT_TCP_PORT) -> bool:
     return False
 
 
-def probe_manager_socket(port: int = AGENT_TCP_PORT) -> bool:
-    """True if this machine holds an ESTABLISHED TCP session to *port*.
+def probe_manager_socket(port: int | None = None) -> bool:
+    """True if this machine holds an ESTABLISHED TCP session to the manager.
 
-    Unprivileged on every platform: Linux reads /proc/net/tcp[6] directly
-    (no net-tools dependency); macOS and Windows shell out to ``netstat
-    -an``, which lists all sockets without root/admin. Never raises.
+    ``port`` pins one port; by default every port in manager_ports() is
+    tried. Unprivileged on every platform: Linux reads /proc/net/tcp[6]
+    directly (no net-tools dependency); macOS and Windows shell out to
+    ``netstat -an``, which lists all sockets without root/admin. Never raises.
     """
+    ports = (port,) if port else manager_ports()
     try:
         if platform.system() == "Linux":
             for path in ("/proc/net/tcp", "/proc/net/tcp6"):
                 try:
                     with open(path, "r") as fh:
-                        if established_in_proc_net(fh.read(), port):
-                            return True
+                        text = fh.read()
                 except OSError:
-                    pass
+                    continue
+                if any(established_in_proc_net(text, p) for p in ports):
+                    return True
             return False
         result = subprocess.run(
-            ["netstat", "-an"], capture_output=True, text=True, timeout=5)
-        return established_in_netstat(result.stdout, port)
+            ["netstat", "-an"], capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return any(established_in_netstat(result.stdout, p) for p in ports)
     except Exception:
         return False
 

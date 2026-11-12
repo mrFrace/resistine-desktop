@@ -58,6 +58,11 @@ _INVITE_POLL = 120         # seconds between checks for a new SIEM-alerts invite
 _DISCOVER_EVERY = 15       # polls between scans for alert rooms joined elsewhere (30 min)
 _ALERTS_RESTART = 300      # min seconds between alerts-listener (re)starts
 _MAX_PENDING_ALERTS = 100  # undecryptable alerts kept for a retry when their key arrives
+# One turn's reply is re-rendered on every delta (O(n²)) and stored whole in
+# history; a runaway/hostile bridge must not grow it unbounded for 15 min.
+_MAX_TURN_TEXT = 2 * 1024 * 1024   # accumulated turn text cap (chars)
+_MAX_TURN_PARTS = 500              # continuation-part cap
+_TRUNCATED_MARKER = "\n\n[truncated]"
 
 
 class MatrixTransportError(Exception):
@@ -94,6 +99,7 @@ class TurnAssembler:
         self.error: Optional[str] = None
         self.part = 0
         self._part_text = ""
+        self.truncated = False
 
     def feed(self, content: dict) -> str:
         """Feed one version (reply content or m.new_content); return the delta."""
@@ -103,21 +109,46 @@ class TurnAssembler:
             self.status = "error"
             self.error = (turn or {}).get("error") or content.get("body") or "The assistant failed."
             return ""
+        if self.truncated:
+            # Caps hit earlier: accept no more text, only let the turn end.
+            if status != "running":
+                self.status = status
+            return ""
         part = turn.get("part", 0) if isinstance(turn, dict) else 0
         if not isinstance(part, int) or part < self.part:
             return ""  # a late version of an earlier part
+        if part >= _MAX_TURN_PARTS:
+            delta = self._truncate(f"part cap ({_MAX_TURN_PARTS}) reached")
+            if status != "running":
+                self.status = status
+            return delta
         if part > self.part:
             self.part, self._part_text = part, ""
         body = content.get("body") or ""
         if body.startswith(self._part_text):
             delta, self._part_text = body[len(self._part_text):], body
-            self.text += delta
+            room = _MAX_TURN_TEXT - len(self.text)
+            if len(delta) > room:
+                delta = delta[:max(0, room)]
+                self.text += delta
+                delta += self._truncate(f"size cap ({_MAX_TURN_TEXT} chars) reached")
+            else:
+                self.text += delta
         else:
             logger.warning("[CHAT-MATRIX] reply version is not an extension of the previous one; dropped")
             delta = ""
         if status != "running":
             self.status = status
         return delta
+
+    def _truncate(self, why: str) -> str:
+        """Stop accepting text; append a visible marker once and return it."""
+        if self.truncated:
+            return ""
+        self.truncated = True
+        logger.warning(f"[CHAT-MATRIX] reply truncated: {why}")
+        self.text += _TRUNCATED_MARKER
+        return _TRUNCATED_MARKER
 
     @property
     def done(self) -> bool:
@@ -672,6 +703,15 @@ class MatrixService:
         return room.room_id in self._alert_rooms and event.sender == self.alerts_bot
 
     async def _on_message(self, room, event) -> None:
+        # Every room this session syncs (assistant DM, SIEM alert DMs) is
+        # E2E encrypted; a plaintext m.room.message can only come from the
+        # homeserver itself, which can forge ``sender`` on it. Trust only
+        # events matrix-nio actually Megolm-decrypted.
+        if not getattr(event, "decrypted", False):
+            logger.warning(
+                f"[CHAT-MATRIX] dropped plaintext event {event.event_id} "
+                f"from {event.sender} in {room.room_id} (sender unverifiable)")
+            return
         if self._is_alert(room, event):
             siem_alerts.publish(room.room_id, event.event_id, getattr(event, "body", "") or "",
                                 getattr(event, "server_timestamp", None))

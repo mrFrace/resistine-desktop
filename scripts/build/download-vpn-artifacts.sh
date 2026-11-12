@@ -26,8 +26,13 @@ fi
 
 # Query the latest artifact's commit SHA from CI
 get_remote_sha() {
-    gh api "repos/$REPO/actions/artifacts?name=vpn-macos-latest&per_page=1" \
-        --jq '.artifacts[0].workflow_run.head_sha' 2>/dev/null || echo ""
+    # Only trust output that looks like a commit SHA — on HTTP errors gh can
+    # emit JSON error text on stdout, which must not masquerade as a version.
+    sha=$(gh api "repos/$REPO/actions/artifacts?name=vpn-macos-latest&per_page=1"  --jq '.artifacts[0].workflow_run.head_sha' 2>/dev/null) || sha=""
+    case "$sha" in
+        *[!0-9a-f]*|"") echo "" ;;
+        *) [ ${#sha} -eq 40 ] && echo "$sha" || echo "" ;;
+    esac
 }
 
 # Read local version
@@ -71,7 +76,7 @@ else
 
     if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ] \
        && [ -f "$ARTIFACTS_DIR/resistine-vpn-cli" ] \
-       && [ -d "$ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+       && compgen -G "$ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
         echo "VPN artifacts already up-to-date (${REMOTE_SHA:0:12})"
         exit 0
     fi
@@ -79,6 +84,13 @@ else
     if [ -n "$REMOTE_SHA" ]; then
         echo "Downloading VPN artifacts (${REMOTE_SHA:0:12})..."
     else
+        # CI unreachable (artifact repo is mid-migration to Phoenix infra).
+        # Never wipe a working local copy just because we can't check it.
+        if [ -f "$ARTIFACTS_DIR/resistine-vpn-cli" ] \
+           && compgen -G "$ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
+            echo "CI unreachable — using existing local VPN artifacts."
+            exit 0
+        fi
         echo "Downloading latest VPN artifacts from main..."
     fi
     DOWNLOAD_SHA="$REMOTE_SHA"
@@ -110,7 +122,7 @@ if [ ! -f "$ARTIFACTS_DIR/resistine-vpn-cli" ]; then
     exit 1
 fi
 
-if [ ! -d "$ARTIFACTS_DIR/com.resistine.desktop.network-extension.systemextension" ]; then
+if ! compgen -G "$ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
     echo "Error: network extension not found in downloaded artifacts"
     exit 1
 fi

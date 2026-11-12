@@ -42,7 +42,8 @@ BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
 APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
-BUNDLE_ID="com.resistine.desktop"
+BUNDLE_ID="exposed.phoenix.desktop"
+NE_BUNDLE_ID="$BUNDLE_ID.network-extension"
 
 # Step 1: Build Swift Components (VPN)
 echo "Step 1: Building Swift components..."
@@ -188,12 +189,12 @@ cp "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
 
 # --- Copy Network Extension as System Extension ---
 echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
-SYSEX_PATH="$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
+SYSEX_PATH="$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension"
 
 if [ -d "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" ]; then
     cp -R "$VPN_ARCHIVE/Contents/PlugIns/network-extension.appex" "$SYSEX_PATH"
-elif [ -d "$VPN_ARCHIVE/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
-    cp -R "$VPN_ARCHIVE/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" "$SYSEX_PATH"
+elif NE_ARCHIVED=$(compgen -G "$VPN_ARCHIVE/Contents/Library/SystemExtensions/*network-extension.systemextension" | head -1) && [ -n "$NE_ARCHIVED" ]; then
+    cp -R "$NE_ARCHIVED" "$SYSEX_PATH"
 else
     echo "❌ Error: Network Extension not found in archive"
     exit 1
@@ -205,14 +206,14 @@ if [ ! -f "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
     echo "❌ Error: CLI not in Contents/MacOS/"
     exit 1
 fi
-if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" ]; then
+if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" ]; then
     echo "❌ Error: System Extension not in Contents/Library/SystemExtensions/"
     exit 1
 fi
 
 echo "✅ VPN components placed in Apple-standard locations"
 echo "   - CLI: Contents/MacOS/resistine-vpn-cli"
-echo "   - System Extension: Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension"
+echo "   - System Extension: Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension"
 
 # Step 4: Verify permissions
 echo ""
@@ -279,7 +280,7 @@ codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 
     echo "  ✅ resistine-vpn-cli signature valid" || \
     echo "  ❌ resistine-vpn-cli signature INVALID"
 
-codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/com.resistine.desktop.network-extension.systemextension" 2>&1 && \
+codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" 2>&1 && \
     echo "  ✅ system-extension signature valid" || \
     echo "  ❌ system-extension signature INVALID — Xcode signing may have failed"
 

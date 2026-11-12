@@ -204,7 +204,7 @@ class TestKeyringSecurityCheck:
 # instead check both the service_client and gui/tray sides and confirm
 # both that no "CHANGE_ME"-style placeholder survives anywhere, and
 # also that a _load_ipc_token loader exists that reads from the shared
-# %PROGRAMDATA%\\Resistine\\ipc_token file. If you refactor the token
+# %PROGRAMDATA%\\Phoenix\\ipc_token file. If you refactor the token
 # loading code in either module please make sure both assertions below
 # are correct, otherwise you'll notice ship-blocker authorization
 # failures against the VPN service like the tray bug that was caught

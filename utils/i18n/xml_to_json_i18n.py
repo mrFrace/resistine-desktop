@@ -12,8 +12,8 @@ Usage:
         --input strings.xml \
         --output translations_EN.json
 
-Author: Petr and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

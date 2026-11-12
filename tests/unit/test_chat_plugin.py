@@ -42,8 +42,9 @@ def openai_cls(monkeypatch):
 
 @pytest.fixture()
 def plugin(isolated_settings, openai_cls):
-    """Chat Plugin on the default (OpenAI-compatible) transport."""
+    """Chat Plugin on the OpenAI-compatible transport (the default is Matrix)."""
     from plugins.chat.main import Plugin
+    isolated_settings.set("chat", "transport", "openai")
     return Plugin(MagicMock())
 
 
@@ -293,6 +294,42 @@ class TestStreamCallbacks:
         screen._stop_streaming()
         stream_cls.return_value.cancel.assert_called_once()
         assert screen.conversation_history[-1] == {"role": "assistant", "content": "half"}
+
+
+# ===========================================================================
+# Bubble link + HTML safety
+# ===========================================================================
+@pytest.mark.unit
+class TestBubbleLinkSafety:
+    def test_assistant_view_never_opens_links_itself(self, qapp):
+        b = chat_main._Bubble(is_user=False, max_width=400)
+        try:
+            assert b._view.openLinks() is False
+            assert b._view.openExternalLinks() is False
+        finally:
+            b.deleteLater()
+
+    def test_open_link_allows_http_and_https_only(self, qapp, monkeypatch):
+        from PyQt6.QtCore import QUrl
+        desktop = MagicMock()
+        monkeypatch.setattr(chat_main, "QDesktopServices", desktop)
+        chat_main._Bubble._open_link(QUrl("https://example.com/fix"))
+        chat_main._Bubble._open_link(QUrl("http://example.com/fix"))
+        assert desktop.openUrl.call_count == 2
+        desktop.reset_mock()
+        for bad in ("file:///etc/passwd", "file://attacker/share/x",
+                    "javascript:alert(1)", "ftp://x/y", "custom-scheme:payload"):
+            chat_main._Bubble._open_link(QUrl(bad))
+        desktop.openUrl.assert_not_called()
+
+    def test_error_bubble_renders_escaped(self, screen):
+        _send(screen, "q")
+        bubble = screen._current_asst_bubble
+        screen._on_stream_error('<img src="x"> boom')
+        assert bubble._untrusted is True
+        html = bubble._view.toHtml()
+        assert "<img" not in html
+        assert "boom" in html
 
 
 # ===========================================================================

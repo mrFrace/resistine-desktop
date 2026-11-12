@@ -5,8 +5,8 @@ The same appcast.xml hosted on GitHub Pages serves all platforms.
 macOS items have no sparkle:os attribute (Sparkle convention).
 Windows items use sparkle:os="windows", Linux uses sparkle:os="linux".
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -20,7 +20,9 @@ import requests
 from utils.logger import logger
 from utils.updates.version import compare_versions
 
-APPCAST_URL = "https://resistine.github.io/appcast.xml"
+# Intentionally empty: the old Phoenix feed must never be fetched by a
+# Phoenix build. Set this only to a Phoenix-owned HTTPS feed.
+APPCAST_URL = ""
 
 _SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 
@@ -44,6 +46,9 @@ def fetch_appcast(url: str = APPCAST_URL, timeout: int = 15) -> list[AppcastItem
     appcast already maintains).  Returns an empty list on network or
     parse errors.
     """
+    if not url or not url.startswith("https://"):
+        logger.error("[APPCAST] No Phoenix update feed configured — refusing fetch")
+        return []
     try:
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()

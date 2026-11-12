@@ -59,7 +59,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          xcrun notarytool store-credentials "resistine-notarize" \
+          xcrun notarytool store-credentials "phoenix-notarize" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD"
@@ -165,69 +165,6 @@ jobs:
           prerelease: ${{ steps.version.outputs.IS_PRERELEASE == 'true' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # --- Update appcast.xml in resistine.github.io ---
-      - name: Update appcast
-        env:
-          ED_SIGNATURE: ${{ steps.sparkle_sign.outputs.ED_SIGNATURE }}
-          LENGTH: ${{ steps.sparkle_sign.outputs.LENGTH }}
-          VERSION: ${{ steps.version.outputs.VERSION }}
-          CHANNEL: ${{ steps.version.outputs.CHANNEL }}
-          DEPLOY_KEY: ${{ secrets.PAGES_DEPLOY_KEY }}
-        run: |
-          PUB_DATE=$(date -u '+%a, %d %b %Y %H:%M:%S +0000')
-          DOWNLOAD_URL="https://github.com/Resistine/Resistine-Desktop/releases/download/v${VERSION}/Phoenix-Installer.dmg"
-
-          # Add sparkle:channel tag for beta/pre-release versions
-          CHANNEL_TAG=""
-          if [ -n "$CHANNEL" ]; then
-            CHANNEL_TAG="<sparkle:channel>${CHANNEL}</sparkle:channel>"
-          fi
-
-          NEW_ITEM=$(cat <<XMLEOF
-              <item>
-                <title>Version ${VERSION}</title>
-                <pubDate>${PUB_DATE}</pubDate>
-                ${CHANNEL_TAG}
-                <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
-                <enclosure
-                  url="${DOWNLOAD_URL}"
-                  sparkle:version="${VERSION}"
-                  sparkle:shortVersionString="${VERSION}"
-                  length="${LENGTH}"
-                  type="application/octet-stream"
-                  sparkle:edSignature="${ED_SIGNATURE}"
-                />
-              </item>
-          XMLEOF
-          )
-
-          # Clone the pages repo
-          mkdir -p ~/.ssh
-          echo "$DEPLOY_KEY" > ~/.ssh/pages_key
-          chmod 600 ~/.ssh/pages_key
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/pages_key -o StrictHostKeyChecking=no"
-
-          git clone git@github.com:Resistine/resistine.github.io.git /tmp/pages
-          cd /tmp/pages
-
-          # Insert new item after the comment block (before first existing <item>)
-          python3 -c "
-          import re
-          with open('appcast.xml', 'r') as f:
-              content = f.read()
-          new_item = '''$NEW_ITEM'''
-          # Insert before the first <item> tag
-          content = content.replace('<item>', new_item + '\n    <item>', 1)
-          with open('appcast.xml', 'w') as f:
-              f.write(content)
-          "
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add appcast.xml
-          git commit -m "Release v${VERSION}"
-          git push
 
       # --- Clean up keychain ---
       - name: Clean up

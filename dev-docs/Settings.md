@@ -1,6 +1,6 @@
 # Unified Settings System
 
-The Unified Settings System (`utils/settings.py`) provides a secure, centralized, and cross-platform way to manage application configuration and sensitive secrets in Resistine.
+The Unified Settings System (`utils/settings.py`) provides a secure, centralized, and cross-platform way to manage application configuration and sensitive secrets in Phoenix.
 
 ## Overview
 

@@ -9,7 +9,7 @@
 #   once per run). Only metadata is signed; packages stay byte-identical to
 #   the signed update channel (publish-desktop.sh). Run this from a terminal.
 # Usage: ./scripts/build/publish-linux-repos.sh [--no-upload] <package>...
-#   e.g. dist/linux/*<build>*.{deb,rpm,pkg.tar.xz}
+#   e.g. dist/linux/*<build>*.{deb,rpm,pkg.tar.zst}
 # The last $KEEP builds stay in each repository, so users can downgrade.
 #
 #   PHOENIX_REPO_DIR    local repository tree, default
@@ -111,7 +111,9 @@ log "pacman metadata (archlinux)"
 docker run --rm -v "$REPO/arch:/r" -e OWNER="$OWNER" archlinux:base bash -euo pipefail -c '
 cd /r
 rm -f phoenix.db* phoenix.files*
-repo-add -q phoenix.db.tar.gz phoenix-*.pkg.tar.xz
+# .pkg.tar.zst since build 2026-11; older builds in the repo are .xz.
+shopt -s nullglob
+repo-add -q phoenix.db.tar.gz phoenix-*.pkg.tar.xz phoenix-*.pkg.tar.zst
 chown -R "$OWNER" /r'
 
 # Sign the metadata (gpg asks for the passphrase once; the agent keeps it).

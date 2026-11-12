@@ -10,8 +10,8 @@ timer; the last result is cached on the plugin so a rebuild (any plugin's
 status change rebuilds this screen) paints immediately. Protection status
 is shown by the glow on the sidebar logo (green/red), driven from here.
 
-Author: P3, Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: P3, Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -1302,7 +1302,7 @@ class Plugin(BasePlugin):
         ask.setCursor(Qt.CursorShape.PointingHandCursor)
         ask.setToolTip("Start a chat with Phoenix AI about this item")
         ask.clicked.connect(lambda: self._ask_ai_text(
-            mitigations.question(item, host, this_machine)))
+            mitigations.question(item, host, this_machine, card.get("agent_id"))))
         header.add_control(ask)
         page.add(header)
         page.section("Status")

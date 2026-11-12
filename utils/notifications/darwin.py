@@ -4,8 +4,8 @@ Extracted from plugins/antivirus/main.py to be a shared backend.
 Uses the modern UserNotifications framework (macOS 10.14+) with an
 osascript fallback when authorization hasn't been granted yet.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

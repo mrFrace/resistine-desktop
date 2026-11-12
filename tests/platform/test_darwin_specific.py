@@ -152,7 +152,7 @@ class TestIsExtensionEnabledDarwin:
     def test_checks_resistine_extension_id(self, mock_run):
         from plugins.vpn.wireguard import vpn_functions_darwin as vfd
         vfd._extension_cache["timestamp"] = 0
-        output = "2 com.resistine.desktop.network-extension [activated enabled]"
+        output = "2 exposed.phoenix.desktop.network-extension [activated enabled]"
         mock_run.return_value = MagicMock(stdout=output, stderr="", returncode=0)
         result = vfd.is_extension_enabled()
         assert result is True

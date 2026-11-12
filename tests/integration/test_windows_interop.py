@@ -33,8 +33,11 @@ class TestIPCTokenFlow:
         token_file = tmp_path / "Resistine" / "ipc_token"
         token_file.parent.mkdir(parents=True)
 
-        # Service side: generate and write token
-        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+        # Service side: generate and write token. The ACL step shells out to
+        # icacls, which the suite's subprocess guard stubs to a failure, and the
+        # service then (correctly) refuses to persist the token; isolate it.
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)), \
+             patch("plugins.vpn.wireguard.windows_vpn_service._restrict_token_acl", return_value=True):
             from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token
             service_token = _get_or_create_ipc_token()
 
@@ -114,15 +117,19 @@ class TestConfigPathInterop:
 class TestIPCRoundTrip:
     def test_status_request_response(self):
         """Simulate a full IPC status request → handler → response."""
-        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request
 
+        # IPC_TOKEN is only populated when the service starts; an empty token
+        # is rejected, so the test installs a real one.
+        token = "t" * 64
         request = {
-            "token": IPC_TOKEN,
+            "token": token,
             "command": "status",
             "tunnel": "wg0",
         }
 
-        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN", token), \
+             patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel", return_value="Running"):
             response = handle_request(request)
 
         assert response["status"] == "ok"
@@ -131,16 +138,18 @@ class TestIPCRoundTrip:
         json.dumps(response)
 
     def test_connect_request_response(self):
-        from plugins.vpn.wireguard.windows_vpn_service import handle_request, IPC_TOKEN
+        from plugins.vpn.wireguard.windows_vpn_service import handle_request
 
+        token = "t" * 64
         request = {
-            "token": IPC_TOKEN,
+            "token": token,
             "command": "connect",
             "tunnel": "wg0",
             "config_path": r"C:\Users\Test\AppData\Roaming\Resistine\wireguard\wg0.conf",
         }
 
-        with patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN", token), \
+             patch("plugins.vpn.wireguard.windows_vpn_service.status_tunnel",
                    side_effect=["Not Installed", "Running", "Running"]):
             with patch("plugins.vpn.wireguard.windows_vpn_service.install_tunnel",
                        return_value=(True, "Installed")):
@@ -403,8 +412,9 @@ class TestWindowsEdgeCases:
         token_file = tmp_path / "Resistine" / "ipc_token"
         token_file.parent.mkdir(parents=True)
 
-        # Service writes its token
-        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)):
+        # Service writes its token (ACL step isolated: see TestIPCTokenFlow)
+        with patch("plugins.vpn.wireguard.windows_vpn_service.IPC_TOKEN_FILE", str(token_file)), \
+             patch("plugins.vpn.wireguard.windows_vpn_service._restrict_token_acl", return_value=True):
             from plugins.vpn.wireguard.windows_vpn_service import _get_or_create_ipc_token, handle_request
             real_service_token = _get_or_create_ipc_token()
 

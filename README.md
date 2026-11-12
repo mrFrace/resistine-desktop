@@ -2,12 +2,23 @@
 
 For Windows, Mac, and Linux desktops.
 
+Phoenix combines a WireGuard VPN, ClamAV antivirus, Wazuh-based SIEM/endpoint
+monitoring, and an AI security assistant in one cross-platform desktop app
+(Python + PyQt6, plugin architecture).
+
+> **Migration note:** Phoenix is the successor to an earlier product. Code
+> signing, notarization, and build-artifact infrastructure are still being
+> migrated to Phoenix-owned accounts — some build steps below reference the
+> legacy setup until that completes. Auto-updates are **disabled** in this
+> build (see `utils/updates/manager.py`) and will return once the Phoenix
+> update feed and fresh signing keys exist.
+
 ## Prerequisites
 
 - Python 3.12+ (unless using a precompiled distribution)
 - macOS 13+ (Ventura), Windows 11, or Linux
 - [GitHub CLI](https://cli.github.com/) (`gh`) authenticated — used to download build artifacts
-- Apple Developer ID certificate (macOS distribution builds only)
+- Apple Developer ID certificate (macOS distribution builds only — pending migration)
 
 ## Running from Source
 
@@ -50,31 +61,33 @@ usage: main.py [-h] [-d] [-l {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
 
-4. **GitHub CLI** (used to download VPN and ClamAV artifacts from CI):
+4. **GitHub CLI** (used to download VPN and ClamAV build artifacts from CI):
    ```bash
    brew install gh
    gh auth login
    ```
-   Your account needs read access to `Resistine/resistine-vpn-macos` and `Resistine/ClamAV-Mac`.
+   Your account needs read access to the VPN and ClamAV artifact repositories
+   (legacy locations until the Phoenix artifact migration completes — ask the
+   team lead for current access).
 
 5. **Apple Developer ID certificate** — must be installed in your Keychain. Verify:
    ```bash
    security find-identity -v -p codesigning | grep "Developer ID Application"
    ```
-   If nothing shows up, import the certificate from your Apple Developer account or ask the team lead.
+   Signing identities are being migrated to the new Apple Business account —
+   ask the team lead for the current certificate.
 
 6. **Notarization credentials** (optional — the build will prompt if missing):
    ```bash
-   xcrun notarytool store-credentials "resistine-notarize" \
+   xcrun notarytool store-credentials "phoenix-notarize" \
      --apple-id "your@email.com" --team-id "YOURTEAMID" \
      --password "<app-specific-password>"
    ```
 
-7. **Clone the repo and switch to the build branch**:
+7. **Clone the repo**:
    ```bash
-   git clone git@github.com:Resistine/Resistine-Desktop.git
-   cd Resistine-Desktop
-   git checkout build/vpn-artifacts
+   git clone git@github.com:DatOneOPGuy/phoenix-desktop.git
+   cd phoenix-desktop
    ```
 
 ### Prerequisites Summary
@@ -94,8 +107,8 @@ scripts/build/build-distribution.sh
 ```
 
 This script:
-1. Downloads VPN artifacts from `Resistine/resistine-vpn-macos` CI (or builds locally from `vpn-apple/`)
-2. Downloads ClamAV artifacts from `Resistine/ClamAV-Mac` CI
+1. Downloads VPN artifacts from CI (or builds locally from `vpn-apple/`)
+2. Downloads ClamAV artifacts from CI
 3. Builds the Python app with PyInstaller
 4. Places VPN and ClamAV components in the app bundle
 5. Signs everything with Developer ID
@@ -110,24 +123,19 @@ Output: `dist/Phoenix-Installer.dmg` (contains `Phoenix.app`)
 scripts/build/build-installer.sh
 ```
 
-Uses Apple Development certificate instead of Developer ID. Good for local testing.
+Uses an Apple Development certificate instead of Developer ID. Good for local testing.
 
 ### Artifact Scripts
 
 VPN and ClamAV components are built by separate repos and downloaded as CI artifacts:
 
 ```bash
-scripts/build/download-vpn-artifacts.sh      # from Resistine/resistine-vpn-macos
-scripts/build/download-clamav-artifacts.sh    # from Resistine/ClamAV-Mac
-```
-
-These run automatically during the build. To manually refresh:
-
-```bash
-scripts/build/download-vpn-artifacts.sh          # download latest
+scripts/build/download-vpn-artifacts.sh           # download latest
 scripts/build/download-clamav-artifacts.sh        # download latest
 scripts/build/download-vpn-artifacts.sh --check   # check if up-to-date
 ```
+
+These run automatically during the build.
 
 ## Building for Windows
 
@@ -139,7 +147,13 @@ Requirements:
 - `python` on PATH
 - Inno Setup 6 (`ISCC.exe`) installed
 
-The installer bundles Python dependencies via PyInstaller and attempts to install WireGuard and GTK3 runtime via `winget`.
+The installer bundles Python dependencies via PyInstaller and attempts to install WireGuard and GTK3 runtime via `winget`. A Linux host can drive the whole build in a throwaway Windows VM via `scripts/build/build-windows-vm.sh`.
+
+## Building for Linux
+
+```bash
+scripts/build/build-deb.sh    # Debian package
+```
 
 ## NixOS
 
@@ -170,10 +184,10 @@ and checks the app, the services and a headless start.
 
 After building, verify:
 
-1. **App launches**: Open `Resistine.app` (or run from `/Applications/`)
+1. **App launches**: Open `Phoenix.app` (or run from `/Applications/`)
 2. **VPN**: Connect to a WireGuard server — confirm tunnel activates
 3. **Antivirus**: Trigger a scan — confirm ClamAV binaries run
-4. **Signatures**: `codesign --verify --verbose /Applications/Resistine.app`
+4. **Signatures**: `codesign --verify --verbose /Applications/Phoenix.app`
 
 ## WireGuard Configuration
 
@@ -185,7 +199,7 @@ Edit `wg0.conf` with your VPN server details (PrivateKey, Address, Endpoint, Pub
 
 ## License
 
-Copyright (C) 2025 Resistine
+Copyright (C) 2025-2026 Phoenix
 
 This program is free software under the terms of the GNU General Public License v2 or later.
 

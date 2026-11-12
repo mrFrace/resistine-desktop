@@ -17,8 +17,8 @@ Usage:
     notifications.init()
     notifications.send("Title", "Body", urgency="critical")
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

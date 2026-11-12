@@ -2,8 +2,8 @@
 ## @namespace main
 """Entry point for the Phoenix AI EndPoint application (PyQt6).
 
-Author: Petr, Javier, Jackie and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Petr, Javier, Jackie and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

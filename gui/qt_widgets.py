@@ -4,8 +4,8 @@ Small building blocks shared across plugin screens — a flow layout that reflow
 cards on resize, status badges, section cards, an icon loader that picks the
 light/dark PNG variant, and a couple of layout helpers.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

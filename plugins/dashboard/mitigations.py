@@ -124,7 +124,8 @@ def _run(argv: list) -> Optional[subprocess.CompletedProcess]:
     try:
         return subprocess.run(  # nosec B603 - absolute path from shutil.which, validated args, no shell
             argv, capture_output=True, text=True, timeout=PROBE_TIMEOUT_S,
-            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"})
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LC_ALL": "C"},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError) as e:
         logger.debug(f"[MITIGATIONS] probe {argv[0]} failed: {e}")
         return None
@@ -351,11 +352,27 @@ def fix_steps(item: dict) -> list:
     return []
 
 
-def question(item: dict, hostname: str, this_machine: bool) -> str:
+def _subject(hostname: str, this_machine: bool, agent_id: str) -> str:
+    """Who the question is about, in the form the Phoenix AI resolves.
+
+    The AI server binds "this machine"/"my machine" to the agent the chat
+    comes from, ignores a hostname, and only takes "agent NNN" as naming an
+    agent. So another machine is always "agent NNN (host)", never "my
+    machine": that sent the question about briareosai to this PC's agent."""
+    aid = str(agent_id or "")
+    aid = aid if aid.isdigit() and len(aid) == 3 else ""
+    if this_machine:
+        bits = [b for b in (hostname, f"agent {aid}" if aid else "") if b]
+        return "this machine" + (f" ({', '.join(bits)})" if bits else "")
+    if aid:
+        return f"agent {aid}" + (f" ({hostname})" if hostname else "")
+    return f"the machine {hostname}" if hostname else "one of my other machines"
+
+
+def question(item: dict, hostname: str, this_machine: bool, agent_id: str = "") -> str:
     """The "Ask AI" message for one item."""
     c, ev = item["check"], item["evidence"]
-    where = "this machine" if this_machine else "my machine"
-    host = f" ({hostname})" if hostname else ""
+    where = _subject(hostname, this_machine, agent_id)
     if item["kind"] == "package_update":
         facts = [f"package {c['package']}, installed version {c['version']}"]
         if c["package_type"]:
@@ -366,10 +383,10 @@ def question(item: dict, hostname: str, this_machine: bool) -> str:
             facts.append(f"{ev['critical']} critical and {ev['high']} high vulnerabilities")
         if ev["cves"]:
             facts.append("including " + ", ".join(ev["cves"]))
-        return (f"The security posture of {where}{host} says: {item['title']} "
+        return (f"The security posture of {where} says: {item['title']} "
                 f"({'; '.join(facts)}). How serious is this, and how do I fix it safely?")
     if item["kind"] == "cis_checks":
-        return (f"{where[0].upper() + where[1:]}{host} fails {ev['failed_checks']} of "
+        return (f"{where[0].upper() + where[1:]} fails {ev['failed_checks']} of "
                 f"{ev['checks']} CIS/SCA checks. Which checks fail, which matter most, "
                 "and how do I fix them? Skip checks that don't apply to this kind of machine.")
-    return f"The security posture of {where}{host} says: {item['title']}. What should I do?"
+    return f"The security posture of {where} says: {item['title']}. What should I do?"

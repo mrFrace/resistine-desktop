@@ -1,8 +1,8 @@
-# Resistine VPN Architecture
+# Phoenix VPN Architecture
 
 ## Overview
 
-The Resistine VPN uses a clean **CLI-only architecture** for communication between the Python UI and the native VPN implementation:
+The Phoenix VPN uses a clean **CLI-only architecture** for communication between the Python UI and the native VPN implementation:
 
 ```
 ┌──────────────────────┐
@@ -96,9 +96,9 @@ The Resistine VPN uses a clean **CLI-only architecture** for communication betwe
 2. CLI is built with embedded entitlements for NetworkExtension access
 
 ### App Bundling
-1. Build script (`build-installer.sh`) embeds compiled outputs in Resistine.app:
+1. Build script (`build-installer.sh`) embeds compiled outputs in Phoenix.app:
    ```
-   Resistine.app/Contents/
+   Phoenix.app/Contents/
    ├── MacOS/
    │   └── resistine-vpn-cli          ← CLI tool
    └── PlugIns/
@@ -160,7 +160,7 @@ Return status: "Connected" / "Disconnected"
 
 ### Test CLI directly
 ```bash
-cd /Applications/Resistine.app/Contents/MacOS
+cd /Applications/Phoenix.app/Contents/MacOS
 
 # Check if CLI is available
 ./resistine-vpn-cli --help
@@ -195,7 +195,7 @@ print(f"Stop: {success}, {output}")
 ### Monitor VPN Activity
 ```bash
 # Watch VPN logs in real-time
-log stream --predicate 'process == "Resistine"' --level debug
+log stream --predicate 'process == "Phoenix"' --level debug
 
 # Look for CLI command execution
 # Expected: "[CLI] Executing: /path/to/resistine-vpn-cli start|stop|status"
@@ -218,7 +218,7 @@ log stream --predicate 'process == "Resistine"' --level debug
 - `wireguard-apple/network-extension/PacketTunnelProvider.swift` - Extension provider
 
 ### Configuration
-- `Resistine.entitlements` - App sandbox and NetworkExtension permissions
+- `Phoenix.entitlements` - App sandbox and NetworkExtension permissions
 - `resistine-vpn-cli/entitlements.plist` - CLI-specific permissions
 - `network-extension/Info.plist` - Extension configuration
 - `build-installer.sh` - Bundle assembly script
@@ -256,14 +256,14 @@ log stream --predicate 'process == "Resistine"' --level debug
 ## Troubleshooting
 
 ### VPN not starting
-1. Check if `resistine-vpn-cli` exists: `ls -la /Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli`
+1. Check if `resistine-vpn-cli` exists: `ls -la /Applications/Phoenix.app/Contents/MacOS/resistine-vpn-cli`
 2. Check WireGuard installation: `which wg wg-quick`
-3. Check logs: `log stream --predicate 'process == "Resistine"'`
-4. Test CLI directly: `/Applications/Resistine.app/Contents/MacOS/resistine-vpn-cli status`
+3. Check logs: `log stream --predicate 'process == "Phoenix"'`
+4. Test CLI directly: `/Applications/Phoenix.app/Contents/MacOS/resistine-vpn-cli status`
 
 ### CLI not found at runtime
 - Build app with: `./build-installer.sh`
-- Test from: `dist/Resistine.app/Contents/MacOS/`
+- Test from: `dist/Phoenix.app/Contents/MacOS/`
 
 ### Tunnel won't activate
 1. Check config file syntax

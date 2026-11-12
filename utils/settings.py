@@ -13,7 +13,7 @@ import os
 import platform
 import time
 from threading import RLock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import keyring
 from cryptography.fernet import Fernet
@@ -183,6 +183,7 @@ def _restrict_file_permissions(file_path: str):
                     ],
                     capture_output=True,
                     check=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
         except Exception as e:
             logger.warning(f"Failed to set Windows ACL on {file_path}: {e}")
@@ -294,15 +295,27 @@ def _save_json(namespace: str, data: Dict[str, Any]) -> bool:
         with _lock:
             # Write a temp file and rename it over: another process (or a
             # crash) must never see a half-written file, which reads as empty
-            # and is saved back without the keys it held.
+            # and is saved back without the keys it held. The temp file is
+            # 0600 from the first byte (chmod-after-write leaves a umask-mode
+            # window where another process could open it).
             tmp = f"{file_path}.{os.getpid()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            if platform.system() != "Windows":
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                f = os.fdopen(fd, "w", encoding="utf-8")
+            else:
+                f = open(tmp, "w", encoding="utf-8")
+            with f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
             if platform.system() != "Windows":
-                os.chmod(tmp, 0o600)
+                os.chmod(tmp, 0o600)  # an O_CREAT on a leftover tmp keeps its mode
             os.replace(tmp, file_path)
+            if platform.system() == "Windows":
+                # chmod cannot express owner-only on Windows; lock the file
+                # down with an owner-only ACL instead (same hardening the
+                # master key file gets).
+                _restrict_file_permissions(file_path)
         return True
     except OSError as e:
         logger.error(f"Failed to save settings to {file_path}: {e}")
@@ -328,6 +341,54 @@ def set(namespace: str, key: str, value: Any) -> bool:
     with _lock:
         data = _load_json(namespace)
         data[key] = value
+        return _save_json(namespace, data)
+
+
+def set_many(namespace: str, values: Dict[str, Any], secret_keys: Iterable[str] = ()) -> bool:
+    """
+    Set several configuration values atomically (a single file write).
+
+    Use this when related keys must never be observed half-updated on disk
+    (e.g. an access token together with the refresh token that replaced it).
+
+    Args:
+        namespace: The plugin or component name.
+        values: Mapping of key -> value (values must be JSON serializable;
+            values for keys listed in ``secret_keys`` must be strings).
+        secret_keys: Keys in ``values`` whose values are encrypted exactly
+            like ``set_secret`` (Fernet, stored with the ``ENC:`` prefix).
+    """
+    # NB: this module shadows the builtin set() -> use frozenset here.
+    secret_keys = frozenset(secret_keys)
+    missing = secret_keys - values.keys()
+    if missing:
+        logger.error(f"set_many: secret_keys not present in values: {sorted(missing)}")
+        return False
+    try:
+        prepared = dict(values)
+        if secret_keys:
+            f = _get_fernet()
+            for key in secret_keys:
+                encrypted_value = f.encrypt(prepared[key].encode()).decode()
+                prepared[key] = f"{ENCRYPTED_PREFIX}{encrypted_value}"
+    except Exception as e:
+        logger.error(f"Failed to encrypt secrets for {namespace}.{sorted(secret_keys)}: {e}")
+        return False
+    with _lock:
+        data = _load_json(namespace)
+        data.update(prepared)
+        return _save_json(namespace, data)
+
+
+def delete_many(namespace: str, keys: Iterable[str]) -> bool:
+    """Delete several keys from a namespace in a single file write."""
+    with _lock:
+        data = _load_json(namespace)
+        present = [k for k in keys if k in data]
+        if not present:
+            return True
+        for k in present:
+            del data[k]
         return _save_json(namespace, data)
 
 
@@ -388,8 +449,10 @@ def get_secret(namespace: str, key: str) -> Optional[str]:
         return None
 
     if not stored_value.startswith(ENCRYPTED_PREFIX):
-        logger.warning(f"Value for {namespace}.{key} is not encrypted.")
-        return stored_value  # Return as-is if not marked encrypted (legacy support?)
+        # Fail closed: a plaintext value where a secret is expected is either a
+        # legacy leftover or a tampered config file; never hand it out as a secret.
+        logger.error(f"Value for {namespace}.{key} is not encrypted; refusing to return it as a secret.")
+        return None
 
     try:
         encrypted_data = stored_value[len(ENCRYPTED_PREFIX) :]

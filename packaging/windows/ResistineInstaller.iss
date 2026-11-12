@@ -1894,9 +1894,8 @@ begin
       '$app = Get-ItemProperty ' +
       '''HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'',' +
       '''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'' ' +
-      '-ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like ''*Wazuh*'' } | ' +
-      'Select-Object -First 1; ' +
-      'if ($app) { Start-Process msiexec.exe -ArgumentList ''/x'',$app.PSChildName,''/qn'',''/norestart'' -Wait }" >nul 2>nul',
+      '-ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq ''Phoenix Agent'' -or $_.DisplayName -like ''*Wazuh*'' }; ' +
+      'foreach ($a in @($app)) { if ($a) { Start-Process msiexec.exe -ArgumentList ''/x'',$a.PSChildName,''/qn'',''/norestart'' -Wait } }" >nul 2>nul',
       ResultCode);
 
     { Fallback to wmic on older systems where it is still available. }
@@ -1937,6 +1936,19 @@ begin
     RunHiddenCmd(
       'if exist "%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" ' +
       '"%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" -u force >nul 2>nul',
+      ResultCode);
+  end;
+
+  { Sysmon keeps its own copy in %WINDIR%; use it when the Resistine folder
+    copy is gone (an earlier uninstall deleted the folder but left the service). }
+  if HiddenCmdSucceeded('sc query Sysmon64 >nul 2>nul') or HiddenCmdSucceeded('sc query Sysmon >nul 2>nul') then
+  begin
+    Log('Uninstall cleanup: removing Sysmon via %WINDIR% copy');
+    RunHiddenCmd(
+      'if exist "%WINDIR%\Sysmon64.exe" "%WINDIR%\Sysmon64.exe" -u force >nul 2>nul',
+      ResultCode);
+    RunHiddenCmd(
+      'if exist "%WINDIR%\Sysmon.exe" "%WINDIR%\Sysmon.exe" -u force >nul 2>nul',
       ResultCode);
   end;
 

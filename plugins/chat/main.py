@@ -20,8 +20,8 @@ same regions 1:1:
 The streaming controller, history manager and markdown utilities are reused
 verbatim from the framework-agnostic backend modules.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -36,7 +36,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QCursor, QIcon
+from PyQt6.QtGui import QCursor, QDesktopServices, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QStyle,
@@ -143,10 +143,14 @@ class _Bubble(QFrame):
     card floating over the page).
     """
 
-    def __init__(self, *, is_user: bool, max_width: int):
+    def __init__(self, *, is_user: bool, max_width: int,
+                 untrusted: bool = False):
         super().__init__()
         self._is_user = is_user
         self._max_width = max_width
+        # Untrusted bubbles (SIEM alerts quoting monitored-host data) get the
+        # Dashboard treatment: raw HTML escaped, no clickable links.
+        self._untrusted = untrusted
         self._raw_text = ""
         self._has_content = False  # gates copy/hover until real text lands
 
@@ -211,15 +215,28 @@ class _Bubble(QFrame):
         self._view = QTextBrowser()
         self._view.setObjectName("ChatBubbleText")
         self._view.setFrameShape(QFrame.Shape.NoFrame)
-        self._view.setOpenExternalLinks(True)  # markdown links → browser
+        if self._untrusted:
+            # Alert text can smuggle file:// or UNC links — never activate.
+            self._view.setOpenLinks(False)
+            self._view.setOpenExternalLinks(False)
+            self._view.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse)
+        else:
+            # The assistant relays attacker-influenced text (SIEM data), so a
+            # markdown link can smuggle file:// or UNC targets. Never let Qt
+            # open links itself; route clicks through _open_link, which only
+            # passes http/https to the browser.
+            self._view.setOpenLinks(False)
+            self._view.setOpenExternalLinks(False)
+            self._view.anchorClicked.connect(self._open_link)
+            # Read-only browser shows no caret; mouse-select + link-click only.
+            self._view.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._view.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._view.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        # Read-only browser shows no caret; mouse-select + link-click only.
-        self._view.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.LinksAccessibleByMouse)
         self._view.document().setDocumentMargin(3)
         self._view.document().setDefaultStyleSheet(stylesheet(self._fg))
         # padding: 0 overrides the app-wide QTextEdit padding (7px 10px),
@@ -249,6 +266,35 @@ class _Bubble(QFrame):
         self._copy_row.addWidget(self._copy_btn)
         self._copy_row.addStretch(1)
         lay.addLayout(self._copy_row)
+
+    @staticmethod
+    def _open_link(url) -> None:
+        """Open a clicked link in the browser — http/https ONLY.
+
+        Anything else (file://, UNC \\\\host\\share, custom schemes) can open
+        local files or leak NTLM credentials and is dropped.
+        """
+        if url.scheme().lower() in ("http", "https"):
+            QDesktopServices.openUrl(url)
+        else:
+            logger.debug(
+                f"[CHAT] blocked non-http(s) link click: {url.toString()}")
+
+    def mark_untrusted(self) -> None:
+        """Treat subsequent text as untrusted: raw HTML escaped, links inert.
+
+        Used for error bubbles, whose text can originate from room event
+        content (same rendering as SIEM-alert bubbles).
+        """
+        self._untrusted = True
+        if self._view is not None:
+            try:
+                self._view.setOpenLinks(False)
+                self._view.setOpenExternalLinks(False)
+                self._view.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse)
+            except RuntimeError:
+                pass
 
     def _build_copy_button(self) -> QPushButton:
         muted = theme.color("text_secondary")
@@ -400,7 +446,10 @@ class _Bubble(QFrame):
         if self._thinking and text:
             self._end_thinking()
         try:
-            self._view.setHtml(markdown_to_html(text) if text else "")
+            # Alert bubbles quote monitored-host data: never render raw HTML there.
+            self._view.setHtml(
+                markdown_to_html(text, allow_html=not self._untrusted)
+                if text else "")
         except RuntimeError:
             # Browser deleted mid-stream (session switched / chat torn down).
             return
@@ -658,13 +707,52 @@ class Plugin(BasePlugin):
         except Exception:
             return False
 
+    def on_screen_shown(self):
+        """Shell hook: the cached chat screen is being re-shown.
+
+        The screen (and its empty-state panel) was built against the client
+        state of that moment; the transport may have been switched in
+        Settings, or the sign-in may have completed since. Re-derive the
+        client when it's missing and swap the panel to match, so the screen
+        is correct the first time it's viewed after any change — no app
+        restart, no navigate-away dance.
+        """
+        try:
+            if self.client is None:
+                self.reinitialize_client()
+            else:
+                self._sync_input_enabled()
+                self._refresh_welcome_state()
+        except Exception as e:
+            logger.debug(f"Chat on_screen_shown refresh failed: {e}")
+
+    def _refresh_welcome_state(self) -> None:
+        """Swap the empty-state panel to match the current client state.
+
+        The panel is chosen at build time; reinitialize_client() can change
+        ``self.client``/``_matrix_problem`` afterwards and a stale
+        "Matrix Chat Unavailable" / "API Key Required" panel would otherwise
+        stick until restart.
+        """
+        lay = getattr(self, "_messages_lay", None)
+        if lay is None or getattr(self, "_welcome_widget", None) is None:
+            return  # no screen yet, or real history is showing
+        self._clear_welcome()
+        if self.client is not None:
+            self._welcome_widget = self._build_welcome_screen()
+        else:
+            self._welcome_widget = self._build_api_missing_screen()
+        lay.insertWidget(lay.count() - 1, self._welcome_widget,
+                         0, Qt.AlignmentFlag.AlignCenter)
+
     def reinitialize_client(self, notify: bool = False):
         """Rebuild the chat client (OpenAI API or Matrix) from settings."""
-        self.transport = settings.get("chat", "transport") or "openai"
+        self.transport = settings.get("chat", "transport") or "matrix"
         if self.transport == "matrix":
             self._init_matrix_client()
             try:
                 self._sync_input_enabled()
+                self._refresh_welcome_state()
             except Exception:
                 pass
             return
@@ -706,9 +794,11 @@ class Plugin(BasePlugin):
                 except Exception:
                     pass
             self.client = None
-        # Reflect any client change in a live screen's input controls.
+        # Reflect any client change in a live screen's input controls and
+        # swap a stale empty-state panel (transport switched in Settings).
         try:
             self._sync_input_enabled()
+            self._refresh_welcome_state()
         except Exception:
             pass
 
@@ -1309,7 +1399,7 @@ class Plugin(BasePlugin):
             f"background: transparent;")
         lay.addWidget(icon)
 
-        matrix = getattr(self, "transport", "openai") == "matrix"
+        matrix = getattr(self, "transport", "matrix") == "matrix"
         signin = getattr(self, "_matrix_problem", None) == "signin"
         title = QLabel(
             ("Sign-in Required" if signin else "Matrix Chat Unavailable")
@@ -1353,8 +1443,10 @@ class Plugin(BasePlugin):
         self._insert_row(_BubbleRow(bubble, is_user=True))
         return bubble
 
-    def _add_assistant_bubble(self, md: str | None = None) -> _Bubble:
-        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1])
+    def _add_assistant_bubble(self, md: str | None = None, *,
+                              untrusted: bool = False) -> _Bubble:
+        bubble = _Bubble(is_user=False, max_width=self._bubble_widths()[1],
+                         untrusted=untrusted)
         if md is not None:
             bubble.set_text(md)
         self._insert_row(_BubbleRow(bubble, is_user=False))
@@ -1688,6 +1780,9 @@ class Plugin(BasePlugin):
         elif self._current_asst_bubble is not None:
             try:
                 bubble = self._current_asst_bubble
+                # Error text can originate from room event content (Matrix
+                # turn errors): render it escaped, never as trusted HTML.
+                bubble.mark_untrusted()
                 bubble.set_text(f"⚠ {error_msg}")
                 row = bubble.parentWidget()
                 bubble.add_retry(
@@ -1765,7 +1860,7 @@ class Plugin(BasePlugin):
             return
         if self.client is None:
             entry.setEnabled(False)
-            if getattr(self, "transport", "openai") != "matrix":
+            if getattr(self, "transport", "matrix") != "matrix":
                 hint = "API key required — see Settings"
             elif getattr(self, "_matrix_problem", None) == "signin":
                 hint = "Sign in with your Phoenix account to use Matrix chat"

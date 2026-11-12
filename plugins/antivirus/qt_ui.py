@@ -4,8 +4,8 @@ Flat page layout (gui/page_kit.py): a header with the status pill, then
 sections of sidebar-style action rows, plain lists and label/value rows.
 Each builder appends its section to a :class:`gui.page_kit.Page`.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

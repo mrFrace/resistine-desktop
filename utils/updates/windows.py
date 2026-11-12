@@ -5,8 +5,8 @@ Loads WinSparkle.dll from the app bundle and provides update check
 functionality. Only used on Windows frozen (PyInstaller) builds.
 Mirrors the macOS Sparkle integration in darwin.py.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -22,9 +22,12 @@ _initialized = False
 _app = None
 
 # Same Ed25519 public key used by macOS Sparkle and Linux updater
-_ED25519_PUBLIC_KEY = "2eiUHVoMgl+qqhEWO8iix5SUcRAKfkWYESh9F7jG6ls="
+# Intentionally empty: the old key belongs to Phoenix. A Phoenix
+# update key must be a FRESH pair generated in CI — never reuse this slot.
+_ED25519_PUBLIC_KEY = ""
 
-APPCAST_URL = "https://resistine.github.io/appcast.xml"
+# Intentionally empty: never point WinSparkle at the old Phoenix feed.
+APPCAST_URL = ""
 
 
 def _get_winsparkle_dll_path():
@@ -140,6 +143,9 @@ def init_updater(app):
         version = get_current_version()
 
         # All configuration must happen before win_sparkle_init()
+        if not APPCAST_URL:
+            logger.info("[WINSPARKLE] No Phoenix update feed configured — updater disabled")
+            return False
         _dll.win_sparkle_set_appcast_url(APPCAST_URL.encode("utf-8"))
         _dll.win_sparkle_set_app_details("Phoenix", "Phoenix", version)
 
@@ -147,7 +153,11 @@ def init_updater(app):
             _ED25519_PUBLIC_KEY.encode("utf-8")
         )
         if result != 1:
-            logger.warning("[WINSPARKLE] EdDSA public key was not accepted")
+            # Fail closed: WinSparkle without an accepted EdDSA key performs
+            # NO signature verification, and its install callback runs the
+            # downloaded EXE elevated and silent. No key - no updater.
+            logger.error("[WINSPARKLE] EdDSA public key was not accepted")
+            return False
 
         _dll.win_sparkle_set_automatic_check_for_updates(1)
         _dll.win_sparkle_set_update_check_interval(14400)  # 4 hours

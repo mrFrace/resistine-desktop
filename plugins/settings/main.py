@@ -6,8 +6,8 @@ A flat page (gui/page_kit.py): a "Settings" header naming the signed-in
 account, then sections — Account, AI assistant, Appearance, Notifications,
 Updates — and a last section with the Log in / Log out and Uninstall actions as menu rows.
 
-Author: Peres J. and the Resistine Team
-Copyright (c) Resistine 2025
+Author: Peres J. and the Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -181,7 +181,7 @@ class Plugin(BasePlugin):
         self.transport_combo = _NoScrollComboBox()
         self.transport_combo.addItem("OpenAI API (HTTPS)", "openai")
         self.transport_combo.addItem("Matrix (end-to-end encrypted)", "matrix")
-        current = settings.get("chat", "transport") or "openai"
+        current = settings.get("chat", "transport") or "matrix"
         self.transport_combo.setCurrentIndex(
             max(0, self.transport_combo.findData(current)))
         lay.addWidget(SettingRow(
@@ -263,6 +263,19 @@ class Plugin(BasePlugin):
         return box
 
     # ---- Notifications ----------------------------------------------------
+    def _notifications_card(self) -> QWidget:
+        box, lay = self._section("Notifications")
+        self.alert_notifications_switch = ToggleSwitch()
+        self.alert_notifications_switch.setChecked(
+            bool(settings.get("dashboard", "alert_notifications", True)))
+        self.alert_notifications_switch.toggled.connect(
+            lambda on: settings.set("dashboard", "alert_notifications", bool(on)))
+        lay.addWidget(SettingRow(
+            "Alert notifications",
+            "Show a desktop notification for new high and critical SIEM alerts",
+            self.alert_notifications_switch))
+        return box
+
     def _notifications_card(self) -> QWidget:
         box, lay = self._section("Notifications")
         self.alert_notifications_switch = ToggleSwitch()

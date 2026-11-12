@@ -5,8 +5,8 @@ file/directory scanning, real-time protection status, signature updates,
 quarantine management, whitelist + scan exclusions (settings sub-view) via
 ClamAV (macOS/Linux) or Windows Defender.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

@@ -14,8 +14,8 @@ Backend platform functions are called, never reimplemented. All blocking
 subprocess work runs on worker threads and is marshalled back onto the GUI
 thread via ``self.app.after(0, ...)``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -133,8 +133,8 @@ class Plugin(BasePlugin):
             description="Monitor this device with the Phoenix endpoint agent.",
             supported_systems=["Darwin", "Linux", "Windows"],
             translations={"US": "Endpoint", "ES": "Endpoint", "FR": "Endpoint"},
-            icon_light_path=os.path.join(_PLUGIN_DIR, "add_user_light.png"),
-            icon_dark_path=os.path.join(_PLUGIN_DIR, "add_user_dark.png"),
+            icon_light_path=os.path.join(_PLUGIN_DIR, "endpoint_light.png"),
+            icon_dark_path=os.path.join(_PLUGIN_DIR, "endpoint_dark.png"),
             uninstall_enabled=True,
         )
         self.app = app
@@ -302,8 +302,9 @@ class Plugin(BasePlugin):
     # ── Re-enrollment required (account change) ────────────────────────
 
     def _build_reenroll_section(self, page: Page) -> None:
+        from plugins.wazuh.agent import enrollment as _enr
         enrolled = settings.get("wazuh", "enrolled_email", "unknown")
-        current = settings.get("auth", "email", "unknown")
+        current = _enr.account_identity() or "unknown"
 
         self._header.set_status("error", "Re-enrollment required")
         self._header.set_subtitle(

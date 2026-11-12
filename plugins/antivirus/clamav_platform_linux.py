@@ -6,8 +6,8 @@ distro-aware package installation driven by /etc/os-release parsing.
 
 See clamav_platform_darwin.py for the macOS reference.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

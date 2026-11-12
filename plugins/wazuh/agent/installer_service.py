@@ -4,8 +4,8 @@ Wazuh Installer Service — Decoupled State Machine for macOS
 Orchestrates download (public internet), install (admin consent), and
 enrollment (VPN) as separate phases with independent network requirements.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -38,6 +38,8 @@ _lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Cache path
 # ---------------------------------------------------------------------------
+from utils.settings import get_config_dir as _get_config_dir
+
 _CACHE_DIR = os.path.join(
     os.path.expanduser("~/Library/Application Support/Phoenix"), "cache"
 )
@@ -85,10 +87,18 @@ def ensure_download_started(force: bool = False):
             _set_state(STATE_INSTALLED)
             return
 
-        # Not authenticated (check email rather than logged_in flag because
-        # the download thread may start before logged_in is persisted).
+        # Not authenticated. Identity, not the logged_in flag, because the
+        # download thread may start before logged_in is persisted — and
+        # identity means user_id OR email: under MAS the userinfo endpoint
+        # returns no email, so auth.email is unset for signed-in users and
+        # gating on it alone made this a silent no-op (the setup wizard
+        # then polls to a bogus "Download timed out").
         # Skipped on force — an explicit user request to install anyway.
-        if not force and not settings.get("auth", "email", ""):
+        from plugins.wazuh.agent.enrollment import account_identity
+
+        if not force and not account_identity():
+            logger.info(
+                "[WZ-INSTALLER] download not started: no signed-in identity")
             return
 
         # Respect backoff on prior failure
@@ -145,6 +155,8 @@ def trigger_install(app) -> bool:
         agent_group = enrolled.group
 
     if not write_env_file(agent_name, agent_group):
+        # L3: the enrollment key file must not outlive a failed install.
+        enrollment.discard(enrolled)
         _fail(STATE_INSTALL_FAILED, "script_failed")
         return False
 
@@ -336,7 +348,9 @@ def _install_succeeded(details: dict):
     else:
         _set_state(STATE_INSTALLED)
 
+    from plugins.wazuh.agent.enrollment import account_identity
+
     settings.set(_NAMESPACE, "retry_count", 0)
-    settings.set(_NAMESPACE, "enrolled_email", settings.get("auth", "email", ""))
+    settings.set(_NAMESPACE, "enrolled_email", account_identity())
     _delete_cached_pkg()  # Clean up cache after successful install
     logger.info(f"[INSTALLER] Install succeeded, enrollment={enrollment}")

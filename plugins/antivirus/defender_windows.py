@@ -10,8 +10,8 @@ File-based bookkeeping (whitelist + scan-exclusion JSON) is shared with
 the ClamAV backend by re-exporting from clamav_common — those helpers
 are pure file ops with no engine-specific dependency.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations
@@ -352,7 +352,7 @@ def ensure_daemons_registered():
 
 
 def refresh_system_configs():
-    """No-op — no Resistine-managed system configs on Windows."""
+    """No-op — no Phoenix-managed system configs on Windows."""
 
 
 # ── Signature updates ─────────────────────────────────────

@@ -20,19 +20,20 @@ Phase 2 — Privileged work (single admin prompt):
 Phase 3 — App bundle removal (privileged if needed):
   - Remove the .app bundle from /Applications (admin rm -rf)
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 
 import os
 import shutil
 import subprocess
+import uuid
 import sys
 
 from utils.logger import logger
 
-_EXTENSION_BUNDLE_ID = "com.resistine.desktop.network-extension"
+_EXTENSION_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
 
 
 def is_available():
@@ -146,7 +147,11 @@ class _UserCancelled(Exception):
 # ---------------------------------------------------------------------------
 
 
-_STEP_LOG = "/tmp/resistine-uninstall.log"
+# Per-run unpredictable path: a FIXED name in world-writable /tmp lets any
+# local user pre-plant a symlink that root then truncates/appends to
+# (e.g. -> /etc/pam.d/sudo). 128 bits of uuid4 defeats pre-planting, and the
+# sticky bit stops other users renaming the file once it exists.
+_STEP_LOG = f"/tmp/phoenix-uninstall-{uuid.uuid4().hex}.log"
 
 
 def _instrument_cmds(cmds):
@@ -711,7 +716,7 @@ def _remove_app_config(admin_cmds):
     containers_dir = os.path.join(home, "Library", "Containers")
     if os.path.isdir(containers_dir):
         for entry in os.listdir(containers_dir):
-            if entry.startswith("com.resistine"):
+            if entry.startswith(("exposed.phoenix", "com.resistine")):
                 container_path = os.path.join(containers_dir, entry)
                 try:
                     shutil.rmtree(container_path)

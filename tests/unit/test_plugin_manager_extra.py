@@ -6,11 +6,24 @@ Supplements existing test_plugin_manager.py with coverage for:
 - download_plugin download_order tracking
 """
 
+import hashlib
 import json
 import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+def _mock_resp(content: bytes):
+    """A streamed 200 response whose body is ``content``."""
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status.return_value = None
+    resp.content = content
+    resp.iter_content = lambda chunk_size=8192: iter(
+        [content[i:i + chunk_size] for i in range(0, len(content), chunk_size)]
+    )
+    return resp
 
 
 @pytest.fixture()
@@ -96,13 +109,12 @@ class TestDownloadOrder:
             zf.writestr("main.py", "# code")
         zip_bytes = buf.getvalue()
 
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = zip_bytes
+        mock_resp = _mock_resp(zip_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp), \
              patch.object(mgr, "load_plugins", return_value=[]):
-            mgr.download_plugin("https://example.com/p.zip", plugin_id="new_plugin")
+            mgr.download_plugin("https://example.com/p.zip", plugin_id="new_plugin",
+                                expected_sha256=hashlib.sha256(zip_bytes).hexdigest())
 
         state = json.loads(open(mgr.state_file).read())
         assert "new_plugin" in state.get("download_order", {})
@@ -123,13 +135,12 @@ class TestDownloadOrder:
             zf.writestr("main.py", "# code")
         zip_bytes = buf.getvalue()
 
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.content = zip_bytes
+        mock_resp = _mock_resp(zip_bytes)
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp), \
              patch.object(mgr, "load_plugins", return_value=[]):
-            mgr.download_plugin("https://example.com/p.zip", plugin_id="existing_plugin")
+            mgr.download_plugin("https://example.com/p.zip", plugin_id="existing_plugin",
+                                expected_sha256=hashlib.sha256(zip_bytes).hexdigest())
 
         state = json.loads(open(mgr.state_file).read())
         # Should keep the original order, not assign a new one

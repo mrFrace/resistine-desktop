@@ -1,5 +1,7 @@
-"""Linux agent package choice: .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/openSUSE."""
+"""Linux agent package choice: .deb for Debian/Ubuntu, .rpm for Fedora/RHEL/openSUSE,
+.pkg.tar.zst for Arch."""
 
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -8,7 +10,8 @@ from plugins.wazuh.agent import wazuh_functions_linux as w
 
 
 @pytest.mark.parametrize("family,plat", [
-    ("deb", "linux-amd64"), ("rpm", "linux-amd64-rpm"), ("arch", None), (None, None)])
+    ("deb", "linux-amd64"), ("rpm", "linux-amd64-rpm"), ("arch", "linux-amd64-arch"),
+    (None, None)])
 def test_package_platform_by_family(family, plat):
     with patch.object(w.phoenix_packages, "platform_key", return_value="linux-amd64"), \
             patch.object(w, "_get_os_info", return_value=family):
@@ -62,6 +65,7 @@ _CONF = """<ossec_config>
 """
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="GNU sed required (sed -i syntax)")
 def test_enrollment_group_leaves_other_groups_tags(tmp_path, allow_subprocess):
     """Only <enrollment>'s <groups> changes; syscollector's stays 'yes', and
     a MANAGER_IP placeholder left by a failed package script is filled in."""

@@ -5,8 +5,8 @@ Orchestrates DB seeding (user-level, network) and system setup (admin,
 no network) as separate phases.  Mirrors the Wazuh installer service
 pattern in plugins/wazuh/agent/installer_service.py.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 

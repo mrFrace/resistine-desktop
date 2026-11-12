@@ -34,13 +34,13 @@ jobs:
       matrix:
         include:
           - os: macos-14
-            requirements: requirements/requirements-mac.txt
+            requirements: scripts/requirements/requirements-mac.txt
             pytest-markers: ""
           - os: ubuntu-latest
-            requirements: requirements/requirements-linux.txt
+            requirements: scripts/requirements/requirements-linux.txt
             pytest-markers: "-m 'not platform_darwin and not platform_windows'"
           - os: windows-latest
-            requirements: requirements/requirements-windows.txt
+            requirements: scripts/requirements/requirements-windows.txt
             pytest-markers: "-m 'not platform_darwin and not platform_linux'"
     runs-on: ${{ matrix.os }}
 
@@ -54,7 +54,7 @@ jobs:
           cache: pip
           cache-dependency-path: |
             ${{ matrix.requirements }}
-            requirements/requirements-test.txt
+            scripts/requirements/requirements-test.txt
 
       - name: Install dependencies (Unix)
         if: runner.os != 'Windows'
@@ -62,7 +62,7 @@ jobs:
           python3 -m venv .venv
           source .venv/bin/activate
           pip install -r ${{ matrix.requirements }}
-          pip install -r requirements/requirements-test.txt
+          pip install -r scripts/requirements/requirements-test.txt
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
@@ -70,7 +70,7 @@ jobs:
           python -m venv .venv
           .venv\Scripts\activate
           pip install -r ${{ matrix.requirements }}
-          pip install -r requirements/requirements-test.txt
+          pip install -r scripts/requirements/requirements-test.txt
 
       - name: Run tests (Unix)
         if: runner.os != 'Windows'
@@ -97,19 +97,19 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements/requirements-mac.txt
+          cache-dependency-path: scripts/requirements/requirements-mac.txt
 
       - name: Install dependencies
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install -r requirements/requirements-mac.txt
+          pip install -r scripts/requirements/requirements-mac.txt
 
       - name: Audit dependencies
         run: |
           source .venv/bin/activate
           pip install pip-audit
-          pip-audit -r requirements/requirements-mac.txt
+          pip-audit -r scripts/requirements/requirements-mac.txt
 
       - name: Run PyInstaller
         run: |
@@ -157,19 +157,19 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements/requirements-windows.txt
+          cache-dependency-path: scripts/requirements/requirements-windows.txt
 
       - name: Install dependencies
         run: |
           python -m venv .venv
           .venv\Scripts\activate
-          pip install -r requirements/requirements-windows.txt
+          pip install -r scripts/requirements/requirements-windows.txt
 
       - name: Audit dependencies
         run: |
           .venv\Scripts\activate
           pip install pip-audit
-          pip-audit -r requirements/requirements-windows.txt
+          pip-audit -r scripts/requirements/requirements-windows.txt
 
       - name: Run PyInstaller
         run: |
@@ -222,7 +222,7 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements/requirements-linux.txt
+          cache-dependency-path: scripts/requirements/requirements-linux.txt
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y xvfb
@@ -231,13 +231,13 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
-          pip install -r requirements/requirements-linux.txt
+          pip install -r scripts/requirements/requirements-linux.txt
 
       - name: Audit dependencies
         run: |
           source .venv/bin/activate
           pip install pip-audit
-          pip-audit -r requirements/requirements-linux.txt
+          pip-audit -r scripts/requirements/requirements-linux.txt
 
       - name: Run PyInstaller
         run: |

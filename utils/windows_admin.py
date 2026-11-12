@@ -3,8 +3,8 @@
 Provides is_admin() and run_privileged() for any module that needs to
 run PowerShell commands with administrator privileges on Windows.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025
 Licensed under the GNU General Public License v2 or later
 """
 from __future__ import annotations

@@ -414,10 +414,33 @@ def _userinfo(meta: dict, access_token: str, http: requests.Session) -> dict:
 
 
 def _store_tokens(tokens: Tokens) -> None:
-    settings.set_secret(_AUTH_NS, "access_token", tokens.access_token)
+    # One atomic file write: a crash must never pair a new access token with
+    # a rotated-out refresh token (or a stale expires_at).
+    values = {"access_token": tokens.access_token, "expires_at": tokens.expires_at}
+    secret_keys = ["access_token"]
     if tokens.refresh_token:
-        settings.set_secret(_AUTH_NS, "refresh_token", tokens.refresh_token)
-    settings.set(_AUTH_NS, "expires_at", tokens.expires_at)
+        values["refresh_token"] = tokens.refresh_token
+        secret_keys.append("refresh_token")
+    settings.set_many(_AUTH_NS, values, secret_keys=secret_keys)
+
+
+def _revoke_unused_tokens(meta: dict, tokens: Tokens, http: requests.Session) -> None:
+    """Best-effort revocation of tokens that will never be stored."""
+    endpoint = meta.get("revocation_endpoint")
+    if not endpoint:
+        return
+    try:
+        client_id = get_client_id(meta, http)
+        if tokens.refresh_token:
+            token, kind = tokens.refresh_token, "refresh_token"
+        else:
+            token, kind = tokens.access_token, "access_token"
+        http.post(endpoint, data={"token": token, "client_id": client_id,
+                                  "token_type_hint": kind},
+                  timeout=_TIMEOUT)
+        logger.info("[OIDC] revoked tokens from a failed login")
+    except Exception as e:  # noqa: BLE001 - best effort only
+        logger.warning(f"[OIDC] could not revoke tokens from a failed login: {e}")
 
 
 def complete_login(tokens: Tokens) -> dict:
@@ -429,8 +452,14 @@ def complete_login(tokens: Tokens) -> dict:
     """
     http = _session()
     meta = discover(http)
-    who = _whoami(tokens.access_token, http)
-    info = _userinfo(meta, tokens.access_token, http)
+    try:
+        who = _whoami(tokens.access_token, http)
+        info = _userinfo(meta, tokens.access_token, http)
+    except Exception:
+        # The tokens were issued but will never be stored; revoke them so
+        # they do not linger server-side (best effort).
+        _revoke_unused_tokens(meta, tokens, http)
+        raise
     email = info.get("email") or None
     _store_tokens(tokens)
     settings.set(_AUTH_NS, "method", "mas")
@@ -449,39 +478,62 @@ def complete_login(tokens: Tokens) -> dict:
             "email": email}
 
 
+# MAS rotates refresh tokens: each one is single-use. Without a lock, two
+# concurrent refresh() callers (chat sync, VPN provisioning, downloads) both
+# POST the same refresh token; the loser gets invalid_grant and can kill the
+# whole session. The lock serialises refreshes; the re-check after acquiring
+# it makes the waiting thread reuse the winner's fresh token instead of
+# burning the rotated one.
+_refresh_lock = threading.Lock()
+
+
 def refresh(force: bool = False) -> Optional[str]:
     """Return a valid access token, refreshing it when it is (nearly) expired.
 
     Returns None when there is no session or the server rejected the refresh
     token (session ended elsewhere). Raises OIDCError on network problems,
     so callers can tell "offline" from "signed out".
+
+    ``force=True`` refreshes even if the token is not near expiry (the caller
+    saw it rejected) — unless another thread already refreshed while we
+    waited for the lock, in which case the new token is returned as-is.
     """
-    access = settings.get_secret(_AUTH_NS, "access_token")
-    if not access:
-        return None
-    expires_at = settings.get(_AUTH_NS, "expires_at")
-    if not force and (not expires_at or expires_at - time.time() > 60):
-        return access
-    refresh_token = settings.get_secret(_AUTH_NS, "refresh_token")
-    if not refresh_token:
-        return None
-    http = _session()
-    meta = discover(http)
-    r = _token_request(meta, {
-        "grant_type": "refresh_token",
-        "refresh_token": refresh_token,
-        "client_id": get_client_id(meta, http),
-    }, http)
-    if r.ok:
-        tokens = Tokens.from_response(r.json())
-        if not tokens.refresh_token:
-            tokens.refresh_token = refresh_token
-        _store_tokens(tokens)
-        return tokens.access_token
-    if r.status_code in (400, 401):
-        logger.info(f"[OIDC] refresh rejected: {_error_text(r)}")
-        return None
-    raise OIDCError(f"Token refresh failed ({r.status_code}): {_error_text(r)}")
+    # Snapshot of the token the force caller saw fail, taken before we block
+    # on the lock: if it changed while we waited, someone else refreshed.
+    before = settings.get_secret(_AUTH_NS, "access_token") if force else None
+    with _refresh_lock:
+        access = settings.get_secret(_AUTH_NS, "access_token")
+        if not access:
+            return None
+        expires_at = settings.get(_AUTH_NS, "expires_at")
+        fresh = not expires_at or expires_at - time.time() > 60
+        if fresh and (not force or access != before):
+            return access
+        refresh_token = settings.get_secret(_AUTH_NS, "refresh_token")
+        if not refresh_token:
+            return None
+        http = _session()
+        meta = discover(http)
+        r = _token_request(meta, {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": get_client_id(meta, http),
+        }, http)
+        if r.ok:
+            tokens = Tokens.from_response(r.json())
+            if not tokens.refresh_token:
+                tokens.refresh_token = refresh_token
+            _store_tokens(tokens)
+            return tokens.access_token
+        if r.status_code in (400, 401):
+            logger.info(f"[OIDC] refresh rejected: {_error_text(r)}")
+            # The session is dead server-side: drop the tokens so
+            # has_session() stops claiming one. user_id/device_id/method
+            # stay for the UI (one write, so this is never half-applied).
+            settings.delete_many(
+                _AUTH_NS, ("access_token", "refresh_token", "expires_at"))
+            return None
+        raise OIDCError(f"Token refresh failed ({r.status_code}): {_error_text(r)}")
 
 
 def has_session() -> bool:

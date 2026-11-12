@@ -43,8 +43,8 @@ Direct mode (you handle the venv isolation yourself)::
 CI runs the direct form against a clean venv it provisions per job and
 verifies the committed files match with ``--check``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2026
+Author: Phoenix Team
+Copyright (c) Phoenix 2026
 Licensed under the GNU General Public License v2 or later
 """
 

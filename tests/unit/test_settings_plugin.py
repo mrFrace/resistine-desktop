@@ -76,9 +76,14 @@ class TestScreenConstruction:
         assert settings_plugin.disable_animation_checkbox.isChecked() is True
         assert settings_plugin.appearance_combo.currentText() == "Dark"
 
-    def test_defaults_to_openai_transport(self, built_plugin):
+    def test_defaults_to_matrix_transport(self, built_plugin):
+        # The HTTPS API on :8002 is only reachable over the VPN, which the
+        # Wazuh 5 agent no longer needs, so a fresh install chats over Matrix.
         from utils.chat_config import DEFAULT_BASE_URL
-        assert built_plugin.transport_combo.currentData() == "openai"
+        assert built_plugin.transport_combo.currentData() == "matrix"
+        assert built_plugin.api_key_entry.isHidden()
+        built_plugin.transport_combo.setCurrentIndex(
+            built_plugin.transport_combo.findData("openai"))
         assert built_plugin.api_base_entry.text() == DEFAULT_BASE_URL
         assert DEFAULT_BASE_URL == "https://dashboard.phoenix.exposed:8002/v1"
         assert not built_plugin.api_key_entry.isHidden()
@@ -92,6 +97,8 @@ class TestScreenConstruction:
 @pytest.mark.unit
 class TestSaveApiKey:
     def test_saves_key_and_base_url(self, built_plugin, isolated_settings):
+        built_plugin.transport_combo.setCurrentIndex(
+            built_plugin.transport_combo.findData("openai"))
         built_plugin.api_key_entry.setText("sk-test-key")
         built_plugin.api_base_entry.setText("http://localhost:11434/v1")
 

@@ -260,9 +260,11 @@ class StreamController:
                        "not incrementally streamed)" if buffered else ""))
                 # Full raw response text, verbatim (markdown source, incl. any
                 # injected tool-status lines) — fenced so multi-line replies
-                # are obvious in the log.
+                # are obvious in the log. DEBUG: assistant replies are private
+                # content and must not land in INFO logs (which may be shipped
+                # off-box) by default.
                 raw = "".join(raw_parts)
-                logger.info(
+                logger.debug(
                     "[CHAT-STREAM] raw response text:\n"
                     "----- BEGIN RESPONSE -----\n"
                     f"{raw}\n"
