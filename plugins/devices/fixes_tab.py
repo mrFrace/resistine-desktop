@@ -157,7 +157,8 @@ class FixesTab:
         ask.setIcon(QIcon(line_icon("message-circle", theme.color("on_accent"), 18)))
         ask.setCursor(Qt.CursorShape.PointingHandCursor)
         ask.clicked.connect(lambda: self.ctx.ask_ai(
-            mitigations.question(first["item"], first["hostname"], first["this_machine"])))
+            mitigations.question(first["item"], first["hostname"], first["this_machine"],
+                                 first["agent_id"])))
         header.add_control(ask)
         page.add(header)
 

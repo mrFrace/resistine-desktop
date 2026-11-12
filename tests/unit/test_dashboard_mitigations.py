@@ -331,13 +331,28 @@ class TestDetailText:
         assert "No fixed version" in mit.fix_steps(item)[0]
 
     def test_package_question_carries_the_evidence(self):
-        q = mit.question(mit.items_of(card(PKG_ITEM))[0], "anubisai", True)
-        assert "this machine (anubisai)" in q
+        q = mit.question(mit.items_of(card(PKG_ITEM))[0], "anubisai", True, "004")
+        assert "this machine (anubisai, agent 004)" in q
         assert "openssl" in q and "3.0.13-0ubuntu3.1" in q and "CVE-2026-0001" in q
 
     def test_cis_question(self):
-        q = mit.question(mit.items_of(card(CIS_ITEM))[0], "francispc", False)
-        assert q.startswith("My machine (francispc) fails 35 of 103")
+        q = mit.question(mit.items_of(card(CIS_ITEM))[0], "francispc", False, "006")
+        assert q.startswith("Agent 006 (francispc) fails 35 of 103")
+
+    @pytest.mark.parametrize("this_machine", [True, False])
+    def test_another_machine_is_never_my_machine(self, this_machine):
+        """The AI server reads "this/my machine" as the requester's own agent
+        and only "agent NNN" as naming one (Resistine-LLMAgent-api
+        _wants_this_machine, _agent_after_keyword)."""
+        for item in (PKG_ITEM, CIS_ITEM, dict(PKG_ITEM, kind="agent_connection")):
+            q = mit.question(mit.items_of(card(item))[0], "briareosai", this_machine, "006").lower()
+            assert "agent 006" in q
+            mine = any(p in q for p in ("this machine", "my machine", "my computer", "this host"))
+            assert mine == this_machine
+
+    def test_no_agent_id_names_the_host(self):
+        q = mit.question(mit.items_of(card(CIS_ITEM))[0], "briareosai", False, "briareosai")
+        assert q.startswith("The machine briareosai fails") and "my machine" not in q.lower()
 
     @pytest.mark.parametrize("state", [mit.OPEN, mit.FIXED_HERE, mit.REBOOT, mit.UNKNOWN,
                                        mit.SERVER, mit.REMOTE, None])

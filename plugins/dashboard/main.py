@@ -1302,7 +1302,7 @@ class Plugin(BasePlugin):
         ask.setCursor(Qt.CursorShape.PointingHandCursor)
         ask.setToolTip("Start a chat with Phoenix AI about this item")
         ask.clicked.connect(lambda: self._ask_ai_text(
-            mitigations.question(item, host, this_machine)))
+            mitigations.question(item, host, this_machine, card.get("agent_id"))))
         header.add_control(ask)
         page.add(header)
         page.section("Status")

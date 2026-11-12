@@ -958,7 +958,9 @@ class Plugin(BasePlugin):
         ask.setCursor(Qt.CursorShape.PointingHandCursor)
         ask.clicked.connect(
             lambda: self._ask_ai_text(
-                mitigations.question(item, row["hostname"], row["this_machine"])
+                mitigations.question(
+                    item, row["hostname"], row["this_machine"], row.get("agent_id")
+                )
             )
         )
         header.add_control(ask)
