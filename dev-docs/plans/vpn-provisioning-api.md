@@ -114,6 +114,27 @@ agent, and marks it revoked. 204 on success, 404 if the device has neither
 (the client treats both as done). The app calls it on logout, before revoking
 its MAS session.
 
+## GET /v1/devices
+
+Every device of the caller's account: each active MAS session (OAuth2 and
+compat) joined with the registry rows by device id, plus registry rows whose
+session is gone (`"session": null`), so the app can clean them up. Per row:
+`device_id`, `current`, `kind` (`phoenix` for `PHX_` ids, else `matrix`),
+`session`, `vpn {hostname, address}`, `agent {agent_id, agent_name, linked}`.
+Full example in `dev-docs/plans/device-sessions.md`. The app shows it in
+Devices → Sessions (`plugins/devices/sessions_api.py`); 404 there means "not
+deployed yet".
+
+## DELETE /v1/devices/{device_id}
+
+Signs another device of the caller out and drops what it holds: Wazuh agent
+(a linked agent only leaves the user's group, as on logout) → router peer →
+registry rows → MAS session finish (admin API), in that order so a failure
+leaves a working device a retry can finish. 204 done, 404 not this user's,
+409 it is the caller's own device (that is logout, `DELETE /v1/device`),
+422 not a device id, 503 a service is down or the MAS admin client is not
+configured.
+
 ## GET /v1/internal/device-agent?user=<mxid>&device=<device_id>
 
 Not called by the app. LLMAgent-api's Matrix bridge asks which agent the
@@ -162,7 +183,8 @@ command="/usr/libexec/phoenix-peer",no-pty,no-port-forwarding,no-agent-forwardin
 
 A job in the API polls the MAS admin API for finished Phoenix Desktop
 sessions and runs the same removal, so signing a device out in Element or
-MAS `/account` also drops its VPN peer. Must be idempotent.
+MAS `/account` also drops its VPN peer and agent (after a grace period, so a
+token refresh in flight is not mistaken for a sign-out). Must be idempotent.
 
 ## Later
 

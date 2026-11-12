@@ -26,9 +26,11 @@ sign-in (alice-example.com) are no longer used.
 
 The enrollment is also remembered against the Matrix device and account it
 was made for (enrolled_for_this_sign_in()). Signing out deletes the device's
-agent on the server and clears this record, and the next sign-in is a new
-Matrix device, so the setup wizard enrolls again instead of trusting an agent
-that is still installed and running locally. The server's device -> agent
+agent on the server and clears this record, so the setup wizard enrolls again
+at the next sign-in instead of trusting an agent that is still installed and
+running locally. The device id itself survives sign-out (oidc.get_device_id());
+only a reinstall makes a new device, and the old one stays on the account
+until it is removed in Devices → Sessions. The server's device -> agent
 mapping is what LLMAgent-api's Matrix bridge uses for "this machine".
 
 An agent installed some other way (the NixOS module, an upstream package)

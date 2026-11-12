@@ -130,6 +130,12 @@ def _build_app() -> tuple[QApplication, object]:
             sign_in.ensure_in_background()
         except Exception as e:
             logger.warning(f"Agent check at startup failed: {e}")
+        if not login_uninstalled:
+            try:
+                from plugins.login import device_name
+                device_name.name_in_background()
+            except Exception as e:
+                logger.warning(f"Device name at startup failed: {e}")
         if sys.platform == "darwin":
             _resume_macos_installs()
     else:

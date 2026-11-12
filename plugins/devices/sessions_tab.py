@@ -19,6 +19,7 @@ text everywhere.
 from __future__ import annotations
 
 import re
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -172,6 +173,7 @@ class SessionsTab:
             col.addWidget(_plain(muted(self.t("stale", error=self._error))))
             col.addSpacing(12)
         groups = group(self._rows)
+        stale = sessions_api.stale_installs(self._rows, socket.gethostname())
         first = True
         for key in ("this", "phoenix", "apps", "gone"):
             if not groups[key]:
@@ -187,6 +189,11 @@ class SessionsTab:
                 if r.current and self._status.get(r.device_id) == cs.UNVERIFIED:
                     lst.add_row(MenuRow("key", self.t("verify"), self.t("verify_hint"),
                                         on_click=self._open_verify))
+            if key == "this" and stale:
+                lst.add_row(_plain_row(MenuRow(
+                    "trash", self.t("stale_row"),
+                    self.t("stale_hint", names=", ".join(r.device_id for r in stale)),
+                    on_click=lambda _s=stale: self._open_stale(_s))))
             col.addWidget(lst)
             if key == "this" and self._status.get(groups[key][0].device_id) == cs.NO_CROSS_SIGNING:
                 col.addSpacing(8)
@@ -367,6 +374,57 @@ class SessionsTab:
         try:
             button.setEnabled(True)
             result.setText(self.t("remove_failed", error=error or "?"))
+        except RuntimeError:
+            pass
+
+    # ---- earlier installs of this computer ------------------------------------
+
+    def _open_stale(self, rows) -> None:
+        page = Page()
+        page.add(back_link(self.ctx.t("title"), self.ctx.pop))
+        page.add(PageHeader(self.t("stale_title"), self.t("stale_sub")))
+        page.section(self.t("section_remove"))
+        for r in rows:
+            page.add(_plain(muted(f"{r.device_id}: {self.removal_text(r)}")))
+            page.spacing(8)
+        page.spacing(2)
+        result = _plain(muted(""))
+        result.hide()
+        lst = RowList()
+        remove = MenuRow("trash", self.t("stale_remove"), "", danger=True, chevron=False)
+        remove.clicked.connect(lambda: self._remove_stale(rows, remove, result))
+        lst.add_row(remove)
+        page.add(lst)
+        page.spacing(8)
+        page.add(result)
+        page.stretch()
+        self.ctx.push(page.widget)
+
+    def _remove_stale(self, rows, button: MenuRow, result: QLabel) -> None:
+        button.setEnabled(False)
+        result.setText(self.t("removing"))
+        result.show()
+
+        def work():
+            failed = []
+            for r in rows:
+                ok, error = sessions_api.remove_device(r.device_id)
+                if not ok and error != "gone":
+                    failed.append(f"{r.device_id}: {error or '?'}")
+            self.ctx.app.after(0, lambda: self._stale_removed(failed, button, result))
+
+        threading.Thread(target=work, daemon=True, name="devices-remove-stale").start()
+
+    def _stale_removed(self, failed, button, result) -> None:
+        self._loaded_at = 0.0
+        if not failed:
+            self.ctx.pop()
+            self._fetch()
+            return
+        self._fetch()
+        try:
+            button.setEnabled(True)
+            result.setText(self.t("remove_failed", error="; ".join(failed)))
         except RuntimeError:
             pass
 
