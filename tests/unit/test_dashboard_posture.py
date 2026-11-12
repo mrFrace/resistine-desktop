@@ -173,3 +173,18 @@ def test_api_helper_merges_extra_headers(monkeypatch):
     prov._authorized_request("GET", "/v1/me/posture", headers={"If-None-Match": '"e1"'})
     headers = http.request.call_args.kwargs["headers"]
     assert headers == {"If-None-Match": '"e1"', "Authorization": "Bearer tok"}
+
+
+@pytest.mark.unit
+def test_panel_carries_the_data_age():
+    d = posture.panel_data(dict(st(), fetched_at=1.0, next_at=2.0), {"francispc"}, NOW)
+    assert d["as_of"] == (1.0, 2.0)
+    assert "as_of" not in (posture.panel_data(st(status="signed_out", cards=[]), set(), NOW) or {})
+
+
+@pytest.mark.unit
+def test_state_names_the_next_fetch(monkeypatch):
+    monkeypatch.setitem(posture._last, "tried_at", 100.0)
+    assert posture.state()["next_at"] == 100.0 + posture.MIN_INTERVAL_S
+    monkeypatch.setitem(posture._last, "tried_at", 0.0)
+    assert posture.state()["next_at"] is None

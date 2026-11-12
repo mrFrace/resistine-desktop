@@ -21,6 +21,8 @@ Licensed under the GNU General Public License v2 or later
 
 from __future__ import annotations
 
+import time
+
 import os
 
 from PyQt6.QtCore import (
@@ -48,6 +50,7 @@ from PyQt6.QtWidgets import (
 )
 
 from gui import theme
+from utils.i18n import get_text
 from gui.qt_widgets import resource, scroll_page, set_pill
 
 PAGE_MAX_WIDTH = 760
@@ -122,6 +125,31 @@ def back_link(text: str, on_click) -> QWidget:
     h.addWidget(btn)
     h.addStretch(1)
     return row
+
+
+def _ago(seconds: float) -> str:
+    if seconds < 90:
+        return get_text("page.ago_now")
+    if seconds < 3600:
+        return get_text("page.ago_min", n=int(seconds // 60))
+    if seconds < 86400:
+        return get_text("page.ago_hours", n=int(seconds // 3600))
+    return get_text("page.ago_days", n=int(seconds // 86400))
+
+
+def as_of_text(at: float | None, next_at: float | None = None,
+               now: float | None = None) -> str:
+    """"As of 2 min ago · next check 09:12": data has an age, so stale
+    looks old instead of looking wrong. ``at`` None = never fetched."""
+    now = time.time() if now is None else now
+    if at is None:
+        text = get_text("page.as_of_never")
+    else:
+        text = get_text("page.as_of", when=_ago(max(0.0, now - at)))
+    if next_at is not None and next_at > now:
+        text += " · " + get_text("page.next_check",
+                                 time=time.strftime("%H:%M", time.localtime(next_at)))
+    return text
 
 
 def muted(text: str, wrap: bool = True) -> QLabel:
@@ -208,6 +236,10 @@ class PageHeader(QWidget):
         if not subtitle:
             self.subtitle.hide()
         text.addWidget(self.subtitle)
+        self.as_of = muted("")
+        self.as_of.setObjectName("AsOf")
+        self.as_of.hide()
+        text.addWidget(self.as_of)
         row.addLayout(text, 1)
         self._controls = QHBoxLayout()
         self._controls.setSpacing(8)
@@ -232,6 +264,13 @@ class PageHeader(QWidget):
     def set_subtitle(self, text: str) -> None:
         self.subtitle.setText(text)
         self.subtitle.setVisible(bool(text))
+
+    def set_as_of(self, at: float | None, next_at: float | None = None,
+                  shown: bool = True) -> None:
+        """The data's age under the subtitle (as_of_text); ``shown`` False
+        hides the line (no data to age)."""
+        self.as_of.setText(as_of_text(at, next_at) if shown else "")
+        self.as_of.setVisible(shown)
 
     def add_control(self, widget: QWidget) -> QWidget:
         self._controls.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)

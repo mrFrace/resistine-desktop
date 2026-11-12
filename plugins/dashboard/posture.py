@@ -88,7 +88,8 @@ def fetch(force: bool = False) -> dict:
 def state() -> dict:
     c = _cache()
     return {"status": _last["status"], "error": _last["error"],
-            "cards": c.get("cards") or [], "fetched_at": c.get("fetched_at")}
+            "cards": c.get("cards") or [], "fetched_at": c.get("fetched_at"),
+            "next_at": _last["tried_at"] + MIN_INTERVAL_S if _last["tried_at"] else None}
 
 
 def local_names(include_agent: bool = True) -> set:
@@ -217,7 +218,7 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
             for c in others)
     if status == "error" and st.get("error"):
         rows["Note"] = f"Showing the last known posture. {st['error']}"
-    out = {"badge": badge, "rows": rows}
+    out = {"badge": badge, "rows": rows, "as_of": (st.get("fetched_at"), st.get("next_at"))}
     if mine is not None and score_trend:
         out["spark"] = list(score_trend["points"])
     return out

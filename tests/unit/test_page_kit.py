@@ -82,3 +82,33 @@ class TestSlideStack:
         stack.push(a)
         assert stack._anim is None
         assert stack.currentWidget() is a
+
+
+@pytest.mark.unit
+class TestAsOf:
+    """Data has an age: "As of 2 min ago · next check 09:12"."""
+
+    def test_text(self):
+        import time
+
+        now = 1_800_000_000.0
+        assert kit.as_of_text(None, None, now) == "Not fetched yet"
+        assert kit.as_of_text(now - 30, None, now) == "As of just now"
+        assert kit.as_of_text(now - 5 * 60, None, now) == "As of 5 min ago"
+        assert kit.as_of_text(now - 3 * 3600, None, now) == "As of 3 h ago"
+        assert kit.as_of_text(now - 2 * 86400, None, now) == "As of 2 d ago"
+        nxt = now + 600
+        hhmm = time.strftime("%H:%M", time.localtime(nxt))
+        assert kit.as_of_text(now - 120, nxt, now) == f"As of 2 min ago · next check {hhmm}"
+        # A next check already in the past is not promised.
+        assert kit.as_of_text(now - 120, now - 1, now) == "As of 2 min ago"
+
+    def test_header_line(self, qapp):
+        import time
+
+        h = kit.PageHeader("Devices", "sub")
+        assert h.as_of.isHidden()
+        h.set_as_of(time.time() - 120, None)
+        assert h.as_of.text() == "As of 2 min ago" and not h.as_of.isHidden()
+        h.set_as_of(None, None, shown=False)
+        assert h.as_of.isHidden() and h.as_of.text() == ""

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
@@ -380,6 +381,7 @@ class Plugin(BasePlugin):
 
         try:
             self.app.after(_REFRESH_MS, tick)
+            self._next_fetch_at = time.time() + _REFRESH_MS / 1000
         except Exception:  # noqa: BLE001
             self._poll_armed = False
 
@@ -604,6 +606,8 @@ class Plugin(BasePlugin):
         )
         self._header.set_status(*summary["pill"])
         self._header.set_subtitle(summary["subtitle"])
+        self._header.set_as_of(st.get("fetched_at"), getattr(self, "_next_fetch_at", None),
+                               shown=bool(rows))
         self._note.setText(summary["note"])
         self._note.setVisible(bool(summary["note"]))
         lay = self._combo_holder.layout()

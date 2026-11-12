@@ -47,6 +47,7 @@ BADGE_BG: dict[str, tuple[str, str]] = {
     # #7F1D1D bg + #F87171 text was red-on-red at ~3:1 contrast.
     "error": ("#FEE2E2", "#450A0A"),
     "critical": ("#FEE2E2", "#450A0A"),
+    "unknown": ("#F3F4F6", "#374151"),
 }
 BADGE_TEXT: dict[str, tuple[str, str]] = {
     "ok": ("#15803D", "#4ADE80"),
@@ -54,6 +55,7 @@ BADGE_TEXT: dict[str, tuple[str, str]] = {
     "warning": ("#B45309", "#FBBF24"),
     "error": ("#DC2626", "#FCA5A5"),
     "critical": ("#991B1B", "#FECACA"),
+    "unknown": ("#A16207", "#FCD34D"),
 }
 
 _mode = "Dark"
@@ -91,7 +93,7 @@ def badge_colors(status: str) -> tuple[str, str]:
 def build_qss() -> str:
     c = color
     badge_rules = []
-    for key in ("ok", "info", "warning", "error", "critical"):
+    for key in ("ok", "info", "warning", "error", "critical", "unknown"):
         bg, fg = badge_colors(key)
         badge_rules.append(
             f'QLabel[badge="{key}"] {{ background-color: {bg}; color: {fg}; '
@@ -138,6 +140,9 @@ QToolTip {{
 QLabel#NavLabel {{
     background: transparent; color: {c('text_primary')};
     font-size: 14px; font-weight: 600;
+}}
+QLabel#AsOf {{
+    background: transparent; color: {c('text_secondary')}; font-size: 11px;
 }}
 QLabel#NavCaption {{
     background: transparent; color: {c('text_secondary')};
