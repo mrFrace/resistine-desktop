@@ -184,3 +184,39 @@ class TestSecretsFailClosed:
     def test_plaintext_value_not_returned_as_secret(self, isolated_settings):
         isolated_settings.set("ns", "k", "not-encrypted")
         assert isolated_settings.get_secret("ns", "k") is None
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestCrossSigningRequests:
+    """plugins/login/cross_signing.py reads secret storage with the session's
+    Bearer token: it must never follow a redirect off the homeserver."""
+
+    def test_bearer_never_follows_redirects(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from plugins.login import cross_signing as cs
+        from plugins.login import oidc
+
+        http = MagicMock()
+        r = MagicMock(status_code=200)
+        r.json.return_value = {}
+        http.request.return_value = r
+        monkeypatch.setattr(oidc, "_session", lambda: http)
+        monkeypatch.setattr(oidc, "refresh", lambda force=False: "tok")
+        cs._request("GET", "/_matrix/client/v3/user/%40a%3Ab/account_data/m.cross_signing.self_signing")
+        kwargs = http.request.call_args.kwargs
+        assert kwargs["allow_redirects"] is False and kwargs["verify"] is True
+        assert http.request.call_args.args[1].startswith(oidc.homeserver_url() + "/_matrix/")
+
+    def test_failed_verification_writes_no_settings(self, monkeypatch):
+        from plugins.login import cross_signing as cs
+
+        monkeypatch.setattr(cs.settings, "get", lambda ns, k, d=None: {
+            "user_id": "@a:b", "device_id": "PHX_AAAAAAAAAAAAAAAA"}.get(k, d))
+        monkeypatch.setattr(cs.settings, "set", lambda *a, **k: pytest.fail("settings written"))
+        monkeypatch.setattr(cs.settings, "set_secret", lambda *a, **k: pytest.fail("secret written"),
+                            raising=False)
+        monkeypatch.setattr(cs, "_request", lambda *a, **k: (404, None))
+        with pytest.raises(cs.VerificationError):
+            cs.verify_this_device("EsTE s92N EtaX s2h6 VQYF 9Kao tHYL mkyL GKMh isZb KJ4E tvoC")
