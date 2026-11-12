@@ -9,7 +9,7 @@
 #   the app reads (utils/updates/channel.py). Server side: ~/flakes
 #   modules/services/phoenix-packages.nix.
 # Usage: ./scripts/build/publish-desktop.sh [--stage DIR] <package>...
-#   e.g. dist/installers/Phoenix-Setup-*-<build>.exe dist/linux/*<build>*.{deb,rpm,pkg.tar.xz}
+#   e.g. dist/installers/Phoenix-Setup-*-<build>.exe dist/linux/*<build>*.{deb,rpm,pkg.tar.zst}
 #   --stage DIR  only write the signed release directory into DIR (no upload)
 # Every package must carry the same build ID (scripts/build/build-*.sh name
 # them by it). The server refuses a build at or below the current one, and the

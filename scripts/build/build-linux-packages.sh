@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
 # Description: Build the Linux app once in an AlmaLinux 9 container and
-#   package it as .deb, .rpm and an Arch Linux .pkg.tar.xz (x86_64). glibc 2.34 there is the oldest PyQt6's
+#   package it as .deb, .rpm and an Arch Linux .pkg.tar.zst (x86_64). glibc 2.34 there is the oldest PyQt6's
 #   wheels support, so the PyInstaller bundle runs on RHEL/Alma/Rocky 9+,
 #   Ubuntu 22.04+, Debian 12+ and Fedora. A build made on the host (NixOS)
 #   would only run on NixOS.
 # Usage: ./scripts/build/build-linux-packages.sh
 # Output (<build> = UTC YYYYMMDDHHMM, or $PHOENIX_BUILD): dist/linux/
 #   phoenix_<version~rc>-<build>_amd64.deb, phoenix-<version~rc>-<build>.x86_64.rpm,
-#   phoenix-<pkgver>-<build>-x86_64.pkg.tar.xz with its PKGBUILD, and the
+#   phoenix-<pkgver>-<build>-x86_64.pkg.tar.zst with its PKGBUILD, and the
 #   staged root phoenix-<version>-<build>-x86_64.tar.xz the PKGBUILD repackages.
 # Needs: docker. Builds from the committed tree (git archive HEAD).
 
@@ -119,7 +119,7 @@ tar -C /stage/arch --owner=0 --group=0 -cJf /out/phoenix-${VERSION}-${BUILD}-x86
 chown "$HOST_UID:$HOST_GID" /out/*
 '
 
-# Arch Linux .pkg.tar.xz from the staged root.
+# Arch Linux .pkg.tar.zst (pacman's default format) from the staged root.
 TARBALL="phoenix-${VERSION}-${BUILD}-x86_64.tar.xz"
 SHA=$(sha256sum "$OUT/$TARBALL" | cut -d" " -f1)
 sed -e "s/@PKGVER@/$ARCH_VERSION/" -e "s/@PKGREL@/$BUILD/" -e "s/@VERSION@/$VERSION-$BUILD/" -e "s/@SHA256@/$SHA/" \
@@ -134,8 +134,8 @@ install -d -o build /build
 cp /out/PKGBUILD /out/phoenix.install "/out/$TARBALL" /build/
 chown build /build/*
 cd /build
-su build -c "PKGEXT=.pkg.tar.xz makepkg -f --nodeps --noconfirm" >/dev/null
-pkg=$(ls /build/*.pkg.tar.xz)
+su build -c "PKGEXT=.pkg.tar.zst makepkg -f --nodeps --noconfirm" >/dev/null
+pkg=$(ls /build/*.pkg.tar.zst)
 pacman -Qip "$pkg" | grep -E "^(Name|Version|Architecture|Depends On|Installed Size)"
 cp "$pkg" /out/
 chown "$HOST_UID:$HOST_GID" /out/*
