@@ -34,7 +34,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -236,8 +236,8 @@ class AppWindow(QMainWindow):
         self._current_main_screen = None
 
         self.setWindowTitle("Phoenix")
-        self.resize(1120, 720)
         self.setMinimumSize(820, 480)
+        self._apply_default_geometry()
         icon_png = resource("resources", "icons", "app_icon.png")
         if os.path.isfile(icon_png):
             self.setWindowIcon(QIcon(icon_png))
@@ -249,6 +249,28 @@ class AppWindow(QMainWindow):
         except Exception:
             saved_mode = "System"
         self.apply_theme(self._resolve_mode(saved_mode))
+
+    def _apply_default_geometry(self) -> None:
+        """Size the window to 33% of the screen area and centre it.
+
+        Qt geometry is in logical pixels, the same unit space as the screen's
+        available geometry, so HiDPI and QT_SCALE_FACTOR need no correction.
+        The size is clamped to the minimum before centring so the offsets
+        match the size Qt actually enforces on small screens.
+        """
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1120, 720)
+            return
+        avail = screen.availableGeometry()
+        side_fraction = 0.33**0.5  # ~57.5% per dimension = 33% of the area
+        width = min(avail.width(), max(self.minimumWidth(), int(avail.width() * side_fraction)))
+        height = min(avail.height(), max(self.minimumHeight(), int(avail.height() * side_fraction)))
+        self.resize(width, height)
+        self.move(
+            avail.x() + (avail.width() - width) // 2,
+            avail.y() + (avail.height() - height) // 2,
+        )
 
     def closeEvent(self, event) -> None:  # noqa: N802 (Qt override)
         # When a system tray is active (Windows, Linux), closing the window hides it
