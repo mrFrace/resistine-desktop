@@ -64,6 +64,7 @@ from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture
 from plugins.devices import data, fixes, remote
 from plugins.devices.fixes_tab import FixesTab
+from plugins.devices.sessions_tab import SessionsTab
 from plugins.devices.tabs import EventsTab, InventoryTab, VulnerabilitiesTab
 from plugins.devices.widgets import DailyBars, GradeBadge, SeverityBar, StatCard
 from utils import settings
@@ -474,6 +475,7 @@ class Plugin(BasePlugin):
         ("vulns", "tab_vulns"),
         ("events", "tab_events"),
         ("inventory", "tab_inventory"),
+        ("sessions", "tab_sessions"),
     )
 
     def _build_shell(self) -> QWidget:
@@ -559,6 +561,7 @@ class Plugin(BasePlugin):
                 "vulns": VulnerabilitiesTab,
                 "events": EventsTab,
                 "inventory": InventoryTab,
+                "sessions": SessionsTab,
             }[key]
             try:
                 tab = cls(_Ctx(self))

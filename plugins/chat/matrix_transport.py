@@ -775,6 +775,27 @@ def _get_service(homeserver: str, user_id: str, device_id: str, bot: Optional[st
         return s
 
 
+def own_identity_key(user_id: str, device_id: str, timeout: float = 10.0) -> Optional[str]:
+    """This install's ed25519 identity key from nio's crypto store, or None
+    when no Matrix connection for this identity is up. Cross-signing
+    (plugins/login/cross_signing.py) only signs the published device keys
+    when they are this one."""
+    s = _service
+    if s is None or (s.user_id, s.device_id) != (user_id, device_id) or not s.is_running():
+        return None
+
+    async def read():
+        client = s._client
+        olm = getattr(client, "olm", None) if client is not None else None
+        return olm.account.identity_keys.get("ed25519") if olm is not None else None
+
+    try:
+        return s.run_coro(read(), timeout)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[CHAT-MATRIX] own identity key unavailable: {e}")
+        return None
+
+
 def start_background(bot: str = DEFAULT_BOT) -> None:
     """Connect the Matrix session now, not on the first chat message, so SIEM
     alerts arrive while the app is open. Failures only log: the chat screen
