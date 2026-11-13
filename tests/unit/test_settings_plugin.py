@@ -812,3 +812,33 @@ class TestDiagnostics:
         settings_plugin._undo_job(jobs.find(job["code"]))
         assert "can't be undone now" in settings_plugin.app.show_notification.call_args.args[0]
         jobs._reset_for_tests()
+
+
+@pytest.mark.unit
+class TestChangeLanguage:
+    def test_picker_lists_every_locale_english_first(self, qapp, settings_plugin):
+        box = settings_plugin._appearance_card()  # noqa: F841 - keeps the combo alive
+        combo = settings_plugin.language_combo
+        from utils import i18n
+        assert combo.itemData(0) == "en" and combo.count() == len(i18n.LANGUAGE_NAMES)
+        assert combo.currentData() == i18n.get_language()
+
+    def test_change_persists_switches_and_rebuilds_the_shell(self, qapp, settings_plugin):
+        from utils import i18n, settings
+        box = settings_plugin._appearance_card()  # noqa: F841 - keeps the combo alive
+        combo = settings_plugin.language_combo
+        try:
+            combo.setCurrentIndex(combo.findData("cs-CZ"))
+            assert settings.get("ui", "language") == "cs-CZ" and i18n.get_language() == "cs-CZ"
+            delay, callback = settings_plugin.app.after.call_args[0]
+            assert delay == 0
+            callback()
+            settings_plugin.app.refresh_navigation.assert_called_once_with()
+            settings_plugin.app.navigate.assert_called_once_with("Settings")
+        finally:
+            i18n.set_language("en")
+
+    def test_same_language_is_a_no_op(self, qapp, settings_plugin):
+        box = settings_plugin._appearance_card()  # noqa: F841 - keeps the combo alive
+        settings_plugin.change_language(settings_plugin.language_combo.currentIndex())
+        settings_plugin.app.after.assert_not_called()
