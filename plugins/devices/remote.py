@@ -187,12 +187,33 @@ class RemoteStore:
         Inventory tab (plugins.devices.tables.shape_inventory_agent)."""
         from plugins.devices import tables
 
+        # What the posture cards already know about each agent (hostname, OS):
+        # today's inventory endpoint lists agents as {id, name, status, ip}
+        # only, so a device that arrives without a name or OS takes them from
+        # here rather than showing "(unknown)" and "—".
+        known = {
+            str(d.get("agent_id")): d
+            for d in fallback_devices or []
+            if isinstance(d, dict) and d.get("agent_id")
+        }
+
+        def fill_from_posture(d: dict) -> dict:
+            p = known.get(str(d.get("agent_id") or ""))
+            if not p:
+                return d
+            if not d.get("agent_name") and p.get("agent_name"):
+                d = {**d, "agent_name": p["agent_name"]}
+            if not isinstance(d.get("os"), dict) and p.get("os"):
+                d = {**d, "os": {"name": p["os"], "version": ""}}
+            return d
+
         def work():
             devices, err = api.fetch_inventory_full()
             if err:
                 self._finish("inventory", None, err)
                 self._finish("agents", None, err)
                 return
+            devices = [fill_from_posture(d) for d in devices]
             self._finish("inventory", devices, None)
             ided = [(str(d.get("agent_id")), d) for d in devices if d.get("agent_id")]
             details = {}
@@ -206,7 +227,13 @@ class RemoteStore:
                     }
                     for fut in as_completed(futs):
                         detail, derr = fut.result()
-                        if derr:
+                        if derr == api.NOT_AVAILABLE:
+                            # Per-device detail is not deployed yet: expected,
+                            # once per agent per refresh, so not a warning.
+                            logger.debug(
+                                f"[DEVICES] inventory detail for agent {futs[fut]} not available"
+                            )
+                        elif derr:
                             logger.warning(
                                 f"[DEVICES] inventory for agent {futs[fut]}: {derr}"
                             )
