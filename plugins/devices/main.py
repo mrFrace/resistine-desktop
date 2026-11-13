@@ -276,10 +276,16 @@ class Plugin(BasePlugin):
         return [str(aid)] if aid else []
 
     def _rows(self, st: dict) -> list:
+        # The inventory list (once fetched) names an agent the posture service
+        # only knows as "Unknown"; the store's change notification rebuilds
+        # the page when it lands.
+        inv = self._store.slot("inventory")
+        names = data.inventory_names(inv.data if inv.ready and not inv.error else None)
         return data.fleet_rows(
             st.get("cards") or [],
             posture.local_names(include_agent=False),
             self._local_agent_ids(),
+            names_by_agent=names,
         )
 
     # A posture card older than one missed daily run is stale: unknown.

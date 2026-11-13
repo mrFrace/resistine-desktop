@@ -198,12 +198,15 @@ class RemoteStore:
         }
 
         def fill_from_posture(d: dict) -> dict:
+            from plugins.devices.data import is_placeholder
+
             p = known.get(str(d.get("agent_id") or ""))
             if not p:
                 return d
-            if not d.get("agent_name") and p.get("agent_name"):
+            # A posture "Unknown" is no name/OS at all: never copy it over.
+            if not d.get("agent_name") and not is_placeholder(p.get("agent_name")):
                 d = {**d, "agent_name": p["agent_name"]}
-            if not isinstance(d.get("os"), dict) and p.get("os"):
+            if not isinstance(d.get("os"), dict) and not is_placeholder(p.get("os")):
                 d = {**d, "os": {"name": p["os"], "version": ""}}
             return d
 

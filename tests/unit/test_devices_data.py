@@ -56,6 +56,24 @@ class TestFleetRows:
         assert [r["hostname"] for r in rows] == ["mine", "c", "b"]
         assert rows[0]["this_machine"] and not rows[1]["this_machine"]
 
+    def test_unknown_hostname_named_from_inventory(self):
+        # The posture service reports an agent it has no scan for as hostname
+        # "Unknown" / os "Unknown"; the inventory list knows its real name.
+        cards = [_card("Unknown", agent_id="036", os="Unknown"), _card("francispc", agent_id="4")]
+        names = data.inventory_names([
+            {"agent_id": "036", "agent_name": "BRN-PAPEZF01-4.local-17D10D213A23"},
+            {"agent_id": "004", "agent_name": "ignored", "os": {"name": "Ubuntu"}},
+        ])
+        rows = {r["agent_id"]: r for r in data.fleet_rows(cards, set(), names_by_agent=names)}
+        assert rows["036"]["hostname"] == "BRN-PAPEZF01-4.local-17D10D213A23"
+        assert rows["036"]["os"] == "Unknown"  # inventory had no OS either: the card's word stays
+        assert rows["4"]["hostname"] == "francispc"  # a real name is never replaced
+        # without the inventory the card's placeholder still becomes the name,
+        # never a crash (the picker shows it until the inventory lands)
+        assert data.fleet_rows(cards, set())[0]["hostname"] in ("Unknown", "francispc")
+        assert data.is_placeholder("Unknown") and data.is_placeholder("") and not data.is_placeholder("host")
+        assert data.canonical_agent_id("004") == "4" == data.canonical_agent_id(4)
+
     def test_counts_coerced_and_text_cut(self):
         card = _card(
             host="x" * 500,
