@@ -77,3 +77,25 @@ def test_missing_or_loading_tiles_are_not_unknown():
 def test_bad_input_does_not_raise():
     assert weekly.sentence(None, None, 0, None, NOW) == "No alerts this week. Nothing needs you."
     assert weekly.sentence(["junk", {"ts": "x"}], 0, 0, OK_TILES, NOW).startswith("No alerts")
+
+
+class TestWeeklyPost:
+    def test_due_a_week_after_the_last_post(self):
+        assert weekly.post_due(None, NOW) is False          # clock not set yet
+        assert weekly.post_due("x", NOW) is False
+        assert weekly.post_due(NOW - 6 * 86400, NOW) is False
+        assert weekly.post_due(NOW - 7 * 86400, NOW) is True
+
+    def test_first_post_clock_set_once(self, isolated_settings):
+        from utils import settings
+        weekly.first_post_clock(NOW)
+        weekly.first_post_clock(NOW + 100)
+        assert settings.get("dashboard", "weekly_posted_at") == NOW
+        weekly.mark_posted(NOW + 5)
+        assert settings.get("dashboard", "weekly_posted_at") == NOW + 5
+
+    def test_post_text_names_this_machine_only(self):
+        text = weekly.post_text("No alerts this week. Nothing needs you.", "francispc")
+        assert text == "Phoenix · francispc\nNo alerts this week. Nothing needs you."
+        assert weekly.post_text("x", "evil\x1bhost" + "a" * 100).startswith("Phoenix · evilhost")
+        assert len(weekly.post_text("x", "a" * 100).splitlines()[0]) <= len("Phoenix · ") + 63

@@ -11,19 +11,28 @@ and never says more than the tiles can back up:
   tile is unknown. An unknown tile is named instead ("Endpoint not
   checked.") and the verdict is withheld: not knowing is not calm.
 
+Once a week the same sentence is posted into the user's SIEM alerts room
+over Matrix (post_due / post_text), so it reaches the phone's Element and
+machines that are off. Only counts and tile names leave this machine:
+no alert text, no host names other than this one's.
+
 No Qt in here.
 """
 
 from __future__ import annotations
 
+import socket
 import time
 from datetime import datetime, timedelta
 from typing import Optional
 
 from plugins.dashboard import alerts as recent_alerts
+from utils import settings
 from utils.i18n import get_text
 
 DAYS = 7
+POST_EVERY_S = 7 * 86400
+_NS, _POSTED_KEY = "dashboard", "weekly_posted_at"
 # Tiles the sentence watches, in the order they are named.
 TILES = ("endpoint", "antivirus", "posture")
 
@@ -86,3 +95,32 @@ def sentence(alerts: list, unread: int, todo_open: int, tiles: dict,
     if not (needs or tile_needs or unknown):
         parts.append(_t("nothing"))
     return " ".join(parts)
+
+
+# --------------------------------------------------------------------------
+# The weekly post
+# --------------------------------------------------------------------------
+
+def post_due(posted_at, now: Optional[float] = None) -> bool:
+    """A week since the last post. A fresh install posts after its first
+    week, not on its first start (first_post_clock sets the clock)."""
+    if not isinstance(posted_at, (int, float)):
+        return False
+    return (now or time.time()) - float(posted_at) >= POST_EVERY_S
+
+
+def first_post_clock(now: Optional[float] = None) -> None:
+    if not isinstance(settings.get(_NS, _POSTED_KEY), (int, float)):
+        settings.set(_NS, _POSTED_KEY, float(now or time.time()))
+
+
+def mark_posted(now: Optional[float] = None) -> None:
+    settings.set(_NS, _POSTED_KEY, float(now or time.time()))
+
+
+def post_text(text: str, hostname: Optional[str] = None) -> str:
+    """"Phoenix · francispc\nNo alerts this week. Nothing needs you.":
+    each machine posts its own, so the line says which."""
+    host = hostname if hostname is not None else socket.gethostname()
+    host = "".join(c for c in str(host) if c.isprintable()).strip()[:63]
+    return get_text("dashboard.week_post_title", host=host) + "\n" + text

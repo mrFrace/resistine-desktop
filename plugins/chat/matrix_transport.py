@@ -598,18 +598,28 @@ class MatrixService:
         self.room_id = room_id
 
     async def send_prompt(self, text: str, session: Optional[str]) -> str:
-        from nio import RoomSendResponse
-
-        client = self._client
-        room = client.rooms.get(self.room_id)
-        if room is not None and not room.members_synced:
-            await client.joined_members(self.room_id)
-        if client.should_query_keys:
-            await client.keys_query()
         content = {"msgtype": "m.text", "body": text}
         if session:
             content[REQUEST_KEY] = {"session": session}
-        resp = await client.room_send(self.room_id, "m.room.message", content, ignore_unverified_devices=True)
+        return await self._send(self.room_id, content)
+
+    async def send_text(self, room_id: str, text: str) -> str:
+        """Post plain text into one of this session's rooms (the assistant
+        DM or an alerts room); returns the event id."""
+        if room_id != self.room_id and room_id not in self._alert_rooms:
+            raise MatrixTransportError("Not one of this session's rooms.")
+        return await self._send(room_id, {"msgtype": "m.text", "body": text})
+
+    async def _send(self, room_id: str, content: dict) -> str:
+        from nio import RoomSendResponse
+
+        client = self._client
+        room = client.rooms.get(room_id)
+        if room is not None and not room.members_synced:
+            await client.joined_members(room_id)
+        if client.should_query_keys:
+            await client.keys_query()
+        resp = await client.room_send(room_id, "m.room.message", content, ignore_unverified_devices=True)
         if not isinstance(resp, RoomSendResponse):
             raise MatrixTransportError(f"Could not send the message ({resp}).")
         return resp.event_id
@@ -816,6 +826,32 @@ def start_background(bot: str = DEFAULT_BOT) -> None:
             logger.warning(f"[CHAT-MATRIX] background start failed: {e}")
 
     threading.Thread(target=_go, name="matrix-start", daemon=True).start()
+
+
+def post_to_alerts_room(text: str, timeout: float = _SEND_TIMEOUT) -> bool:
+    """Post *text* into the user's SIEM alerts room over the running Matrix
+    session (the Dashboard's weekly sentence). Nothing is started for it:
+    False when no session is up or no alerts room is known. With several
+    alerts rooms (one per machine) the one that spoke last gets it.
+
+    Only the app's own words go this way: the bot ignores text in its DMs
+    (it reads reactions), and the listener never stores what this account
+    sent (it keeps the bot's messages only)."""
+    s = _service
+    if s is None or not s.is_running() or not s._ready.is_set() or s._error:
+        return False
+    rooms = [r for r in siem_alerts.alert_rooms() if r in s._alert_rooms]
+    if not rooms:
+        return False
+    newest = max(siem_alerts.store().all(), key=lambda a: a.get("ts") or 0, default=None)
+    room_id = newest["room_id"] if newest and newest.get("room_id") in rooms else rooms[0]
+    try:
+        s.run_coro(s.send_text(room_id, text), timeout)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[CHAT-MATRIX] weekly post not sent: {type(e).__name__}")
+        return False
+    logger.info("[CHAT-MATRIX] weekly summary posted to the alerts room")
+    return True
 
 
 def shutdown_service() -> None:

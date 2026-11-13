@@ -294,6 +294,7 @@
   "dashboard.week_tile_attention": "{tile} needs attention.",
   "dashboard.week_tile_unknown": "{tile} not checked.",
   "dashboard.week_nothing": "Nothing needs you.",
+  "dashboard.week_post_title": "Phoenix · {host}",
   "page.as_of": "As of {when}",
   "page.as_of_never": "Not fetched yet",
   "page.next_check": "next check {time}",

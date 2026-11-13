@@ -398,6 +398,37 @@ class TestScreen:
         assert dashboard_plugin._lead.text().startswith("1 alert this week, not all read yet.")
         del screen
 
+    def test_weekly_post_once_a_week_from_a_complete_picture(self, built, dashboard_plugin,
+                                                             monkeypatch, isolated_settings):
+        from plugins.chat import matrix_transport, siem_alerts
+        from plugins.dashboard import weekly
+        from utils import settings
+        store = MagicMock(unread=0)
+        store.all.return_value = []
+        monkeypatch.setattr(siem_alerts, "store", lambda: store)
+        posted = []
+        monkeypatch.setattr(matrix_transport, "post_to_alerts_room", lambda t: posted.append(t) or True)
+        monkeypatch.setattr(dash.threading, "Thread",
+                            lambda target, **kw: MagicMock(start=target))
+        settings.set("auth", "logged_in", True)
+        screen = built(True)
+        tiles = {k: {"badge": ("ok", "x"), "rows": {}} for k in weekly.TILES}
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply(dict(tiles, endpoint=None))
+        assert posted == [] and settings.get("dashboard", "weekly_posted_at") is None
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply(tiles)  # complete: the clock starts, nothing posted yet
+        assert posted == [] and settings.get("dashboard", "weekly_posted_at") > 0
+        settings.set("dashboard", "weekly_posted_at", time.time() - 8 * 86400)
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply(tiles)
+        assert posted == [weekly.post_text("No alerts this week. Nothing needs you.")]
+        assert time.time() - settings.get("dashboard", "weekly_posted_at") < 60
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply(tiles)
+        assert len(posted) == 1  # not again this week
+        del screen
+
     def test_no_protection_banner(self, built):
         from PyQt6.QtWidgets import QLabel
         screen = built(True)
