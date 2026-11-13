@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 import platform
 import threading
+import time
 
 from PyQt6.QtWidgets import QProgressBar, QWidget
 
@@ -615,6 +616,45 @@ class Plugin(BasePlugin):
         _safe(restore_client_key_if_needed)
 
     # ── Installation (background thread) ───────────────────────────────
+
+    # ---- fixes ("Fix all") ------------------------------------------------
+    def fixes(self) -> list:
+        from utils.fixes import Fix, this_host
+        if not _platform_supported or self._destroyed or self._installing or self._reconnecting:
+            return []
+        out = []
+        host = this_host()
+        if self._cached_state == "Stopped" and _safe(is_agent_installed, False):
+            out.append(Fix("agent_start", self.get_name(), "Start the Endpoint agent",
+                           "The agent is installed but not running", host=host, needs_admin=True))
+        elif self._cached_state == "Running" and self._cached_conn == "disconnected":
+            out.append(Fix("agent_reconnect", self.get_name(), "Reconnect the Endpoint agent",
+                           "The agent runs but the SIEM manager does not know it",
+                           host=host, needs_admin=True))
+        return out
+
+    def run_fix(self, fix_id: str) -> tuple:
+        """Blocking, on a worker: the same functions the buttons call."""
+        if fix_id == "agent_start":
+            ok = bool(start_agent())
+            self.app.after(0, self._refresh_screen)
+            return ok, "agent started" if ok else "the agent did not start"
+        if fix_id == "agent_reconnect":
+            if self._reconnecting:
+                return False, "a reconnect is already running"
+            self._reconnecting = True
+            try:
+                ok, msg = reenroll_agent()
+                if ok:
+                    for _ in range(10):
+                        if _safe(get_agent_status) == "Running":
+                            break
+                        time.sleep(0.5)
+            finally:
+                self._reconnecting = False
+                self.app.after(0, self._refresh_screen)
+            return bool(ok), "re-enrolled" if ok else str(msg)
+        return False, "not offered"
 
     def _install_undo(self) -> dict:
         return {"label": "Remove agent", "plugin": self.get_name(), "action": "remove_agent", "arg": ""}

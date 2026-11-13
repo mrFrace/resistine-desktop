@@ -953,6 +953,23 @@ class Plugin(BasePlugin):
         )
         return max(60, (target - now) + jitter)
 
+    # ---- fixes ("Fix all") ------------------------------------------------
+    def fixes(self) -> list:
+        from utils.fixes import Fix, this_host
+        if self._last_state in (None, "not_installed") or not self._sig_update_stale():
+            return []
+        return [Fix("av_signatures", self.get_name(), "Update the antivirus signatures",
+                    "No signature update in the last day", host=this_host())]
+
+    def run_fix(self, fix_id: str) -> tuple:
+        if fix_id != "av_signatures":
+            return False, "not offered"
+        ok, msg = clamav.run_freshclam()
+        if ok:
+            settings.set("antivirus", "last_sig_update_ts", time.time())
+        self.app.after(0, self._refresh_db_info)
+        return bool(ok), str(msg)
+
     def _sig_update_stale(self) -> bool:
         """True if signatures haven't updated in ~a day (or never recorded)."""
         last = settings.get("antivirus", "last_sig_update_ts", 0) or 0

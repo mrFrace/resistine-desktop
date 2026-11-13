@@ -132,6 +132,20 @@ class BasePlugin:
         """A ``Status``, a legacy string ("OK", "Warning", ...) or None (off)."""
         return self.status
 
+    # ---- Fixes ("Fix all", utils/fixes.py) ----------------------------------
+    def fixes(self) -> list:
+        """What this plugin could put right on this machine now, as
+        utils.fixes.Fix items (cheap: read cached state only; called on
+        the Dashboard's worker). Default: nothing."""
+        return []
+
+    def run_fix(self, fix_id: str) -> tuple:
+        """Run one of this plugin's fixes, blocking, on a worker thread:
+        (ok, summary). A plugin keeps a closed set of ids and runs each
+        through the same function and elevation as its own button does.
+        Unknown id: (False, "not offered")."""
+        return False, "not offered"
+
     def undo(self, action: str, arg: str = "") -> bool:
         """Reverse one of this plugin's jobs (utils/jobs.py declares the
         action when the job starts). A plugin that offers undo keeps a
