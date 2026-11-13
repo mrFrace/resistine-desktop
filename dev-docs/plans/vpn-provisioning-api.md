@@ -1,9 +1,11 @@
 # Phoenix VPN provisioning API: contract
 
-Status: desktop side implemented (`plugins/vpn/provisioning.py`), server side
-to build on **briareosai** as `api.phoenix.exposed`. A local stand-in for
-testing is `scripts/dev/mock_provisioning_api.py`
-(`PHOENIX_API_URL=http://127.0.0.1:8099`).
+Status (2026-11-13): both sides live. Desktop in `plugins/vpn/provisioning.py`;
+server on **briareosai** as `api.phoenix.exposed`
+(`~/flakes/packages/phoenix-provisioning`, module
+`modules/services/phoenix-provisioning.nix`), including `/v1/devices`, the
+MAS admin client and the revocation sync. A local stand-in for testing is
+`scripts/dev/mock_provisioning_api.py` (`PHOENIX_API_URL=http://127.0.0.1:8099`).
 
 Background and the device model: `phoenix-auth-rebrand.md`.
 
@@ -190,4 +192,7 @@ token refresh in flight is not mistaken for a sign-out). Must be idempotent.
 
 - Request signing with the device's Matrix ed25519 key (checked through
   Synapse `/keys/query`), once the desktop Matrix client publishes it.
-- Agents of devices signed out elsewhere (revocation sync) are not deleted yet.
+- ~~Agents of devices signed out elsewhere (revocation sync) are not deleted yet.~~
+  Done: the revocation sync runs on briareosai (every `PROV_SYNC_INTERVAL`,
+  grace `PROV_SYNC_GRACE`; a run due to release more than
+  `PROV_SYNC_MAX_RELEASE` releases none and names them in the log).

@@ -1,17 +1,17 @@
 # Signed-in devices: list, verify, remove
 
-Status (2026-11-12): desktop side done
+Status (2026-11-13): done on both sides. Desktop
 (`plugins/login/cross_signing.py`, `plugins/login/device_name.py`,
 `plugins/devices/sessions_api.py`, `plugins/devices/sessions_tab.py`,
-tests, contract and decision docs). Synapse accepts the display name under
+tests, contract and decision docs); Synapse accepts the display name under
 MAS (checked live). The stale-install prompt is a toast after sign-in
 pointing at a "Remove the old installation" row in the tab (toasts take
 no clicks, and there are no dialogs). The server side
-(`~/flakes/packages/phoenix-provisioning/PLAN-device-sessions.md`) is
-implemented but not deployed: until it is, the tab says the server does not
-list devices yet (404), or shows its 503 while the MAS admin client is not
-configured. Desktop side only below; the server is summarised under
-"Server contract".
+(`~/flakes/packages/phoenix-provisioning`, 33723a8) has been live on
+briareosai since 2026-11-12 with the MAS admin client configured:
+`GET /v1/devices` answers 200 and the revocation sync runs every 5 min with
+a 24 h grace (verified 2026-11-13). Desktop side only below; the server is
+summarised under "Server contract".
 
 ## Why
 
@@ -281,9 +281,12 @@ Run with `source .venv/bin/activate && ./run_tests.sh unit`.
 
 ## Order of work
 
-1. Server endpoints + MAS admin client + reconcile job (backend repo).
+All done (2026-11-13).
+
+1. Server endpoints + MAS admin client + reconcile job (backend repo) — live
+   since 2026-11-12.
 2. Desktop: `cross_signing.py` + tests (no server dependency, works against
-   the live homeserver today).
+   the live homeserver today) — MR !69.
 3. Desktop: `sessions_api.py`, Sessions tab, removal, stale-install prompt,
-   display name.
-4. Contract and decision docs.
+   display name — MR !69, !70.
+4. Contract and decision docs — MR !70.
