@@ -864,6 +864,12 @@ class InventoryTab:
             lambda i: self._set_view(self.view_combo.itemData(i))
         )
         title.addWidget(self.view_combo)
+        # TODO(inventory-detail): hidden because only "Devices" has data. The
+        # Processes / Ports / Network / Packages views read the per-device
+        # detail (/v1/me/inventory/{id}), which the backend does not serve
+        # yet (dev-docs/project_notes/issues.md, Desktop queue). Unhide once
+        # it lands.
+        self.view_combo.hide()
         self.group_combo = QComboBox()
         self.group_combo.currentTextChanged.connect(self._set_group)
         title.addWidget(self.group_combo)
