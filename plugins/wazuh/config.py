@@ -84,4 +84,4 @@ WINDOWS_SYSMON_ZIP_URL = "https://download.sysinternals.com/files/Sysmon.zip"
 # from a moving branch at install time, and a bundle whose copy differs from
 # the pin is refused.
 WINDOWS_SYSMON_CONFIG_RESOURCE = ("resources", "sysmon", "sysmonconfig-export.xml")
-WINDOWS_SYSMON_CONFIG_SHA256 = "055febc600e6d7448cdf3812307275912927a62b1f94d0d933b64b294bc87162"
+WINDOWS_SYSMON_CONFIG_SHA256 = "af4c914dac315fd36288a8ce3c346490d8f737aaaa87e83ea96dff893ac6e053"
