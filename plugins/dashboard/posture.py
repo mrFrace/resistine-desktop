@@ -88,7 +88,8 @@ def fetch(force: bool = False) -> dict:
 def state() -> dict:
     c = _cache()
     return {"status": _last["status"], "error": _last["error"],
-            "cards": c.get("cards") or [], "fetched_at": c.get("fetched_at")}
+            "cards": c.get("cards") or [], "fetched_at": c.get("fetched_at"),
+            "next_at": _last["tried_at"] + MIN_INTERVAL_S if _last["tried_at"] else None}
 
 
 def local_names(include_agent: bool = True) -> set:
@@ -146,6 +147,18 @@ def split_cards(cards: list, names: Iterable[str]) -> tuple:
     names = {n.lower() for n in names}
     mine = next((c for c in cards if str(c.get("hostname", "")).lower() in names), None)
     return mine, [c for c in cards if c is not mine]
+
+
+def _other_line(card: dict, now: datetime) -> str:
+    """"host: A · 99", or "host: A · 99 · 6 days ago" when its card is
+    older than a missed daily run (a laptop that stayed closed)."""
+    line = f"{card.get('hostname') or card.get('agent_id')}: {card.get('grade') or '?'} · {card.get('score', '—')}"
+    when = _computed(card)
+    if when is None:
+        return line + " · age unknown"
+    if (now.replace(tzinfo=None) - when.replace(tzinfo=None)).total_seconds() > STALE_AFTER_S:
+        line += " · " + _age_text(when, now).lower()
+    return line
 
 
 def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
@@ -212,12 +225,10 @@ def panel_data(st: dict, names: Iterable[str], now: Optional[datetime] = None,
         elif recs:
             rows["To do"] = "\n".join(recs)
     if others:
-        rows["Other machines"] = "\n".join(
-            f"{c.get('hostname') or c.get('agent_id')}: {c.get('grade') or '?'} · {c.get('score', '—')}"
-            for c in others)
+        rows["Other machines"] = "\n".join(_other_line(c, now) for c in others)
     if status == "error" and st.get("error"):
         rows["Note"] = f"Showing the last known posture. {st['error']}"
-    out = {"badge": badge, "rows": rows}
+    out = {"badge": badge, "rows": rows, "as_of": (st.get("fetched_at"), st.get("next_at"))}
     if mine is not None and score_trend:
         out["spark"] = list(score_trend["points"])
     return out

@@ -75,19 +75,24 @@ def plugin(qapp):
 class TestCheckStatus:
     def test_protected_returns_ok(self, plugin):
         plugin._last_state = "protected"
-        assert plugin.check_status() == "OK"
+        assert plugin.check_status().label == "OK"
 
     def test_error_returns_error(self, plugin):
         plugin._last_state = "error"
-        assert plugin.check_status() == "Error"
+        assert plugin.check_status().label == "Error"
 
     @pytest.mark.parametrize("state", [
-        "not_installed", "no_database", "approval_required",
-        "fda_required", None,
+        "not_installed", "no_database", "approval_required", "fda_required",
     ])
     def test_other_states_return_warning(self, plugin, state):
         plugin._last_state = state
-        assert plugin.check_status() == "Warning"
+        assert plugin.check_status().label == "Warning"
+
+    def test_unpolled_state_is_unknown_not_warning(self, plugin):
+        plugin._last_state = None
+        st = plugin.check_status()
+        assert st.kind == "unknown" and st.reason == "Not checked yet"
+        assert plugin.get_status() == "Unknown"
 
 
 # ---------------------------------------------------------------------------

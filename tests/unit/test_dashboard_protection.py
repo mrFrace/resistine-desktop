@@ -36,7 +36,7 @@ class TestAntivirus:
         assert pr.antivirus_panel(PROTECTED, FRESH_DB, {"ts": NOW, "error": True}, None, NOW)["rows"]["Last scan"] \
             .startswith("Failed")
         assert pr.antivirus_panel({"state": "error"}, {}, None, None, NOW)["badge"] == ("error", "Stopped")
-        assert pr.antivirus_panel({"state": "weird"}, {}, None, None, NOW)["badge"] == ("warning", "Checking")
+        assert pr.antivirus_panel({"state": "weird"}, {}, None, None, NOW)["badge"] == ("unknown", "Checking")
         assert pr.antivirus_panel(None, None, None, None, NOW)["badge"] == ("info", "Not installed")
         d = pr.antivirus_panel({"state": "protected", "clamonacc_running": False}, {"last_updated": "—"}, None, 1, NOW)
         assert d["rows"]["Real-time"].startswith("Off") and d["rows"]["Signatures"] == "Never updated"

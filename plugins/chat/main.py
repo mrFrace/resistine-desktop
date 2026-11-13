@@ -689,10 +689,14 @@ class Plugin(BasePlugin):
     #  Status / client
     # ===================================================================
     def check_status(self):
+        from plugins.base_plugin import OK, WARNING, Status
+        from utils.i18n import get_text
         if not self.client:
-            return "Warning"
+            return Status(WARNING, get_text("chat.status_not_set_up"))
         # Access gate: chat is only usable while the endpoint agent runs.
-        return "OK" if self._chat_access_status() else "Warning"
+        if self._chat_access_status():
+            return Status(OK, get_text("chat.status_ready"))
+        return Status(WARNING, get_text("chat.status_agent_off"))
 
     @staticmethod
     def _chat_access_status() -> bool:

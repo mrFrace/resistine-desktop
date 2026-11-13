@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon
@@ -275,13 +276,32 @@ class Plugin(BasePlugin):
             self._local_agent_ids(),
         )
 
+    # A posture card older than one missed daily run is stale: unknown.
+    status_fresh_for = posture.STALE_AFTER_S
+
     def check_status(self):
-        rows = self._rows(posture.state())
+        """This machine's posture grade; without a card the status is
+        unknown (or off while signed out), with the reason."""
+        from datetime import timezone
+
+        from plugins.base_plugin import ERROR, OFF, OK, UNKNOWN, WARNING, Status
+
+        st = posture.state()
+        rows = self._rows(st)
         mine = data.this_machine_row(rows)
         if mine is None:
-            return None
-        kind = data.grade_kind(mine["grade"])
-        return {"ok": "OK", "warning": "Warning"}.get(kind, "Error")
+            fetched = st.get("status")
+            if fetched == "signed_out":
+                return Status(OFF, _t("status_signed_out"))
+            if fetched is None:
+                return Status(UNKNOWN, _t("status_checking"))
+            if fetched == "error":
+                return Status(UNKNOWN, _t("status_unreachable"))
+            return Status(UNKNOWN, _t("status_no_posture"))
+        kind = {"ok": OK, "warning": WARNING}.get(data.grade_kind(mine["grade"]), ERROR)
+        when = mine.get("computed_at")
+        at = when.replace(tzinfo=timezone.utc).timestamp() if when else None
+        return Status(kind, _t("status_grade", grade=mine["grade"]) if kind != OK else "", at=at)
 
     def on_theme_changed(self):
         if getattr(self, "app", None):
@@ -361,6 +381,7 @@ class Plugin(BasePlugin):
 
         try:
             self.app.after(_REFRESH_MS, tick)
+            self._next_fetch_at = time.time() + _REFRESH_MS / 1000
         except Exception:  # noqa: BLE001
             self._poll_armed = False
 
@@ -431,7 +452,7 @@ class Plugin(BasePlugin):
             logger.error(f"[DEVICES] rebuild failed: {e}")
             return
         try:
-            new_status = self.check_status()
+            new_status = self.get_status()
             if new_status != self.status:
                 self.status = new_status
                 self.app._refresh_nav_status()  # repaint the sidebar glow
@@ -585,6 +606,8 @@ class Plugin(BasePlugin):
         )
         self._header.set_status(*summary["pill"])
         self._header.set_subtitle(summary["subtitle"])
+        self._header.set_as_of(st.get("fetched_at"), getattr(self, "_next_fetch_at", None),
+                               shown=bool(rows))
         self._note.setText(summary["note"])
         self._note.setVisible(bool(summary["note"]))
         lay = self._combo_holder.layout()

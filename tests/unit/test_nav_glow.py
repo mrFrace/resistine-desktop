@@ -40,6 +40,10 @@ class TestNavGlow:
         assert aw.STATUS_GLOW["OK"] == "#2CC985"
         assert aw.STATUS_GLOW["Warning"] == aw.STATUS_GLOW["Error"] == "#FF4040"
         assert "Info" not in aw.STATUS_GLOW and None not in aw.STATUS_GLOW
+        # Unknown is its own colour: neither the green nor the red.
+        amber = aw.STATUS_GLOW["Unknown"]
+        assert amber not in (aw.STATUS_GLOW["OK"], aw.STATUS_GLOW["Error"])
+        assert aw.AppWindow._GLOW["unknown"] == amber
 
     def test_glow_adds_halo_in_colour(self, qapp):
         px = _halo_alpha(aw.glow_icon(_square_icon(), "#2CC985"))
@@ -53,3 +57,71 @@ class TestNavGlow:
         full = aw.NAV_ICON + 2 * aw.NAV_GLOW_PAD
         sizes = aw.glow_icon(_square_icon(), None).availableSizes()
         assert sizes and sizes[0].width() == full * 2
+
+
+@pytest.mark.unit
+class TestNavCaption:
+    """The rail's name label gets a second line: the status reason."""
+
+    def _rail(self, qapp):
+        from PyQt6.QtWidgets import QPushButton, QWidget
+
+        host = QWidget()
+        host.resize(300, 400)
+        rail = aw.NavRail(host)
+        btn = QPushButton(rail)
+        btn.setFixedHeight(48)
+        rail.add_label(btn, "VPN")
+        self._host = host  # keep the parent alive for the test's duration
+        return rail, btn
+
+    def test_caption_shown_under_the_name_and_hidden_when_empty(self, qapp):
+        rail, btn = self._rail(qapp)
+        name, caption = rail._labels[btn]
+        assert caption.isHidden() and name.y() > 0
+        rail.set_caption(btn, "Not connected")
+        assert caption.text() == "Not connected" and not caption.isHidden()
+        assert caption.y() == name.y() + name.height()
+        assert caption.textFormat() == Qt.TextFormat.PlainText
+        rail.set_caption(btn, "")
+        assert caption.isHidden() and name.y() == (btn.height() - name.height()) // 2
+
+    def test_caption_on_unknown_button_is_ignored(self, qapp):
+        from PyQt6.QtWidgets import QPushButton
+
+        rail, _ = self._rail(qapp)
+        rail.set_caption(QPushButton(), "x")  # no label registered: no error
+
+
+@pytest.mark.unit
+class TestApplyNavStatus:
+    """_apply_nav_status repaints only on a changed label and always sets
+    the caption from the reason."""
+
+    def test_icon_only_when_label_changes_caption_always(self, qapp, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from plugins.base_plugin import Status
+
+        win = aw.AppWindow.__new__(aw.AppWindow)
+        win._nav_status = {}
+        btn = MagicMock()
+        win._nav_buttons = {"VPN": btn}
+        plugin = MagicMock()
+        win._plugin_by_name = lambda n: plugin
+        win._nav_icon = lambda p: "icon"
+        win.sidebar = MagicMock()
+        win._nav_status_busy = True
+
+        win._apply_nav_status({"VPN": Status("ok", "Connected")})
+        assert btn.setIcon.call_count == 1
+        win.sidebar.set_caption.assert_called_with(btn, "Connected")
+        # Same kind, new reason: caption changes, icon does not.
+        win._apply_nav_status({"VPN": Status("ok", "Connected · 10.42.20.14")})
+        assert btn.setIcon.call_count == 1
+        win.sidebar.set_caption.assert_called_with(btn, "Connected · 10.42.20.14")
+        # Unknown: amber icon, reason as caption.
+        win._apply_nav_status({"VPN": Status("unknown", "Last checked 3 h ago")})
+        assert btn.setIcon.call_count == 2
+        assert win._nav_status["VPN"].label == "Unknown"
+        assert win._nav_status_busy is False

@@ -98,6 +98,14 @@ class TestEndpointInfo:
             "Manager": "mgr.example",
         }
 
+    def test_unreadable_status_is_unknown_not_stopped(self, wz, monkeypatch):
+        def boom():
+            raise RuntimeError("no socket")
+        monkeypatch.setattr(wz, "get_agent_status", boom)
+        info = dash._endpoint_info()
+        assert info["badge"] == ("unknown", "Not checked")
+        assert info["rows"]["Service"] == "—"
+
     @pytest.mark.parametrize("conn,badge", [
         ("disconnected", ("error", "Not connected")),
         ("pending", ("warning", "Connecting")),
