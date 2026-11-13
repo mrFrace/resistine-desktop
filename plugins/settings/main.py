@@ -274,20 +274,28 @@ class Plugin(BasePlugin):
             "Alert notifications",
             "Show a desktop notification for new high and critical SIEM alerts",
             self.alert_notifications_switch))
+        from plugins.dashboard import digest
+        self.alert_digest_switch = ToggleSwitch()
+        self.alert_digest_switch.setChecked(digest.enabled())
+        self.alert_digest_switch.toggled.connect(self._set_alert_digest)
+        lay.addWidget(SettingRow(
+            "Daily alert digest",
+            "Fold each day's alerts into one row on the Alerts screen and the Dashboard. "
+            "High and critical alerts are always shown on their own.",
+            self.alert_digest_switch))
         return box
 
-    def _notifications_card(self) -> QWidget:
-        box, lay = self._section("Notifications")
-        self.alert_notifications_switch = ToggleSwitch()
-        self.alert_notifications_switch.setChecked(
-            bool(settings.get("dashboard", "alert_notifications", True)))
-        self.alert_notifications_switch.toggled.connect(
-            lambda on: settings.set("dashboard", "alert_notifications", bool(on)))
-        lay.addWidget(SettingRow(
-            "Alert notifications",
-            "Show a desktop notification for new high and critical SIEM alerts",
-            self.alert_notifications_switch))
-        return box
+    def _set_alert_digest(self, on: bool) -> None:
+        from plugins.dashboard import digest
+        digest.set_enabled(bool(on))
+        for name, hook in (("Alerts", "repaint"), ("Dashboard", "repaint_alerts")):
+            plugin = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == name), None)
+            repaint = getattr(plugin, hook, None)
+            if repaint is not None:
+                try:
+                    repaint()
+                except Exception:  # noqa: BLE001
+                    pass
 
     # ---- Software Updates -------------------------------------------------
     def _updates_card(self) -> QWidget:

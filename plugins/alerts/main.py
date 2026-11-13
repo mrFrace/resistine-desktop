@@ -36,6 +36,7 @@ from gui.page_kit import MenuRow, Page, PageHeader, RowList, SlideStack, back_li
 from gui.qt_widgets import set_pill
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
+from plugins.dashboard import digest
 from utils.logger import logger
 
 _DIR = os.path.dirname(os.path.realpath(__file__))
@@ -125,6 +126,7 @@ class Plugin(BasePlugin):
         self._views: SlideStack | None = None
         self._list = None          # (RowList, PageHeader) of the list page
         self._detail = None        # the open alert's page widget
+        self._day = None           # a digest day's page widget, under the alert's
         self._subscribed = False
         self._subscribe()  # notify even before the screen is opened
 
@@ -152,6 +154,7 @@ class Plugin(BasePlugin):
         self._views.addWidget(page.widget)
         self._list = (rows, header)
         self._detail = None
+        self._day = None
         self._fill()
         return self._views
 
@@ -159,6 +162,13 @@ class Plugin(BasePlugin):
         # The sidebar's Alerts button opens the list, not an alert left open
         # (show() opens one after this when a notification asked for it).
         self._close_detail(animate=False)
+        self._close_day(animate=False)
+        self._fill()
+
+    def repaint(self) -> None:
+        """Rebuild the list (Settings calls it when the digest is switched)."""
+        self._close_detail(animate=False)
+        self._close_day(animate=False)
         self._fill()
 
     def _visible(self) -> bool:
@@ -179,10 +189,21 @@ class Plugin(BasePlugin):
             return
         st = _store()
         alerts = recent_alerts.newest_first(st.all())
-        header.set_subtitle(f"{len(alerts)} alert{'s' if len(alerts) != 1 else ''}, newest first"
-                            if alerts else "No alerts yet. Alerts about machines you own appear here.")
-        for a in alerts:
-            rows.add_row(self._row(a))
+        folded = digest.enabled()
+        subtitle = (f"{len(alerts)} alert{'s' if len(alerts) != 1 else ''}, newest first"
+                    if alerts else "No alerts yet. Alerts about machines you own appear here.")
+        if folded and alerts:
+            subtitle += " · " + digest._t("subtitle")
+        header.set_subtitle(subtitle)
+        if folded:
+            # The digest folds a day's quieter alerts into one row; high and
+            # critical ones stay on their own. The store is untouched.
+            for entry in digest.fold(alerts):
+                rows.add_row(self._row(entry["alert"]) if entry["kind"] == "alert"
+                             else self._day_row(entry))
+        else:
+            for a in alerts:
+                rows.add_row(self._row(a))
         if st.unread and self._visible():
             st.mark_read()
             self._repaint_elsewhere()
@@ -198,6 +219,54 @@ class Plugin(BasePlugin):
         set_pill(label, *pill(info))
         row.layout().insertWidget(2, label, 0, Qt.AlignmentFlag.AlignVCenter)
         return row
+
+    def _day_row(self, entry: dict) -> QWidget:
+        row = MenuRow("archive", digest.title(entry), digest.hint(entry),
+                      on_click=lambda d=entry["day"]: self.open_day(d))
+        row._hint.setTextFormat(Qt.TextFormat.PlainText)  # host names are server text
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        return row
+
+    # ---- one digest day -------------------------------------------------------
+    def open_day(self, day) -> None:
+        """A folded day's alerts, one by one (every severity, newest first)."""
+        if self._views is None:
+            return
+        entry = next((e for e in digest.fold(_store().all())
+                      if e["kind"] == "day" and e["day"] == day), None)
+        if entry is None:
+            return
+        self._close_detail(animate=False)
+        self._close_day(animate=False)
+        page = Page()
+        page.add(back_link("Alerts", self._close_day))
+        n = len(entry["alerts"])
+        page.add(PageHeader(digest.day_label(entry["day"]),
+                            f"{n} alert{'s' if n != 1 else ''} · " + digest.hint(entry)))
+        page.spacing(18)
+        rows = RowList()
+        for a in recent_alerts.newest_first(entry["alerts"]):
+            rows.add_row(self._row(a))
+        page.add(rows)
+        page.stretch()
+        self._views.addWidget(page.widget)
+        self._day = page.widget
+        self._views.push(page.widget)
+
+    def _close_day(self, animate: bool = True) -> None:
+        if self._detail is not None:
+            self._close_detail(animate=False)
+        page, self._day = self._day, None
+        if page is None or self._views is None:
+            return
+        if animate:
+            self._views.back()
+            QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
+                              if self._views is not None else None)
+        else:
+            self._views.home()
+            self._views.removeWidget(page)
+            page.deleteLater()
 
     # ---- one alert ------------------------------------------------------------
     def open_alert(self, event_id: str) -> None:
@@ -241,9 +310,13 @@ class Plugin(BasePlugin):
         if page is None or self._views is None:
             return
         if animate:
-            self._views.back()
+            self._views.back(self._day)  # to the digest day when one is open
             QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
                               if self._views is not None else None)
+        elif self._day is not None:
+            self._views.setCurrentWidget(self._day)
+            self._views.removeWidget(page)
+            page.deleteLater()
         else:
             self._views.home()
             self._views.removeWidget(page)

@@ -248,7 +248,8 @@ def subtitle(info: dict, ts: Optional[float]) -> str:
 
 def newest_first(alerts: list) -> list:
     alerts = [a for a in alerts or [] if isinstance(a, dict)]
-    return sorted(alerts, key=lambda a: a.get("ts") or 0, reverse=True)
+    return sorted(alerts, key=lambda a: a["ts"] if isinstance(a.get("ts"), (int, float)) else 0,
+                  reverse=True)
 
 
 # --------------------------------------------------------------------------
@@ -406,9 +407,12 @@ def notification(alert: dict, started_at: float) -> Optional[dict]:
             "event_id": alert.get("event_id")}
 
 
-def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
+def panel_data(alerts: list, unread: int, now: Optional[float] = None,
+               digest: bool = False) -> dict:
     """Badge and rows for the Recent alerts panel. "ids" maps each alert
-    row's key to its event_id, so a click opens that alert."""
+    row's key to its event_id, so a click opens that alert. With *digest*
+    a day's quieter alerts are one row (key "Today", id None: a click opens
+    the Alerts screen); high and critical alerts stay their own rows."""
     alerts = newest_first(alerts)
     if not alerts:
         return {"badge": ("ok", "Quiet"),
@@ -424,14 +428,33 @@ def panel_data(alerts: list, unread: int, now: Optional[float] = None) -> dict:
         badge = ("ok", "No new alerts")
     rows: dict = {}
     ids: dict = {}
-    for a in newest[:SHOWN]:
-        info = parse(a.get("body", ""))
-        key = ago(a.get("ts"), now)
-        while key in rows:  # same minute: keep both rows
-            key += " "
-        rows[key] = f"{_DOT[info['severity']]} {info['title']}"
-        ids[key] = a.get("event_id")
-    if len(alerts) > SHOWN:
-        rows["More"] = f"{len(alerts) - SHOWN} older alert{'s' if len(alerts) - SHOWN != 1 else ''}"
+    if digest:
+        from plugins.dashboard import digest as _digest
+        entries = _digest.fold(newest, now)
+        for e in entries[:SHOWN]:
+            if e["kind"] == "alert":
+                key = ago(e["ts"], now)
+                while key in rows:
+                    key += " "
+                rows[key] = f"{_DOT[e['info']['severity']]} {e['info']['title']}"
+                ids[key] = e["alert"].get("event_id")
+            else:
+                key = _digest.day_label(e["day"], now)
+                while key in rows:
+                    key += " "
+                rows[key] = _digest.panel_value(e)
+                ids[key] = None
+        shown = sum(len(e["alerts"]) if e["kind"] == "day" else 1 for e in entries[:SHOWN])
+    else:
+        for a in newest[:SHOWN]:
+            info = parse(a.get("body", ""))
+            key = ago(a.get("ts"), now)
+            while key in rows:  # same minute: keep both rows
+                key += " "
+            rows[key] = f"{_DOT[info['severity']]} {info['title']}"
+            ids[key] = a.get("event_id")
+        shown = min(len(alerts), SHOWN)
+    if len(alerts) > shown:
+        rows["More"] = f"{len(alerts) - shown} older alert{'s' if len(alerts) - shown != 1 else ''}"
     rows[f"Last {DAYS} days"] = breakdown(alerts, now)
     return {"badge": badge, "rows": rows, "ids": ids, "strip": activity(alerts, now)}
