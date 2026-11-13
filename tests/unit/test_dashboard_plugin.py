@@ -519,3 +519,65 @@ class TestPanelLayout:
         assert isolated_settings.get("dashboard", "panel_layout") == {}
         assert dashboard_plugin._reset_layout.isHidden() and screen is not None
         dashboard_plugin.destroy()
+
+
+@pytest.mark.unit
+class TestFixes:
+    @pytest.fixture()
+    def built(self, qapp, isolated_settings, dashboard_plugin, monkeypatch):
+        from plugins.chat import siem_alerts
+        store = MagicMock(unread=0)
+        store.all.return_value = []
+        monkeypatch.setattr(siem_alerts, "store", lambda: store)
+        monkeypatch.setattr(Plugin, "refresh", lambda self: None)
+        monkeypatch.setattr(Plugin, "_agent_installed", staticmethod(lambda: True))
+        dashboard_plugin._data["system"] = {"badge": None, "rows": {"Device": "box"}}
+        screen = dashboard_plugin.create_main_screen()
+        yield screen
+        dashboard_plugin.destroy()
+
+    def test_link_page_and_sequential_run(self, built, dashboard_plugin, monkeypatch):
+        from gui.page_kit import MenuRow
+        from utils import fixes, jobs
+        jobs._reset_for_tests()
+        screen = built
+        assert not dashboard_plugin._fix_link.isVisible()
+        endpoint = MagicMock()
+        endpoint.get_name.return_value = "Endpoint"
+        endpoint.fixes.return_value = [
+            fixes.Fix("agent_start", "Endpoint", "Start the Endpoint agent", "stopped", host="box", needs_admin=True),
+            fixes.Fix("agent_reconnect", "Endpoint", "Reconnect", "lost", host="box", after=("agent_start",))]
+        endpoint.run_fix.side_effect = lambda fid: (fid == "agent_start", "ok" if fid == "agent_start" else "no")
+        dashboard_plugin.app.plugins = [endpoint]
+        monkeypatch.setattr(dash.posture, "local_names", lambda include_agent=True: {"box"})
+        items = dashboard_plugin._collect_fixes()
+        assert [f.id for f in items] == ["agent_start", "agent_reconnect"]
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply({"fixes": items})
+        assert dashboard_plugin._fix_link.text() == "Fix 2 things"
+        monkeypatch.setattr(dash.threading, "Thread", lambda target, **kw: MagicMock(start=target))
+        dashboard_plugin.app.after = lambda ms, fn, *a: fn(*a)
+        dashboard_plugin._show_fixes()
+        page, rows, header, fix_all = dashboard_plugin._fixes_page
+        assert header.subtitle.text() == "2 things Phoenix can put right on this machine"
+        assert [r.text() for r in page.findChildren(MenuRow)] == ["Start the Endpoint agent", "Reconnect"]
+        fix_all.click()
+        assert [c.args[0] for c in endpoint.run_fix.call_args_list] == ["agent_start", "agent_reconnect"]
+        assert rows["Endpoint:agent_start"]._hint.text() == "Done · ok"
+        assert rows["Endpoint:agent_reconnect"]._hint.text() == "Failed · no"
+        assert [f.id for f in dashboard_plugin._fixes] == ["agent_reconnect"]
+        assert dashboard_plugin._fix_link.text() == "Fix 1 thing" and header.subtitle.text() == "1 thing still to do"
+        assert [j["title"] for j in jobs.recent()] == ["Reconnect", "Start the Endpoint agent"]
+        dashboard_plugin._show_tiles()
+        assert dashboard_plugin._fixes_page is None
+        jobs._reset_for_tests()
+        del screen
+
+    def test_other_machines_fixes_never_run(self, dashboard_plugin, monkeypatch):
+        from utils import fixes
+        other = MagicMock()
+        other.get_name.return_value = "Devices"
+        other.fixes.return_value = [fixes.Fix("x", "Devices", "t", "w", host="francispc")]
+        dashboard_plugin.app.plugins = [other]
+        monkeypatch.setattr(dash.posture, "local_names", lambda include_agent=True: {"box"})
+        assert dashboard_plugin._collect_fixes() == []

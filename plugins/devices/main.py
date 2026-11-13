@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import threading
+import socket
 import time
 
 from PyQt6.QtCore import Qt
@@ -424,6 +425,42 @@ class Plugin(BasePlugin):
 
     def _refresh(self):
         self._kick_fetch(force=True)
+
+    # ---- fixes ("Fix all") ------------------------------------------------
+    def _stale_rows(self) -> list:
+        from plugins.devices import sessions_api
+        tab = self._tabs.get("sessions")
+        rows = getattr(tab, "_rows", None)
+        return sessions_api.stale_installs(rows, socket.gethostname()) if rows else []
+
+    def fixes(self) -> list:
+        from utils.fixes import Fix, this_host
+        if self._destroyed:
+            return []
+        stale = self._stale_rows()
+        if not stale:
+            return []
+        n = len(stale)
+        return [Fix("stale_installs", self.get_name(), "Remove this machine's earlier installs",
+                    f"{n} earlier install{'s' if n != 1 else ''} of this machine still signed in",
+                    host=this_host())]
+
+    def run_fix(self, fix_id: str) -> tuple:
+        """Blocking, on a worker: the Sessions tab's own removal, device by device."""
+        from plugins.devices import sessions_api
+        if fix_id != "stale_installs":
+            return False, "not offered"
+        failed, removed = [], 0
+        for r in self._stale_rows():
+            ok, error = sessions_api.remove_device(r.device_id)
+            if ok or error == "gone":
+                removed += 1
+            else:
+                failed.append(f"{r.device_id}: {error or '?'}")
+        tab = self._tabs.get("sessions")
+        if tab is not None:
+            tab._loaded_at = 0.0
+        return not failed, f"{removed} removed" + (f"; failed: {'; '.join(failed)}" if failed else "")
 
     def recheck(self) -> bool:
         """The shell's "Check now": fetch the posture again, ignoring the

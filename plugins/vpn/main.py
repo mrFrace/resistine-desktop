@@ -799,6 +799,26 @@ class Plugin(BasePlugin):
             return
         self._toggle_worker(switch_value, name)
 
+    # ---- fixes ("Fix all") ------------------------------------------------
+    def fixes(self) -> list:
+        from utils.fixes import Fix, this_host
+        if self._toggle_busy or my_vpn_status == "Running" or not _phoenix_signed_in():
+            return []
+        return [Fix("vpn_connect", self.get_name(), "Connect the VPN",
+                    "Signed in to Phoenix but the VPN is off", host=this_host(), needs_admin=True)]
+
+    def run_fix(self, fix_id: str) -> tuple:
+        """Blocking, on a worker: the Dashboard switch's own path (fetch
+        this device's config if needed, then connect)."""
+        if fix_id != "vpn_connect":
+            return False, "not offered"
+        if self._toggle_busy:
+            return False, "the VPN is busy"
+        self._toggle_busy = True
+        self._provision_then_connect(1)  # clears _toggle_busy itself
+        ok = my_vpn_status == "Running"
+        return ok, "VPN connected" if ok else "the VPN did not come up"
+
     _UNDO = {"vpn_disconnect": 0, "vpn_connect": 1}
 
     def undo(self, action: str, arg: str = "") -> bool:
