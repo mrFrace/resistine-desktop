@@ -132,6 +132,12 @@ class BasePlugin:
         """A ``Status``, a legacy string ("OK", "Warning", ...) or None (off)."""
         return self.status
 
+    def recheck(self) -> bool:
+        """Measure again now, on demand (the shell's "Check now" after a
+        long unknown). Plugins that cache their status override this and
+        refresh the cache on their own threads. False: nothing to do."""
+        return False
+
     def status_info(self) -> Status:
         """``check_status()`` as a ``Status``, aged: a failed check and an
         OK past ``status_fresh_for`` are unknown, not a warning and not

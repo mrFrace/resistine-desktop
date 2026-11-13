@@ -425,6 +425,14 @@ class Plugin(BasePlugin):
     def _refresh(self):
         self._kick_fetch(force=True)
 
+    def recheck(self) -> bool:
+        """The shell's "Check now": fetch the posture again, ignoring the
+        throttle (the page then rebuilds on its own)."""
+        if self._destroyed:
+            return False
+        self._kick_fetch(force=True)
+        return True
+
     def _schedule_rebuild(self, delay_ms: int):
         if self._destroyed or self._rebuild_pending:
             return
