@@ -209,8 +209,8 @@ def test_build_policy_is_always_defined_agent():
 
 
 def test_build_fire_keys_target_by_executable():
-    assert ar.build_fire("004", "block-ip", "203.0.113.7")["target"] == {"ip": "203.0.113.7"}
-    assert ar.build_fire("004", "disable-account", "mallory")["target"] == {"user": "mallory"}
+    assert ar.build_fire("004", "block-ip", "203.0.113.7")["target"] == "203.0.113.7"
+    assert ar.build_fire("004", "disable-account", "mallory")["target"] == "mallory"
 
 
 def test_build_fire_pins_location_defined_agent():
@@ -340,11 +340,11 @@ def test_fire_and_stop(rw):
     data, err = ar.fire("004", "block-ip", "203.0.113.7")
     assert err is None and data == {"execution_id": "e1"}
     assert calls[-1]["path"] == "/v1/me/active-response/fire"
-    assert calls[-1]["json"]["target"] == {"ip": "203.0.113.7"}
+    assert calls[-1]["json"]["target"] == "203.0.113.7"
     answers.append(resp(200, {"ok": True}))
     ar.stop("004", "disable-account", "mallory")
     assert calls[-1]["path"] == "/v1/me/active-response/stop"
-    assert calls[-1]["json"]["target"] == {"user": "mallory"}
+    assert calls[-1]["json"]["target"] == "mallory"
 
 
 def test_preview_endpoint_parses(rw):
@@ -377,3 +377,47 @@ def test_fetch_inventory(rw):
     assert data[0] == {"agent_id": "004", "agent_name": "lab-host"}
     assert data[1] == {"agent_id": "009", "agent_name": "win-box"}
     assert calls[-1]["path"] == "/v1/me/inventory"
+
+
+# --- device scope applied client-side (the backend ignores ?agent_id=) -------
+
+EXECS_TWO_AGENTS = [
+    {"agent_id": "004", "agent_name": "francispc", "target": "203.0.113.1"},
+    {"agent_id": "004", "agent_name": "", "target": "203.0.113.2"},  # thin record
+    {"agent_id": "007", "agent_name": "AnubisAI", "target": "203.0.113.3"},
+    {"agent_id": "", "agent_name": "", "target": "203.0.113.4"},
+]
+
+
+def test_same_agent_ignores_zero_padding():
+    assert ar.same_agent("004", "4") and ar.same_agent("4", "004")
+    assert not ar.same_agent("004", "007")
+    assert not ar.same_agent("", "004") and not ar.same_agent(None, None)
+    assert ar.same_agent("abc", "abc") and not ar.same_agent("abc", "abd")
+
+
+def test_executions_for_selected_agent_id():
+    got = ar.executions_for(EXECS_TWO_AGENTS, "7", "AnubisAI")
+    assert [e["target"] for e in got] == ["203.0.113.3"]
+    got = ar.executions_for(EXECS_TWO_AGENTS, "004", "francispc")
+    assert [e["target"] for e in got] == ["203.0.113.1", "203.0.113.2"]
+
+
+def test_executions_for_host_when_row_has_no_agent_id():
+    got = ar.executions_for(EXECS_TWO_AGENTS, None, "anubisai")
+    assert [e["target"] for e in got] == ["203.0.113.3"]
+
+
+def test_executions_for_all_devices_is_everything():
+    assert len(ar.executions_for(EXECS_TWO_AGENTS, None, None)) == 4
+
+
+def test_thin_record_is_named_from_posture_then_siblings():
+    rows = [{"agent_id": "4", "hostname": "francispc"}]
+    names = ar.agent_names(EXECS_TWO_AGENTS, rows)
+    assert ar.agent_display_name(EXECS_TWO_AGENTS[1], names) == "francispc"
+    # no posture row for 007: a sibling execution that carries the name
+    assert ar.agent_display_name({"agent_id": "007", "agent_name": ""}, names) == "AnubisAI"
+    # nothing known at all: the id itself, never "(unknown)"
+    assert ar.agent_display_name({"agent_id": "011", "agent_name": ""}, names) == "011"
+    assert ar.agent_display_name({"agent_id": "", "agent_name": ""}, names) == "—"

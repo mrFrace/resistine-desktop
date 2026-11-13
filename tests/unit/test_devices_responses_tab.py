@@ -349,3 +349,56 @@ def test_sections_do_not_leak_widgets_on_rerender(tab):
     # the AR-D3 section headers were added via addLayout; _clear must still
     # drop them, or stale headers/buttons pile up and paint behind the tables
     assert live_headings() == 3
+
+
+EXECS_TWO = EXECS + [
+    {"agent_id": "009", "agent_name": "win-box", "executable": "disable-account",
+     "command": "", "target": "mallory", "timestamp": "2026-11-13T11:00:00Z",
+     "status": "dispatched", "finding_id": "", "rule_title": "",
+     "monitor_id": "", "config_id": "cfg-2"},
+    {"agent_id": "004", "agent_name": "", "executable": "ad-hoc block-ip",
+     "command": "", "target": "203.0.113.9", "timestamp": "2026-11-13T12:00:00Z",
+     "status": "dispatched", "finding_id": "", "rule_title": "",
+     "monitor_id": "", "config_id": ""},
+]
+
+
+def _live_labels(t):
+    # _clear hides and deleteLater()s the previous render; without an event
+    # loop those widgets are still findChildren()-able, so look at live ones.
+    return [lbl.text() for lbl in t.widget.findChildren(QLabel)
+            if lbl.isVisibleTo(t.widget)]
+
+
+def test_executions_table_shows_only_the_selected_device(tab):
+    # The backend returns every execution of the caller's agents whatever
+    # ?agent_id= says; the tab must apply the device scope itself.
+    t = tab(execs=EXECS_TWO, scope="win-box")
+    labels = _live_labels(t)
+    assert "mallory" in labels
+    assert "203.0.113.7" not in labels and "203.0.113.9" not in labels
+    t.ctx._scope = "lab-host"
+    t.set_scope()
+    labels = _live_labels(t)
+    assert "203.0.113.7" in labels and "203.0.113.9" in labels
+    assert "mallory" not in labels
+
+
+def test_thin_execution_is_named_from_the_posture_row(tab):
+    t = tab(execs=EXECS_TWO, scope="lab-host")
+    labels = _live_labels(t)
+    # the record with agent_name "" shows the hostname of agent 004, not a bare "004"
+    assert labels.count("lab-host") == 2  # both agent cells
+    assert "004" not in labels
+
+
+def test_scope_change_during_a_fetch_is_not_lost(tab):
+    t = tab(scope=None)
+    assert t._exec_calls == [None]
+    t._loading = True  # a fetch is in flight
+    t.ctx._scope = "win-box"
+    t.set_scope()
+    assert t._exec_calls == [None]  # nothing started while loading
+    # the in-flight fetch (for "all") completes: one more fetch for the new scope
+    t._loaded(True, None, None, None, list(EXECS), None)
+    assert t._exec_calls == [None, "009"]
