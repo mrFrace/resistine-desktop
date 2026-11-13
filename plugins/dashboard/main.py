@@ -276,6 +276,15 @@ class _Panel(QFrame):
         div.setFixedHeight(1)
         v.addWidget(div)
 
+        # One sentence above the rows (the Recent alerts tile carries the
+        # week's); hidden until someone sets it.
+        self.lead = QLabel()
+        self.lead.setObjectName("TileLead")
+        self.lead.setWordWrap(True)
+        self.lead.setTextFormat(Qt.TextFormat.PlainText)
+        self.lead.hide()
+        v.addWidget(self.lead)
+
         self._grid = QGridLayout()
         self._grid.setHorizontalSpacing(16)
         self._grid.setVerticalSpacing(8)
@@ -856,23 +865,7 @@ class Plugin(BasePlugin):
         v.addLayout(head)
         v.addSpacing(10)
 
-        # The week in one sentence: what the tiles below add up to.
-        lead_row = QHBoxLayout()
-        lead_row.setSpacing(12)
-        self._lead = QLabel()
-        self._lead.setObjectName("Lead")
-        self._lead.setWordWrap(True)
-        self._lead.setTextFormat(Qt.TextFormat.PlainText)
-        lead_row.addWidget(self._lead, 1)
-        self._fix_link = QPushButton()
-        self._fix_link.setObjectName("Link")
-        self._fix_link.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._fix_link.setToolTip("What Phoenix can put right on this machine, one step at a time")
-        self._fix_link.clicked.connect(self._show_fixes)
-        self._fix_link.hide()
-        lead_row.addWidget(self._fix_link, 0, Qt.AlignmentFlag.AlignVCenter)
-        v.addLayout(lead_row)
-        v.addSpacing(16)
+        v.addSpacing(6)
 
         # Protection = the Endpoint (Wazuh) agent is installed and healthy;
         # shown as the sidebar logo's glow. The VPN only protects traffic
@@ -907,6 +900,16 @@ class Plugin(BasePlugin):
                 "System", os.path.join(_DIR, "home_dark.png"), key="system"),
         }
         self._data["alerts"] = self._alerts_data()
+        # The week in one sentence sits above the Recent alerts rows; what
+        # Phoenix can put right here is a button in the System tile's header.
+        self._lead = self._panels["alerts"].lead
+        self._lead.show()
+        self._fix_link = self._panels["system"].add_header_control(QPushButton())
+        self._fix_link.setObjectName("Link")
+        self._fix_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._fix_link.setToolTip("What Phoenix can put right on this machine, one step at a time")
+        self._fix_link.clicked.connect(self._show_fixes)
+        self._fix_link.hide()
         self._vpn_switch = self._panels["vpn"].add_header_control(ToggleSwitch())
         self._vpn_switch.setToolTip("Connect or disconnect the VPN")
         self._vpn_switch.clicked.connect(self._toggle_vpn)
