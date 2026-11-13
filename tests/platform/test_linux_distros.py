@@ -11,13 +11,9 @@ import shutil
 import sys
 import platform
 
-# Mock GUI and other dependencies
-mock_gui = MagicMock()
-sys.modules["gui"] = mock_gui
-sys.modules["gui.dialogs"] = mock_gui
-sys.modules["customtkinter"] = MagicMock()
-sys.modules["utils.i18n"] = MagicMock()
-
+# gui.dialogs, utils.i18n and the password dialog import fine headless;
+# the module must not stub them in sys.modules: a stub left there turns
+# `gui` into a non-package for every test module collected after this one.
 from plugins.vpn.wireguard.vpn_functions_linux import check_wireguard_installed, run_installer_as_admin
 from plugins.wazuh.agent.wazuh_functions_linux import (
     _get_os_info, get_package_url, get_agent_status, start_agent, LINUX_WAZUH_DIR
