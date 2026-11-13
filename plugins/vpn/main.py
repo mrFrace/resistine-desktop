@@ -46,6 +46,7 @@ from gui.page_kit import (
 )
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
+from utils import settings
 from utils.logger import logger
 
 # --- Platform Detection (single source of truth) ---
@@ -750,6 +751,9 @@ class Plugin(BasePlugin):
         switch and the Dashboard's VPN panel both come through here."""
         if self._toggle_busy:
             return
+        # The user's own choice is remembered: a VPN switched off by hand is
+        # not switched back on by "Fix all" (see fixes()).
+        settings.set("vpn", "user_disconnected", not switch_value)
 
         selected_conf_file = self.get_selected_conf_file_name()
         if not selected_conf_file and switch_value and _phoenix_signed_in():
@@ -804,6 +808,8 @@ class Plugin(BasePlugin):
         from utils.fixes import Fix, this_host
         if self._toggle_busy or my_vpn_status == "Running" or not _phoenix_signed_in():
             return []
+        if settings.get("vpn", "user_disconnected", False):
+            return []  # switched off by hand: their call, not a fault
         return [Fix("vpn_connect", self.get_name(), "Connect the VPN",
                     "Signed in to Phoenix but the VPN is off", host=this_host(), needs_admin=True)]
 
