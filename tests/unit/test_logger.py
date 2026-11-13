@@ -165,21 +165,21 @@ class TestTelemetrySwitch:
         import utils.logger as lg
         assert lg.TELEMETRY_ENABLED is False
         assert lg.telemetry_enabled() is False
-        assert lg._otlp_endpoint() == "http://otel.phoenix.exposed:4318"
+        assert lg._otlp_endpoint() == "https://otel.phoenix.exposed:4318"
 
     def test_env_overrides(self, monkeypatch):
         import utils.logger as lg
         monkeypatch.setenv("PHOENIX_TELEMETRY", "1")
         assert lg.telemetry_enabled() is True
         monkeypatch.setenv("PHOENIX_TELEMETRY", "off")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector:4318")
         assert lg.telemetry_enabled() is False
 
     def test_explicit_endpoint_enables(self, monkeypatch):
         import utils.logger as lg
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://collector:4318")
         assert lg.telemetry_enabled() is True
-        assert lg._otlp_endpoint() == "http://collector:4318"
+        assert lg._otlp_endpoint() == "https://collector:4318"
 
     def test_no_sink_when_off(self, tmp_path, monkeypatch):
         import utils.logger as lg
@@ -202,3 +202,29 @@ class TestTelemetrySwitch:
         monkeypatch.setattr(lg, "BufferedOTLPSink", fake_sink)
         setup_logging(level="INFO", log_to_file=True)
         assert created and created[0].endswith("otlp_buffer.jsonl")
+
+
+@pytest.mark.unit
+class TestTelemetryEndpointMustBeHttps:
+    def test_endpoint_rules(self):
+        from utils import logger as lg
+        assert lg.endpoint_allowed("https://otel.phoenix.exposed:4318")
+        assert lg.endpoint_allowed("http://127.0.0.1:4318") and lg.endpoint_allowed("http://localhost:4318")
+        assert not lg.endpoint_allowed("http://otel.phoenix.exposed:4318")
+        assert not lg.endpoint_allowed("ftp://x") and not lg.endpoint_allowed("") and not lg.endpoint_allowed("https://")
+
+    def test_plain_http_stays_off_even_when_asked(self, monkeypatch):
+        from utils import logger as lg
+        monkeypatch.setattr(lg, "TELEMETRY_ENABLED", True)
+        monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+        monkeypatch.setenv("PHOENIX_TELEMETRY", "1")
+        assert lg.telemetry_enabled() is True             # the default endpoint is https
+        monkeypatch.setattr(lg, "_DEFAULT_OTLP_ENDPOINT", "http://otel.phoenix.exposed:4318")
+        assert lg.telemetry_enabled() is False
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.phoenix.exposed:4318")
+        assert lg.telemetry_enabled() is True
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel.phoenix.exposed:4318")
+        assert lg.telemetry_enabled() is False
+        monkeypatch.setenv("PHOENIX_TELEMETRY", "0")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "https://otel.phoenix.exposed:4318")
+        assert lg.telemetry_enabled() is False            # an explicit off wins

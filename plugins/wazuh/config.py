@@ -79,4 +79,9 @@ WINDOWS_WAZUH_DIR = r"C:\Program Files (x86)\ossec-agent"
 
 # --- Sysmon ---
 WINDOWS_SYSMON_ZIP_URL = "https://download.sysinternals.com/files/Sysmon.zip"
-WINDOWS_SYSMON_CONFIG_URL = "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml"
+# The SwiftOnSecurity sysmon-config, bundled (resources/sysmon/README.md) and
+# pinned: the installer applies this file elevated, so it is never fetched
+# from a moving branch at install time, and a bundle whose copy differs from
+# the pin is refused.
+WINDOWS_SYSMON_CONFIG_RESOURCE = ("resources", "sysmon", "sysmonconfig-export.xml")
+WINDOWS_SYSMON_CONFIG_SHA256 = "055febc600e6d7448cdf3812307275912927a62b1f94d0d933b64b294bc87162"

@@ -15,7 +15,7 @@ from opentelemetry.sdk.util.instrumentation import InstrumentationScope
 from opentelemetry.trace import get_current_span
 
 
-_DEFAULT_OTLP_ENDPOINT = "http://otel.phoenix.exposed:4318"
+_DEFAULT_OTLP_ENDPOINT = "https://otel.phoenix.exposed:4318"
 
 # Log shipping is off until the Phoenix collector (otel.phoenix.exposed) is
 # live; the old otel.resisti.net no longer resolves and the exporter filled
@@ -29,16 +29,33 @@ def _otlp_endpoint():
     return os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", _DEFAULT_OTLP_ENDPOINT)
 
 
+def endpoint_allowed(url: str) -> bool:
+    """Log records name hosts, users and files: they go to the collector
+    over https only. Plain http is allowed to loopback alone (a collector
+    under test on this machine)."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    if parts.scheme == "https" and parts.hostname:
+        return True
+    return parts.scheme == "http" and parts.hostname in ("127.0.0.1", "localhost", "::1")
+
+
 def telemetry_enabled() -> bool:
     """Whether log records are shipped to the OTLP collector."""
     flag = os.environ.get("PHOENIX_TELEMETRY", "").strip().lower()
-    if flag in ("1", "true", "yes", "on"):
-        return True
     if flag in ("0", "false", "no", "off"):
         return False
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
-        return True
-    return TELEMETRY_ENABLED
+    wanted = (flag in ("1", "true", "yes", "on")
+              or bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"))
+              or TELEMETRY_ENABLED)
+    if wanted and not endpoint_allowed(_otlp_endpoint()):
+        logger.warning("Telemetry stays off: the OTLP endpoint is not https (set OTEL_EXPORTER_OTLP_ENDPOINT to an https URL)")
+        return False
+    return wanted
 
 
 # Loguru level name -> OTEL severity_number per OTEL log data model spec

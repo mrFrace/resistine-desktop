@@ -61,11 +61,17 @@ on. Fixed items landed on `hardening/fable-sweep`; the full unit suite
    when enabling Sparkle.
 5. **Build pipeline**: repo indexes generated in unpinned Docker images and
    blind-signed on the host — pin images by digest and re-verify checksums
-   before signing. `build-windows-vm.sh` uses `StrictHostKeyChecking=no`.
-6. **Sysmon config** fetched from SwiftOnSecurity GitHub with no integrity
-   check, applied elevated — bundle it or pin its sha256.
-7. **Telemetry**: OTLP endpoint is `http://` (telemetry currently disabled);
-   require https before ever enabling. Other INFO logs still carry metadata.
+   before signing. *2026-11-13:* `build-windows-vm.sh` now pins the golden
+   image's host key (`$GOLDEN_DIR/known_hosts`, recorded on the first build,
+   strict afterwards); `publish-linux-repos.sh` signs the RPMs themselves
+   with `rpmsign` and verifies them (`gpgcheck=1` in the .repo file is still
+   to publish). Image pinning remains open.
+6. **Sysmon config** — *done 2026-11-13:* bundled in `resources/sysmon/` and
+   pinned by SHA-256 (`plugins/wazuh/config.py`); the installer refuses a
+   bundle off the pin and no longer fetches `master` from GitHub.
+7. **Telemetry** — *done 2026-11-13:* the default endpoint is `https://` and
+   `telemetry_enabled()` refuses any non-https collector except loopback,
+   whatever the flags say. Other INFO logs still carry metadata.
 8. **OIDC low-priority**: loopback callback accepts any first GET (DoS of a
    pending login — random path segment would fix); RFC 9207 `iss` check;
    `validate_session` fail-open on network error is unbounded by design;
