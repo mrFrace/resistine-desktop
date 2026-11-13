@@ -22,7 +22,10 @@ IS_WINDOWS = sys.platform == "win32"
 # and users never see them.
 APP_NAME = 'Phoenix'
 DISPLAY_NAME = 'Phoenix'
-BUNDLE_ID = 'exposed.phoenix.desktop'
+# Honour the build script's BUNDLE_ID so the app's identifier and the
+# bundled VPN system extension ($BUNDLE_ID.network-extension) always
+# agree; a mismatch makes macOS refuse the extension at runtime.
+BUNDLE_ID = os.environ.get('BUNDLE_ID', 'exposed.phoenix.desktop')
 VERSION = '2026.11.06'
 # Build ID: tells builds of one VERSION apart (package versions, file names,
 # the version line in the app). UTC minutes, so every rebuild sorts after the

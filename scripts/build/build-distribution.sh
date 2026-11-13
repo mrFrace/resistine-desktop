@@ -30,34 +30,51 @@ BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
 APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
-BUNDLE_ID="exposed.phoenix.desktop"
+export BUNDLE_ID="${BUNDLE_ID:-exposed.phoenix.desktop}"  # PyInstaller spec reads it
 NE_BUNDLE_ID="$BUNDLE_ID.network-extension"  # system extension; name of its .systemextension too
 CLI_BUNDLE_ID="$BUNDLE_ID.vpnxpc"             # ResistineCLI.app wrapping resistine-vpn-cli
+# App Group shared by the app, the CLI and the network extension. App Group IDs
+# are globally unique across Apple teams, so this must be registered under
+# $EXPECTED_TEAM_ID and must match APP_GROUP_ID in
+# plugins/vpn/wireguard/vpn_functions_darwin.py.
+APP_GROUP="${APP_GROUP:-group.exposed.phoenix.wireguard}"
+
+# The Apple team this build must be signed by. Pinned rather than discovered:
+# with more than one "Developer ID Application" certificate in the keychain
+# (a legacy team's, say), picking the first match would silently sign with the
+# wrong identity and produce a bundle no provisioning profile matches.
+EXPECTED_TEAM_ID="${EXPECTED_TEAM_ID:-KTKS453599}"
 
 # ============================================================
 # Step 1: Verify Developer ID certificate (REQUIRED for distribution)
 # ============================================================
 echo "Step 1: Verifying Developer ID certificate..."
 
-SIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | awk '{print $2}')
+DEV_ID_CERTS=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application")
 
-if [ -z "$SIGN_IDENTITY" ]; then
+if [ -z "$DEV_ID_CERTS" ]; then
     echo "  Error: No Developer ID Application certificate found."
     echo "  Distribution builds REQUIRE a Developer ID certificate."
     echo "  Use build-installer.sh for local development instead."
     exit 1
 fi
 
-SIGN_NAME=$(security find-identity -v -p codesigning 2>/dev/null | grep "$SIGN_IDENTITY" | sed 's/.*"\(.*\)".*/\1/')
-echo "  Signing with: $SIGN_NAME"
+SIGN_LINE=$(echo "$DEV_ID_CERTS" | grep "($EXPECTED_TEAM_ID)" | head -1)
 
-TEAM_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep "$SIGN_IDENTITY" | grep -o '([A-Z0-9]*)' | tr -d '()' | head -1)
-echo "  Team ID: $TEAM_ID"
-
-if [ -z "$TEAM_ID" ]; then
-    echo "  Error: Could not detect Team ID from certificate."
+if [ -z "$SIGN_LINE" ]; then
+    echo "  Error: No Developer ID Application certificate for team $EXPECTED_TEAM_ID."
+    echo "  Certificates available in the keychain:"
+    echo "$DEV_ID_CERTS" | sed 's/^/    /'
+    echo "  Install the certificate for $EXPECTED_TEAM_ID, or set EXPECTED_TEAM_ID"
+    echo "  to deliberately build against a different team."
     exit 1
 fi
+
+SIGN_IDENTITY=$(echo "$SIGN_LINE" | awk '{print $2}')
+SIGN_NAME=$(echo "$SIGN_LINE" | sed 's/.*"\(.*\)".*/\1/')
+TEAM_ID="$EXPECTED_TEAM_ID"
+echo "  Signing with: $SIGN_NAME"
+echo "  Team ID: $TEAM_ID"
 
 # Notarization toggle — set to true to skip for faster builds
 SKIP_NOTARIZE=${SKIP_NOTARIZE:-false}
@@ -712,6 +729,20 @@ fi
 # Locate entitlements files
 ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
 
+# Rewrite the two team-scoped values into a temp copy so they can never drift
+# from the identity we actually sign with. Everything else (sandbox, hardened
+# runtime exceptions) is taken from the checked-in file as-is.
+if [ -f "$ENTITLEMENTS_FILE" ]; then
+    APP_DIST_ENTITLEMENTS=$(mktemp -t phoenix-app-entitlements).plist
+    cp "$ENTITLEMENTS_FILE" "$APP_DIST_ENTITLEMENTS"
+    plutil -remove com.apple.security.application-groups "$APP_DIST_ENTITLEMENTS" >/dev/null 2>&1 || true
+    plutil -insert com.apple.security.application-groups -array "$APP_DIST_ENTITLEMENTS"
+    plutil -insert com.apple.security.application-groups -string "$APP_GROUP" -append "$APP_DIST_ENTITLEMENTS"
+    plutil -insert com.apple.security.application-groups -string "$TEAM_ID.*" -append "$APP_DIST_ENTITLEMENTS"
+    ENTITLEMENTS_FILE="$APP_DIST_ENTITLEMENTS"
+    echo "  - App entitlements: group $APP_GROUP, team $TEAM_ID"
+fi
+
 NE_DIST_ENTITLEMENTS="/tmp/ne-distribution.entitlements.plist"
 CLI_DIST_ENTITLEMENTS="/tmp/cli-distribution.entitlements.plist"
 
@@ -735,7 +766,7 @@ cat > "$NE_DIST_ENTITLEMENTS" << ENTEOF
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.Resistine.WireguardTest</string>
+		<string>${APP_GROUP}</string>
 		<string>${TEAM_ID}.*</string>
 	</array>
 	<key>com.apple.security.network.client</key>
@@ -768,7 +799,7 @@ cat > "$CLI_DIST_ENTITLEMENTS" << ENTEOF
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.Resistine.WireguardTest</string>
+		<string>${APP_GROUP}</string>
 		<string>${TEAM_ID}.*</string>
 	</array>
 	<key>com.apple.security.network.client</key>
@@ -794,7 +825,48 @@ fi
 if [ "$CLAMAV_AVAILABLE" = true ]; then
     echo "  - Signing ClamAV components with Developer ID..."
 
-    CLAMAV_ENTITLEMENTS="$CLAMAV_ARTIFACTS_DIR/entitlements.plist"
+    # Generate clamonacc's entitlements rather than using the copy shipped in
+    # the CI artifacts: that file hardcodes a team and bundle ID, and is
+    # overwritten whenever the ClamAV artifacts are re-fetched.
+    #
+    # com.apple.developer.endpoint-security.client is a restricted entitlement.
+    # Signing it when the embedded provisioning profile does not grant it
+    # produces a binary that fails to launch, so include it only when the
+    # profile actually carries it (i.e. once Apple has approved the request).
+    CLAMAV_ENTITLEMENTS=$(mktemp -t phoenix-clamav-entitlements).plist
+    CLAM_BUNDLE_ID="$BUNDLE_ID.clamonacc"
+
+    ESF_GRANTED=false
+    if [ -f "$CLAMONACC_PROFILE" ] && security cms -D -i "$CLAMONACC_PROFILE" 2>/dev/null \
+        | grep -q "com.apple.developer.endpoint-security.client"; then
+        ESF_GRANTED=true
+    fi
+
+    cat > "$CLAMAV_ENTITLEMENTS" << ENTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.application-identifier</key>
+	<string>${TEAM_ID}.${CLAM_BUNDLE_ID}</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>${TEAM_ID}</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>${TEAM_ID}.*</string>
+	</array>
+</dict>
+</plist>
+ENTEOF
+
+    if [ "$ESF_GRANTED" = true ]; then
+        plutil -insert com.apple.developer.endpoint-security.client -bool YES "$CLAMAV_ENTITLEMENTS"
+        echo "    clamonacc: Endpoint Security entitlement granted by profile"
+    else
+        echo "    Warning: $CLAMONACC_PROFILE does not grant Endpoint Security."
+        echo "    clamonacc will be signed WITHOUT it — on-access scanning will"
+        echo "    not work. Scheduled and manual scans are unaffected."
+    fi
 
     # Sign clamonacc with ESF entitlements
     if [ -f "$CLAMAV_ENTITLEMENTS" ]; then

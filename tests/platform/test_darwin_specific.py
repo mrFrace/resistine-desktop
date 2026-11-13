@@ -124,7 +124,7 @@ class TestVpnDarwinPaths:
             from plugins.vpn.wireguard.vpn_functions_darwin import get_writable_wireguard_dir
             path = get_writable_wireguard_dir()
         assert "Group Containers" in path
-        assert "group.Resistine" in path
+        assert "group.exposed.phoenix" in path
         assert "wireguard" in path
 
     def test_wireguard_dir_is_under_home(self):

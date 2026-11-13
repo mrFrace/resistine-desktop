@@ -35,17 +35,28 @@ def _restrict_dir_permissions(path):
         logger.warning(f"Could not restrict permissions on {path}: {e}")
 
 
+# App Group shared with the sandboxed CLI and the packet-tunnel extension. Must
+# match $APP_GROUP in scripts/build/build-distribution.sh and the App Group
+# registered under the signing team; App Group IDs are globally unique across
+# Apple teams, so this changed when the app moved off the old team.
+APP_GROUP_ID = "group.exposed.phoenix.wireguard"
+
+# Pre-migration App Group, still present in containers on machines that ran a
+# build signed by the old team. Read-only: used by the uninstaller for cleanup.
+LEGACY_APP_GROUP_IDS = ("group.Resistine.WireguardTest",)
+
+
 def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files
-    
+
     Uses the App Group container so the sandboxed CLI can access configs.
-    Path: ~/Library/Group Containers/group.Resistine.WireguardTest/wireguard/
+    Path: ~/Library/Group Containers/<APP_GROUP_ID>/wireguard/
     """
     # Use App Group container instead of Application Support
     # This allows the sandboxed resistine-vpn-cli to access the configs
     home = os.path.expanduser("~")
     app_group_container = os.path.join(
-        home, "Library", "Group Containers", "group.Resistine.WireguardTest"
+        home, "Library", "Group Containers", APP_GROUP_ID
     )
     wireguard_dir = os.path.join(app_group_container, "wireguard")
     os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)

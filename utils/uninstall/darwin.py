@@ -630,22 +630,17 @@ def _deactivate_system_extension():
         raise OSError(f"Extension deactivation error: {e}") from e
 
 
-def _remove_wireguard_configs():
-    """Remove WireGuard configuration files.
+def _clear_group_container(wg_dir):
+    """Empty one App Group container; return (removed, failed) counts.
 
     macOS SIP protects the Group Container directory itself — even admin
     ``rm -rf`` cannot delete it.  We remove the *contents* instead and
     tolerate the empty directory remaining (the OS cleans it up when the
     app is fully removed).
     """
-    wg_dir = os.path.expanduser(
-        "~/Library/Group Containers/group.Resistine.WireguardTest"
-    )
     if not os.path.exists(wg_dir):
-        logger.info("[UNINSTALL] WireGuard config dir not found, skipping")
-        return
+        return 0, []
 
-    # Remove contents, not the container directory itself
     try:
         entries = os.listdir(wg_dir)
     except PermissionError:
@@ -653,10 +648,10 @@ def _remove_wireguard_configs():
             f"[UNINSTALL] Cannot access {wg_dir} (SIP-protected) — "
             f"macOS will clean it up when the app is removed"
         )
-        return
+        return 0, []
     if not entries:
-        logger.info("[UNINSTALL] WireGuard config dir already empty")
-        return
+        logger.info(f"[UNINSTALL] {wg_dir} already empty")
+        return 0, []
 
     removed = 0
     failed = []
@@ -681,11 +676,37 @@ def _remove_wireguard_configs():
             f"[UNINSTALL] Cleared {removed} item(s) from {wg_dir} "
             f"(directory kept by macOS)"
         )
+    return removed, failed
 
-    if failed and removed == 0:
+
+def _remove_wireguard_configs():
+    """Remove WireGuard configuration files from every App Group we have used.
+
+    Builds signed by the pre-migration Apple team wrote into a different App
+    Group container, so an uninstall that only cleared the current one would
+    leave private keys behind on any machine that ran an older build.
+    """
+    from plugins.vpn.wireguard.vpn_functions_darwin import (
+        APP_GROUP_ID,
+        LEGACY_APP_GROUP_IDS,
+    )
+
+    base = os.path.expanduser("~/Library/Group Containers")
+    total_removed = 0
+    total_failed = []
+    for group_id in (APP_GROUP_ID, *LEGACY_APP_GROUP_IDS):
+        removed, failed = _clear_group_container(os.path.join(base, group_id))
+        total_removed += removed
+        total_failed.extend(failed)
+
+    if not total_removed and not total_failed:
+        logger.info("[UNINSTALL] No WireGuard config dirs found, skipping")
+        return
+
+    if total_failed and total_removed == 0:
         raise OSError(
             f"Failed to remove any WireGuard config files "
-            f"({len(failed)} failures)"
+            f"({len(total_failed)} failures)"
         )
 
 
