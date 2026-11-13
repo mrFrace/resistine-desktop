@@ -876,7 +876,24 @@ if [ "$CLAMAV_AVAILABLE" = true ]; then
 ENTEOF
 
     if [ "$ESF_GRANTED" = true ]; then
-        plutil -insert com.apple.developer.endpoint-security.client -bool YES "$CLAMAV_ENTITLEMENTS"
+        # plistlib, not plutil: plutil reads "." in a key path as nesting, so
+        # com.apple.developer.endpoint-security.client would be written as
+        # com -> apple -> developer -> endpoint-security -> client. clamonacc
+        # would sign and run with no ESF entitlement at all, and on-access
+        # scanning would silently do nothing.
+        DEST="$CLAMAV_ENTITLEMENTS" python3 - <<'ESFPY' || { echo "    Error: could not add the Endpoint Security entitlement"; exit 1; }
+import os
+import plistlib
+
+path = os.environ["DEST"]
+with open(path, "rb") as fh:
+    ent = plistlib.load(fh)
+
+ent["com.apple.developer.endpoint-security.client"] = True
+
+with open(path, "wb") as fh:
+    plistlib.dump(ent, fh)
+ESFPY
         echo "    clamonacc: Endpoint Security entitlement granted by profile"
     else
         echo "    Warning: $CLAMONACC_PROFILE does not grant Endpoint Security."
