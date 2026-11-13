@@ -85,29 +85,18 @@ docker run -d --name "$VM_NAME" \
     -v "$VM_DIR":/storage --stop-timeout 120 "$DOCKUR_IMAGE" >/dev/null
 ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$VM_NAME")"
 [ -n "$ip" ] || die "no IP for $VM_NAME"
-# The VM is a copy of the golden image, so its SSH host key is the same on
-# every run and can be pinned. Without pinning, anything able to answer on the
-# container's IP could receive the source zip and hand back an installer we
-# would then ship. HostKeyAlias keeps the pin stable even though the container
-# IP changes per run.
-#
-# First run records the key (TOFU); later runs require it to match. If the
-# golden image is rebuilt the key changes and the build stops with a clear
-# error — delete $WIN_KNOWN_HOSTS to re-pin deliberately.
-WIN_KNOWN_HOSTS="${WIN_KNOWN_HOSTS:-$GOLDEN_DIR/phoenix-golden.known_hosts}"
-HOST_KEY_ALIAS="phoenix-windows-golden"
-if [ -s "$WIN_KNOWN_HOSTS" ]; then
-    strict_mode="yes"
+# The golden image's SSH host key is pinned in $GOLDEN_DIR/known_hosts under
+# the alias phoenix-golden (the VM's address changes per run). The first build
+# after make_golden records it (trust on first use, once per image); every
+# later build refuses a VM whose key differs.
+KNOWN_HOSTS="$GOLDEN_DIR/known_hosts"
+SSH_OPTS=(-i "$KEY" -o HostKeyAlias=phoenix-golden -o UserKnownHostsFile="$KNOWN_HOSTS" -o ConnectTimeout=10 -o LogLevel=ERROR)
+if [ -s "$KNOWN_HOSTS" ]; then
+    SSH_OPTS+=(-o StrictHostKeyChecking=yes)
 else
-    log "No pinned host key at $WIN_KNOWN_HOSTS — pinning this VM's key (TOFU)"
-    strict_mode="accept-new"
-    mkdir -p "$(dirname "$WIN_KNOWN_HOSTS")"
-    : > "$WIN_KNOWN_HOSTS"
+    log "no $KNOWN_HOSTS yet: recording the golden image's host key on this first connection"
+    SSH_OPTS+=(-o StrictHostKeyChecking=accept-new)
 fi
-SSH_OPTS=(-i "$KEY" -o "HostKeyAlias=$HOST_KEY_ALIAS" \
-    -o "UserKnownHostsFile=$WIN_KNOWN_HOSTS" \
-    -o "StrictHostKeyChecking=$strict_mode" \
-    -o ConnectTimeout=10 -o LogLevel=ERROR)
 ssh_vm() { ssh "${SSH_OPTS[@]}" "phoenix@$ip" "$@"; }
 
 for i in $(seq 1 60); do

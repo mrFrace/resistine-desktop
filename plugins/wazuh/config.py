@@ -78,20 +78,9 @@ WINDOWS_WAZUH_DIR = r"C:\Program Files (x86)\ossec-agent"
 
 # --- Sysmon ---
 WINDOWS_SYSMON_ZIP_URL = "https://download.sysinternals.com/files/Sysmon.zip"
-# Pinned to a commit, not a branch, and checksummed on download. This XML is
-# applied by an elevated Sysmon install, so whoever controls its contents
-# controls what telemetry the endpoint collects — a compromise of the upstream
-# repo or account could blind our own EDR on every Windows install. A
-# commit-pinned raw URL is immutable on GitHub; the hash is checked anyway so
-# the integrity guarantee does not rest on GitHub alone.
-#
-# To update: bump both constants together and re-verify with
-#   curl -fsSL <url> | shasum -a 256
-WINDOWS_SYSMON_CONFIG_COMMIT = "1836897f12fbd6a0a473665ef6abc34a6b497e31"
-WINDOWS_SYSMON_CONFIG_SHA256 = (
-    "055febc600e6d7448cdf3812307275912927a62b1f94d0d933b64b294bc87162"
-)
-WINDOWS_SYSMON_CONFIG_URL = (
-    "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/"
-    f"{WINDOWS_SYSMON_CONFIG_COMMIT}/sysmonconfig-export.xml"
-)
+# The SwiftOnSecurity sysmon-config, bundled (resources/sysmon/README.md) and
+# pinned: the installer applies this file elevated, so it is never fetched
+# from a moving branch at install time, and a bundle whose copy differs from
+# the pin is refused.
+WINDOWS_SYSMON_CONFIG_RESOURCE = ("resources", "sysmon", "sysmonconfig-export.xml")
+WINDOWS_SYSMON_CONFIG_SHA256 = "055febc600e6d7448cdf3812307275912927a62b1f94d0d933b64b294bc87162"

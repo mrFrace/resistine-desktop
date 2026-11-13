@@ -602,3 +602,31 @@ class TestAgentStatusEdgeCases:
                 result = get_agent_status()
         # Currently returns "Stopped" by fall-through. Verify it's not raw output.
         assert result in ("Running", "Stopped", "Not Installed")
+
+
+@pytest.mark.unit
+class TestBundledSysmonConfig:
+    """The Sysmon configuration is bundled and pinned, never fetched from a
+    moving branch at install time; a bundle off the pin is refused."""
+
+    def test_bundle_matches_the_pin(self, tmp_path):
+        import hashlib
+
+        from plugins.wazuh import config as cfg
+        from plugins.wazuh.agent import wazuh_functions_windows as wf
+        src = os.path.join(*cfg.WINDOWS_SYSMON_CONFIG_RESOURCE)
+        with open(src, "rb") as fh:
+            assert hashlib.sha256(fh.read()).hexdigest() == cfg.WINDOWS_SYSMON_CONFIG_SHA256
+        dest = tmp_path / "sysmonconfig-export.xml"
+        assert wf._bundled_sysmon_config(str(dest)) is True
+        assert dest.read_bytes()[:5] == b"<!--\n"
+
+    def test_tampered_bundle_is_refused(self, tmp_path, monkeypatch):
+        from plugins.wazuh.agent import wazuh_functions_windows as wf
+        bad = tmp_path / "bad.xml"
+        bad.write_text("<Sysmon/>")
+        monkeypatch.setattr("utils.functions.get_resource_path", lambda rel: str(bad))
+        assert wf._bundled_sysmon_config(str(tmp_path / "out.xml")) is False
+        assert not (tmp_path / "out.xml").exists()
+        monkeypatch.setattr("utils.functions.get_resource_path", lambda rel: str(tmp_path / "missing.xml"))
+        assert wf._bundled_sysmon_config(str(tmp_path / "out.xml")) is False
