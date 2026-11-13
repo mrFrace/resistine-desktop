@@ -22,11 +22,18 @@ Backend contract (docs/active-response-P0.md, §llmagent-api response shapes):
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from plugins.devices.api import NOT_AVAILABLE, _list, _s
 
 PREFIX = "/v1/me"
 _AR = "/active-response"
 _MAX_ITEMS = 2000
+
+# The two shipped Tier-1 executables the Desktop may build a policy over
+# (docs/active-response-P2.md §desktop AR-D3). A brand-new script is Tier-2,
+# which is PR/gitops only and never offered here.
+EXECUTABLES = ("block-ip", "disable-account")
 
 
 def _get(path: str, params: dict | None = None):
@@ -49,6 +56,41 @@ def _get(path: str, params: dict | None = None):
         return r.json(), None
     except ValueError:
         return None, "bad json"
+
+
+def _request(method: str, path: str, *, params: dict | None = None,
+             json: dict | None = None):
+    """A write (POST/PUT/DELETE) on ``PREFIX + path`` with the MAS token.
+
+    Mirrors ``_get``'s ``(data, error)`` contract and the P0 error mapping,
+    but surfaces the server's own ``detail``/``error`` message (via
+    ``provisioning._error_detail``) so a gate refusal — "use gitops", a
+    thymus self-test fail, a per-user 403 — reaches the operator verbatim.
+    A 2xx with no body returns ``{}``; 404 (route not deployed, or the
+    config is gone) maps to ``NOT_AVAILABLE``. The desktop only ever holds
+    the MAS token: the write principal is signed server-side (D-3)."""
+    from plugins.vpn.provisioning import (
+        ProvisioningError,
+        _authorized_request,
+        _error_detail,
+    )
+
+    try:
+        r = _authorized_request(method, PREFIX + path, params=params, json=json)
+    except ProvisioningError as e:
+        return None, _s(e, 200)
+    except Exception as e:  # noqa: BLE001 - a transport failure is an error string
+        return None, f"network: {_s(e, 160)}"
+    if r.status_code == 404:
+        return None, NOT_AVAILABLE
+    if r.status_code == 204:
+        return {}, None
+    if not 200 <= r.status_code < 300:
+        return None, _s(_error_detail(r), 200)
+    try:
+        return r.json(), None
+    except ValueError:
+        return {}, None  # a 2xx with an empty/invalid body is still success
 
 
 def _bool(v) -> bool:
@@ -142,9 +184,24 @@ def parse_execution(raw) -> dict | None:
         "timestamp": _s(raw.get("@timestamp") or raw.get("timestamp"), 40),
         "status": _s(raw.get("status"), 32),
         "finding_id": _s(raw.get("finding_id"), 128),
+        "rule_title": _s(raw.get("rule_title") or raw.get("rule_description"), 200),
         "monitor_id": _s(raw.get("monitor_id"), 64),
         "config_id": _s(raw.get("config_id"), 64),
     }
+
+
+def parse_agent(raw) -> dict | None:
+    """One of the caller's own agents from ``GET /v1/me/inventory`` — the
+    universe the blast-radius preview is drawn from."""
+    if not isinstance(raw, dict):
+        if raw in (None, ""):
+            return None
+        return {"agent_id": _s(raw, 16), "agent_name": ""}
+    aid = _s(raw.get("agent_id") or raw.get("id"), 16)
+    name = _s(raw.get("agent_name") or raw.get("name") or raw.get("hostname"), 64)
+    if not aid and not name:
+        return None
+    return {"agent_id": aid, "agent_name": name}
 
 
 def _parse_all(payload, key, parser) -> list:
@@ -231,3 +288,257 @@ def triggered_by(channels: list, monitors: list) -> dict:
         if dest:
             out.setdefault(dest, []).append(m.get("name") or m.get("monitor_id"))
     return out
+
+
+def monitors_by_channel(channels: list, monitors: list) -> dict:
+    """Map each channel ``config_id`` -> the monitor dicts that fire it (not
+    just their names, so ``policy_enabled`` can read ``enabled``)."""
+    out: dict[str, list] = {}
+    for m in monitors or []:
+        dest = m.get("destination_id")
+        if dest:
+            out.setdefault(dest, []).append(m)
+    return out
+
+
+def policy_enabled(channel: dict, monitors_for_channel: list | None) -> bool:
+    """Is this policy actually live? (AR-D8a — the consent ledger must say
+    "No" for a disabled policy.)
+
+    A policy only runs when its **channel** ``is_enabled`` is true and, when
+    it has firing monitors, **at least one** of them is enabled. A channel
+    with no monitors can still be fired ad-hoc, so its liveness rides on the
+    channel flag alone.
+    """
+    if not channel.get("is_enabled", True):
+        return False
+    mons = monitors_for_channel or []
+    if mons and not any(m.get("enabled", True) for m in mons):
+        return False
+    return True
+
+
+def channel_name_by_id(channels: list) -> dict:
+    """Map ``config_id`` -> the channel's display name (for the executions
+    view, AR-D8c, so a thin AR record can name the policy that ran)."""
+    out: dict[str, str] = {}
+    for c in channels or []:
+        cid = c.get("config_id")
+        if cid:
+            out[cid] = c.get("name") or cid
+    return out
+
+
+# --------------------------------------------------------------------------
+# Payload builders (pure) — one place that knows the write wire shapes
+# --------------------------------------------------------------------------
+
+
+def target_field(executable: str, target: str) -> dict:
+    """The AR target keyed by executable: ``block-ip`` carries an ``ip``,
+    ``disable-account`` a ``user``. The manager resolves the real target from
+    a finding; this is what the operator typed."""
+    key = "user" if executable == "disable-account" else "ip"
+    return {key: (target or "").strip()}
+
+
+def build_policy(*, name: str, executable: str, trigger: str,
+                 stateful_timeout, agent_id: str,
+                 config_id: str | None = None) -> dict:
+    """The create/edit body for a Tier-1 policy, pinned to the caller's own
+    agent. **Always** ``location=defined-agent`` (D-2: the Desktop never
+    writes ``location=all``); ``type=stateful`` with a positive timeout."""
+    payload = {
+        "name": (name or "").strip(),
+        "executable": executable,
+        "trigger": (trigger or "").strip(),
+        "type": "stateful",
+        "stateful_timeout": int(stateful_timeout),
+        "location": "defined-agent",
+        "agent_id": (agent_id or "").strip(),
+    }
+    if config_id:
+        payload["config_id"] = config_id
+    return payload
+
+
+def build_fire(agent_id: str, executable: str, target: str) -> dict:
+    """The fire/stop body: which agent, which executable, and the target.
+
+    **Always** pins ``location=defined-agent`` (D-2). The preview and the
+    actual fire are built from this same function, so the blast radius the
+    operator self-tests is the blast radius that is written — never an
+    unpinned fire the manager could default to a wider scope."""
+    return {
+        "agent_id": (agent_id or "").strip(),
+        "executable": executable,
+        "location": "defined-agent",
+        "target": target_field(executable, target),
+    }
+
+
+def validate_policy(*, name: str, executable: str, trigger: str,
+                    stateful_timeout, agent_id: str) -> str | None:
+    """A short reason the policy can't be saved, or None. The server enforces
+    the real gate (AR-S2); this only keeps an obviously-bad form off the wire
+    and mirrors the gate's ``stateful_timeout > 0`` rule."""
+    if not (name or "").strip():
+        return "missing name"
+    if executable not in EXECUTABLES:
+        return "executable must be block-ip or disable-account"
+    if not (trigger or "").strip():
+        return "missing trigger"
+    if not (agent_id or "").strip():
+        return "missing agent"
+    try:
+        if int(stateful_timeout) <= 0:
+            return "stateful timeout must be greater than 0"
+    except (TypeError, ValueError):
+        return "stateful timeout must be a whole number of seconds"
+    return None
+
+
+def validate_fire(agent_id: str, executable: str, target: str) -> str | None:
+    """A short reason an ad-hoc fire/stop can't go, or None."""
+    if not (agent_id or "").strip():
+        return "missing agent"
+    if executable not in EXECUTABLES:
+        return "executable must be block-ip or disable-account"
+    if not (target or "").strip():
+        return "missing target"
+    return None
+
+
+def _as_list(v) -> list:
+    return v if isinstance(v, list) else []
+
+
+def parse_preview(raw) -> dict:
+    """The ``/preview`` result normalised: blast radius + the mandatory thymus
+    self-test. ``self_test.ran`` is False when the server sent none (the UI
+    then blocks save until it has one). Everything untrusted is cut/coerced."""
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def agent_entry(x) -> dict:
+        if isinstance(x, dict):
+            return {
+                "agent_id": _s(x.get("agent_id") or x.get("id"), 16),
+                "agent_name": _s(x.get("agent_name") or x.get("name"), 64),
+                "reason": _s(x.get("reason") or x.get("excluded_reason") or "", 160),
+            }
+        return {"agent_id": _s(x, 16), "agent_name": "", "reason": ""}
+
+    included = [agent_entry(x) for x in _as_list(raw.get("included"))][:_MAX_ITEMS]
+    excluded = [agent_entry(x) for x in _as_list(raw.get("excluded"))][:_MAX_ITEMS]
+    refusals = [
+        _s(x, 200) for x in _as_list(raw.get("refusals")) if x not in (None, "")
+    ][:_MAX_ITEMS]
+    st_raw = raw.get("self_test") if isinstance(raw.get("self_test"), dict) else None
+    st = st_raw or {}
+    # A self_test only counts as "ran" when it carries the actual verdict
+    # field: an empty ``{}`` is not a passed test, it is a missing one, and
+    # must not open the save gate (preview_blocks_save).
+    ran = st_raw is not None and "would_fire_on_self" in st_raw
+    self_test = {
+        "ran": ran,
+        "would_fire_on_self": st.get("would_fire_on_self") is True,
+        "offending": [
+            _s(x, 160) for x in _as_list(st.get("offending")) if x not in (None, "")
+        ][:50],
+    }
+    count = raw.get("count")
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = len(included)
+    return {
+        "count": count,
+        "included": included,
+        "excluded": excluded,
+        "refusals": refusals,
+        "self_test": self_test,
+    }
+
+
+def preview_blocks_save(preview: dict | None) -> str | None:
+    """A short reason the preview blocks the save (so the UI can disable the
+    hold-to-confirm), or None when it's clear to proceed. Mirrors the gate:
+    no self-test ⇒ not shown yet; a self-hit or a refusal ⇒ blocked."""
+    if not isinstance(preview, dict):
+        return "run the preview first"
+    st = preview.get("self_test") or {}
+    if not st.get("ran"):
+        return "self-test has not run"
+    if st.get("would_fire_on_self"):
+        return "self-test: would fire on your own infrastructure"
+    if preview.get("refusals"):
+        return "the gate refused this policy"
+    return None
+
+
+# --------------------------------------------------------------------------
+# Write endpoints (AR-D1b) — CRUD, fire/stop, preview, inventory
+# --------------------------------------------------------------------------
+
+
+def fetch_inventory():
+    """GET /v1/me/inventory: the caller's own agents (for blast-radius).
+    Returns ``(agents, error)``."""
+    payload, err = _get("/inventory")
+    if err:
+        return None, err
+    agents = []
+    for raw in _list(payload, "agents", "devices", "items")[:_MAX_ITEMS]:
+        row = parse_agent(raw)
+        if row:
+            agents.append(row)
+    return agents, None
+
+
+def preview(payload: dict):
+    """POST /v1/me/active-response/preview: blast radius + thymus self-test,
+    no write. Returns ``(parsed_preview, error)``."""
+    data, err = _request("POST", f"{_AR}/preview", json=payload)
+    if err:
+        return None, err
+    return parse_preview(data), None
+
+
+def create_policy(payload: dict):
+    """POST /v1/me/active-response: create a Tier-1 channel+monitor. Refuses a
+    ``location=all`` body on the client too (D-2; the server also refuses)."""
+    if (payload or {}).get("location") == "all":
+        return None, "fleet-wide (all agents) is managed via gitops, not the desktop"
+    return _request("POST", _AR, json=payload)
+
+
+def update_policy(config_id: str, payload: dict):
+    """PUT /v1/me/active-response/{config_id}: edit a policy."""
+    cid = _s(config_id, 64)
+    if not cid:
+        return None, "missing config id"
+    if (payload or {}).get("location") == "all":
+        return None, "fleet-wide (all agents) is managed via gitops, not the desktop"
+    return _request("PUT", f"{_AR}/{quote(cid, safe='')}", json=payload)
+
+
+def delete_policy(config_id: str):
+    """DELETE /v1/me/active-response/{config_id}: remove a policy."""
+    cid = _s(config_id, 64)
+    if not cid:
+        return None, "missing config id"
+    return _request("DELETE", f"{_AR}/{quote(cid, safe='')}")
+
+
+def fire(agent_id: str, executable: str, target: str):
+    """POST /v1/me/active-response/fire: run an AR once on one of the caller's
+    agents ("block this IP now"). Returns ``(result, error)``."""
+    return _request("POST", f"{_AR}/fire",
+                    json=build_fire(agent_id, executable, target))
+
+
+def stop(agent_id: str, executable: str, target: str):
+    """POST /v1/me/active-response/stop: revert an ad-hoc fire early."""
+    return _request("POST", f"{_AR}/stop",
+                    json=build_fire(agent_id, executable, target))

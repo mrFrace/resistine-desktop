@@ -26,15 +26,90 @@ from __future__ import annotations
 import threading
 import time
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
-from gui.page_kit import hairline, muted, section_heading
+from gui.page_kit import (
+    KVList,
+    Page,
+    PageHeader,
+    SettingRow,
+    back_link,
+    hairline,
+    muted,
+    section_heading,
+)
 from gui.qt_widgets import Card, set_pill
 from plugins.devices import active_response_api as ar
 from plugins.devices.api import NOT_AVAILABLE
 
 REFETCH_AFTER_S = 60
+
+# Hold-to-confirm: a state-changing AR write is never one careless click. The
+# press must be held, longer the wider the blast radius (docs/active-
+# response-P2.md AR-D3). Capped so a large fleet stays usable.
+HOLD_BASE_MS = 1200
+HOLD_PER_AGENT_MS = 400
+HOLD_MAX_MS = 5000
+
+
+def hold_duration_ms(n_agents: int) -> int:
+    """How long the confirm must be held for ``n_agents`` in the blast radius."""
+    n = max(1, int(n_agents or 1))
+    return min(HOLD_MAX_MS, HOLD_BASE_MS + (n - 1) * HOLD_PER_AGENT_MS)
+
+
+class HoldButton(QPushButton):
+    """A button that fires ``confirmed`` only after being held down for its
+    full duration; releasing early resets it. The label counts up so the
+    operator sees the commitment they're making."""
+
+    confirmed = pyqtSignal()
+
+    def __init__(self, label: str, duration_ms: int = HOLD_BASE_MS):
+        super().__init__(label)
+        self._label = label
+        self._duration_ms = max(200, int(duration_ms))
+        self._elapsed = 0
+        self._step = 50
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._timer = QTimer(self)
+        self._timer.setInterval(self._step)
+        self._timer.timeout.connect(self._tick)
+        self.pressed.connect(self._start)
+        self.released.connect(self._reset)
+
+    def set_duration_ms(self, duration_ms: int) -> None:
+        self._duration_ms = max(200, int(duration_ms))
+
+    def _start(self) -> None:
+        if not self.isEnabled():
+            return
+        self._elapsed = 0
+        self._timer.start()
+
+    def _tick(self) -> None:
+        self._elapsed += self._step
+        pct = min(100, int(100 * self._elapsed / self._duration_ms))
+        self.setText(f"{self._label}  ·  {pct}%")
+        if self._elapsed >= self._duration_ms:
+            self._timer.stop()
+            self.setText(self._label)
+            self.confirmed.emit()
+
+    def _reset(self) -> None:
+        self._timer.stop()
+        self._elapsed = 0
+        self.setText(self._label)
 
 
 def _plain(lbl: QLabel) -> QLabel:
@@ -120,6 +195,13 @@ class ResponsesTab:
             if r.get("this_machine"):
                 return (r.get("agent_id") or None), r.get("hostname")
         return None, None
+
+    def _own_agent(self):
+        """The caller's own agent a write would target: the ledger device when
+        it carries an ``agent_id`` (a Desktop AR write is ``location=defined-
+        agent``, D-2), else (None, host) so the UI can explain why it can't."""
+        aid, host = self._ledger_device()
+        return (aid, host) if aid else (None, host)
 
     # ---- data --------------------------------------------------------------
 
@@ -255,7 +337,14 @@ class ResponsesTab:
     # ---- section 1: AR policies -------------------------------------------
 
     def _section_policies(self, col, channels) -> None:
-        col.addWidget(section_heading(self.t("section_policies")))
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(section_heading(self.t("section_policies")))
+        head.addStretch(1)
+        head.addWidget(self._new_policy_button())
+        col.addLayout(head)
+        col.addSpacing(4)
+        col.addWidget(_plain(muted(self.t("gitops_note"))))
         col.addSpacing(10)
         if not channels:
             col.addWidget(_plain(muted(self.t("none_policies"))))
@@ -263,10 +352,11 @@ class ResponsesTab:
         fired_by = ar.triggered_by(channels, self._monitors or [])
         columns = [
             (self.t("col_policy"), 0, 2),
-            (self.t("col_location"), 90, 0),
+            (self.t("col_location"), 130, 0),
             (self.t("col_type"), 120, 0),
-            (self.t("col_affects"), 84, 0),
+            (self.t("col_affects"), 70, 0),
             (self.t("col_triggered_by"), 0, 2),
+            (self.t("col_manage"), 110, 0),
         ]
         rows = []
         for c in channels:
@@ -287,12 +377,53 @@ class ResponsesTab:
             triggered = ", ".join(m for m in monitors if m) if monitors else self.t("triggered_none")
             rows.append([
                 policy,
-                _label(c["location"] or "—"),
+                _label(c["location"] or "—", wrap=True),
                 _label(type_text),
                 affects,
                 _label(triggered, hint=not monitors, wrap=True),
+                self._manage_cell(c),
             ])
         col.addWidget(self._table(columns, rows))
+
+    def _new_policy_button(self) -> QWidget:
+        """The "New policy" affordance; disabled (with a reason) when no own
+        agent is in scope, since a Desktop policy is always ``defined-agent``."""
+        aid, host = self._own_agent()
+        btn = QPushButton(self.t("new_policy"))
+        btn.setObjectName("SurfaceBtn")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if aid:
+            btn.setToolTip(self.t("new_policy_for", host=host or aid))
+            btn.clicked.connect(lambda: self._open_policy_form(None))
+        else:
+            btn.setEnabled(False)
+            btn.setToolTip(self.t("need_own_agent"))
+        return btn
+
+    def _manage_cell(self, channel) -> QWidget:
+        """Edit/Delete buttons for a policy that carries a ``config_id``. The
+        server re-checks per-user scope on the write; this only offers it."""
+        cell = QWidget()
+        cell.setObjectName("Transparent")
+        h = QHBoxLayout(cell)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(6)
+        if not channel.get("config_id"):
+            h.addWidget(_label("—", hint=True))
+            h.addStretch(1)
+            return cell
+        edit = QPushButton(self.t("edit"))
+        edit.setObjectName("SurfaceBtn")
+        edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit.clicked.connect(lambda _=False, c=channel: self._open_policy_form(c))
+        delete = QPushButton(self.t("delete"))
+        delete.setObjectName("SurfaceBtn")
+        delete.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete.clicked.connect(lambda _=False, c=channel: self._open_delete(c))
+        h.addWidget(edit)
+        h.addWidget(delete)
+        h.addStretch(1)
+        return cell
 
     # ---- section 2: consent ledger ----------------------------------------
 
@@ -317,10 +448,16 @@ class ResponsesTab:
             (self.t("col_executable"), 0, 2),
             (self.t("col_would_run"), 110, 0),
         ]
+        mon_map = ar.monitors_by_channel(channels, self._monitors or [])
         rows = []
         for c in channels:
-            verdict = ar.channel_runs_on(c, aid)
-            kind, key = self._RUN_PILL.get(verdict, ("info", "run_no"))
+            # AR-D8a: a disabled channel (or one whose only monitors are all
+            # disabled) would not run, whatever its location says.
+            if not ar.policy_enabled(c, mon_map.get(c["config_id"])):
+                kind, key = "info", "run_no_disabled"
+            else:
+                verdict = ar.channel_runs_on(c, aid)
+                kind, key = self._RUN_PILL.get(verdict, ("info", "run_no"))
             rows.append([
                 _label(c["name"], bold=True, wrap=True),
                 _label(c["executable"] or "—", wrap=True),
@@ -332,8 +469,21 @@ class ResponsesTab:
 
     _CMD_PILL = {"enable": "error", "disable": "ok"}
 
+    # A command whose effect is still in place and can be stopped early. The
+    # empty command is excluded: a thin/aged-out row with no command is not a
+    # live block to stop.
+    _ACTIVE_CMDS = {"enable", "block", "blocked", "add", "fire"}
+    # Statuses where the AR is no longer in effect (failed to apply, or already
+    # reverted/expired): no Stop offered.
+    _DONE_STATUS = {"failed", "error", "disabled", "reverted", "expired", "stopped"}
+
     def _section_executions(self, col, executions) -> None:
-        col.addWidget(section_heading(self.t("section_executions")))
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.addWidget(section_heading(self.t("section_executions")))
+        head.addStretch(1)
+        head.addWidget(self._fire_now_button())
+        col.addLayout(head)
         col.addSpacing(10)
         _, host = self._selected()
         if host:
@@ -343,13 +493,14 @@ class ResponsesTab:
             key = "none_executions_device" if host else "none_executions"
             col.addWidget(_plain(muted(self.t(key))))
             return
+        names = ar.channel_name_by_id(self._channels or [])
         columns = [
             (self.t("col_agent"), 0, 2),
             (self.t("col_action"), 0, 2),
             (self.t("col_target"), 120, 0),
             (self.t("col_time"), 150, 0),
             (self.t("col_status"), 90, 0),
-            (self.t("col_finding"), 0, 1),
+            (self.t("col_manage"), 90, 0),
         ]
         rows = []
         for e in executions:
@@ -362,22 +513,538 @@ class ResponsesTab:
             av = QVBoxLayout(action)
             av.setContentsMargins(0, 0, 0, 0)
             av.setSpacing(2)
+            # AR-D8c: lead with the executable, name the policy it came from.
             av.addWidget(_label(e["executable"] or "—", bold=True, wrap=True))
+            channel = names.get(e["config_id"])
+            if channel:
+                av.addWidget(_label(channel, hint=True, wrap=True))
             if e["command"]:
                 av.addWidget(_pill_cell(self._CMD_PILL.get(e["command"], "info"),
                                         e["command"]))
+            # AR-D8c: the status badge is never empty.
+            status_text = e["status"] or (e["command"] and self.t("status_active")) \
+                or self.t("status_unknown")
             status_kind = {
                 "completed": "ok", "success": "ok", "done": "ok",
                 "failed": "error", "error": "error",
                 "pending": "warning", "staged": "warning",
                 "acked": "info", "armed": "warning",
-            }.get(e["status"].lower(), "info")
+            }.get(e["status"].lower(), "warning" if not e["status"] else "info")
+            # AR-D8d: Target + the finding it came from (rule_title from the
+            # event->finding join); keep the finding id reachable as a tooltip.
+            target_cell = _stacked(e["target"] or "—", e["rule_title"])
+            if e["finding_id"]:
+                target_cell.setToolTip(self.t("finding_tooltip", id=e["finding_id"]))
             rows.append([
                 agent,
                 action,
-                _label(e["target"] or "—", wrap=True),
+                target_cell,
                 _label(e["timestamp"] or "—", hint=True),
-                _pill_cell(status_kind, e["status"] or "—"),
-                _label(e["finding_id"] or "—", hint=True, wrap=True),
+                _pill_cell(status_kind, status_text),
+                self._exec_manage_cell(e),
             ])
         col.addWidget(self._table(columns, rows))
+
+    def _fire_now_button(self) -> QWidget:
+        """"Block an IP now" for the device in scope (AR-D7)."""
+        aid, host = self._own_agent()
+        btn = QPushButton(self.t("fire_now"))
+        btn.setObjectName("SurfaceBtn")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        if aid:
+            btn.setToolTip(self.t("fire_now_for", host=host or aid))
+            btn.clicked.connect(lambda: self._open_fire_form())
+        else:
+            btn.setEnabled(False)
+            btn.setToolTip(self.t("need_own_agent"))
+        return btn
+
+    def _exec_manage_cell(self, e) -> QWidget:
+        """A Stop button for an execution that is still in effect and that we
+        can address (agent + executable + target known)."""
+        cell = QWidget()
+        cell.setObjectName("Transparent")
+        h = QHBoxLayout(cell)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        stoppable = (
+            e["agent_id"] and e["target"]
+            and e["executable"] in ar.EXECUTABLES
+            and e["command"] in self._ACTIVE_CMDS
+            and e["status"].lower() not in self._DONE_STATUS
+        )
+        if stoppable:
+            stop = QPushButton(self.t("stop"))
+            stop.setObjectName("SurfaceBtn")
+            stop.setCursor(Qt.CursorShape.PointingHandCursor)
+            stop.clicked.connect(lambda _=False, ex=e: self._open_stop(ex))
+            h.addWidget(stop)
+        else:
+            h.addWidget(_label("—", hint=True))
+        h.addStretch(1)
+        return cell
+
+    # ---- write flows: navigation + notification helpers -------------------
+
+    def _push(self, page: QWidget) -> None:
+        push = getattr(self.ctx, "push", None)
+        if push is not None:
+            push(page)
+
+    def _pop(self) -> None:
+        pop = getattr(self.ctx, "pop", None)
+        if pop is not None:
+            pop()
+
+    def _after(self, fn) -> None:
+        """Hop back to the UI thread (ctx.app.after), falling back to a direct
+        call so the logic is still exercised under a synchronous test app."""
+        app = getattr(self.ctx, "app", None)
+        if app is not None and hasattr(app, "after"):
+            app.after(0, fn)
+        else:
+            fn()
+
+    def _notify(self, text: str) -> None:
+        app = getattr(self.ctx, "app", None)
+        notify = getattr(app, "show_notification", None)
+        if notify is not None:
+            notify(text, type="warning")
+
+    def _reload(self) -> None:
+        """Force the next refresh to re-fetch after a write changed state."""
+        self._loaded_at = 0.0
+        self._fetch()
+
+    @staticmethod
+    def _field(title: str, control: QWidget, hint: str = "") -> QWidget:
+        return SettingRow(title, hint, control, stacked=True)
+
+    # ---- write flows: the preview + self-test panel -----------------------
+
+    def _fill_panel(self, panel: Card, data, err, loading: bool = False) -> None:
+        """(Re)draw the blast-radius + mandatory self-test panel."""
+        while panel.body.count():
+            item = panel.body.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        if loading:
+            panel.body.addWidget(_plain(muted(self.t("previewing"))))
+            return
+        if err:
+            panel.body.addWidget(_plain(muted(self.t("preview_error", error=err))))
+            return
+        if not data:
+            panel.body.addWidget(_plain(muted(self.t("preview_hint"))))
+            return
+        panel.body.addWidget(_label(self.t("blast_radius", n=data["count"]), bold=True))
+        for a in data["included"][:50]:
+            panel.body.addWidget(_label("•  " + (a["agent_name"] or a["agent_id"] or "—"),
+                                        hint=True, wrap=True))
+        if not data["included"]:
+            panel.body.addWidget(_label(self.t("blast_none"), hint=True))
+        if data["excluded"]:
+            panel.body.addWidget(_label(self.t("excluded_head"), bold=True))
+            for a in data["excluded"][:50]:
+                who = a["agent_name"] or a["agent_id"] or "—"
+                reason = a["reason"] or "—"
+                panel.body.addWidget(_label(f"•  {who}: {reason}", hint=True, wrap=True))
+        if data["refusals"]:
+            panel.body.addWidget(_label(self.t("refusals_head"), bold=True))
+            for r in data["refusals"][:50]:
+                panel.body.addWidget(_label("•  " + r, wrap=True))
+        panel.body.addWidget(hairline())
+        st = data["self_test"]
+        if not st["ran"]:
+            panel.body.addWidget(_pill_cell("warning", self.t("selftest_missing")))
+        elif st["would_fire_on_self"]:
+            panel.body.addWidget(_pill_cell("error", self.t("selftest_fail")))
+            for o in st["offending"][:50]:
+                panel.body.addWidget(_label("•  " + o, hint=True, wrap=True))
+        else:
+            panel.body.addWidget(_pill_cell("ok", self.t("selftest_pass")))
+
+    # ---- write flows: create / edit a Tier-1 policy (AR-D3) ---------------
+
+    def _open_policy_form(self, channel) -> None:
+        aid, host = self._own_agent()
+        if not aid:
+            self._notify(self.t("need_own_agent"))
+            return
+        editing = bool(channel and channel.get("config_id"))
+        state = {"preview": None, "gen": 0}
+
+        page = Page()
+        page.add(back_link(self.ctx.t("title"), self._pop))
+        page.add(PageHeader(
+            self.t("edit_policy") if editing else self.t("new_policy"),
+            self.t("policy_for", host=host or aid),
+        ))
+
+        page.section(self.t("form_details"))
+        name = QLineEdit((channel or {}).get("name", "") if editing else "")
+        name.setPlaceholderText(self.t("name_placeholder"))
+        name.setMinimumHeight(34)
+        page.add(self._field(self.t("field_name"), name))
+
+        execu = QComboBox()
+        for ex in ar.EXECUTABLES:
+            execu.addItem(ex, ex)
+        if editing:
+            idx = execu.findData((channel or {}).get("executable"))
+            if idx >= 0:
+                execu.setCurrentIndex(idx)
+        page.add(self._field(self.t("field_executable"), execu))
+
+        trigger = QLineEdit()
+        trigger.setPlaceholderText(self.t("trigger_placeholder"))
+        trigger.setMinimumHeight(34)
+        page.add(self._field(self.t("field_trigger"), trigger, hint=self.t("trigger_hint")))
+
+        timeout = QSpinBox()
+        timeout.setRange(1, 86400)
+        timeout.setSuffix(" s")
+        try:
+            timeout.setValue(int((channel or {}).get("stateful_timeout") or 600))
+        except (TypeError, ValueError):
+            timeout.setValue(600)
+        page.add(self._field(self.t("field_timeout"), timeout, hint=self.t("timeout_hint")))
+
+        page.spacing(6)
+        page.add(_plain(muted(self.t("location_note", host=host or aid, agent=aid))))
+        page.add(_plain(muted(self.t("gitops_note"))))
+
+        page.section(self.t("section_preview"))
+        panel = Card()
+        self._fill_panel(panel, None, None)
+        page.add(panel)
+
+        preview_btn = QPushButton(self.t("run_preview"))
+        preview_btn.setObjectName("SurfaceBtn")
+        preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save = HoldButton(self.t("hold_save"))
+        save.setEnabled(False)
+        result = _plain(muted(""))
+        result.hide()
+
+        def build():
+            return ar.build_policy(
+                name=name.text(), executable=execu.currentData(),
+                trigger=trigger.text(), stateful_timeout=timeout.value(),
+                agent_id=aid,
+                config_id=(channel or {}).get("config_id") if editing else None,
+            )
+
+        def invalidate(*_a):
+            # A field changed: the shown preview no longer describes what would
+            # be written. Bump the generation so an in-flight preview result is
+            # ignored, and re-lock the save (TOCTOU on the self-test gate).
+            state["gen"] += 1
+            state["preview"] = None
+            save.setEnabled(False)
+
+        def do_preview():
+            err = ar.validate_policy(
+                name=name.text(), executable=execu.currentData(),
+                trigger=trigger.text(), stateful_timeout=timeout.value(), agent_id=aid)
+            if err:
+                self._fill_panel(panel, None, err)
+                save.setEnabled(False)
+                return
+            preview_btn.setEnabled(False)
+            self._fill_panel(panel, None, None, loading=True)
+            payload = build()
+            gen = state["gen"]
+
+            def work():
+                data, perr = ar.preview(payload)
+                self._after(lambda: done(data, perr, gen))
+
+            threading.Thread(target=work, daemon=True, name="ar-preview").start()
+
+        def done(data, perr, gen):
+            try:
+                preview_btn.setEnabled(True)
+                if gen != state["gen"]:
+                    return  # a field changed after this preview started: stale
+                state["preview"] = data
+                self._fill_panel(panel, data, perr)
+                block = perr or ar.preview_blocks_save(data)
+                save.setEnabled(not block)
+                if data:
+                    save.set_duration_ms(hold_duration_ms(data.get("count", 1)))
+            except RuntimeError:
+                pass
+
+        def commit():
+            if ar.preview_blocks_save(state["preview"]):
+                return
+            save.setEnabled(False)
+            preview_btn.setEnabled(False)
+            result.setText(self.t("saving"))
+            result.show()
+            payload = build()
+
+            def work():
+                if editing:
+                    _data, werr = ar.update_policy(channel["config_id"], payload)
+                else:
+                    _data, werr = ar.create_policy(payload)
+                self._after(lambda: saved(werr))
+
+            threading.Thread(target=work, daemon=True, name="ar-save").start()
+
+        def saved(werr):
+            if werr:
+                try:
+                    result.setText(self.t("save_failed", error=werr))
+                    preview_btn.setEnabled(True)
+                except RuntimeError:
+                    pass
+                return
+            self._reload()
+            self._pop()
+
+        preview_btn.clicked.connect(do_preview)
+        save.confirmed.connect(commit)
+        name.textChanged.connect(invalidate)
+        trigger.textChanged.connect(invalidate)
+        execu.currentIndexChanged.connect(invalidate)
+        timeout.valueChanged.connect(invalidate)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addWidget(preview_btn)
+        actions.addWidget(save)
+        actions.addStretch(1)
+        page.spacing(14)
+        page.add_layout(actions)
+        page.spacing(10)
+        page.add(result)
+        page.stretch()
+        self._push(page.widget)
+
+    # ---- write flows: delete a policy -------------------------------------
+
+    def _open_delete(self, channel) -> None:
+        page = Page()
+        page.add(back_link(self.ctx.t("title"), self._pop))
+        page.add(PageHeader(self.t("delete_policy"), channel.get("name", "")))
+        page.section(self.t("section_remove"))
+        page.add(_plain(muted(self.t("delete_body", name=channel.get("name", "")))))
+        page.spacing(12)
+        confirm = HoldButton(self.t("hold_delete"))
+        result = _plain(muted(""))
+        result.hide()
+
+        def commit():
+            confirm.setEnabled(False)
+            result.setText(self.t("deleting"))
+            result.show()
+
+            def work():
+                _data, werr = ar.delete_policy(channel.get("config_id"))
+                self._after(lambda: done(werr))
+
+            threading.Thread(target=work, daemon=True, name="ar-delete").start()
+
+        def done(werr):
+            # NOT_AVAILABLE here is ambiguous (route undeployed vs config gone),
+            # so it is surfaced as a failure rather than reported as a delete
+            # that may not have happened. Only a clean 2xx counts as removed.
+            if werr:
+                try:
+                    confirm.setEnabled(True)
+                    reason = self.t("not_available_short") if werr == NOT_AVAILABLE else werr
+                    result.setText(self.t("delete_failed", error=reason))
+                except RuntimeError:
+                    pass
+                return
+            self._reload()
+            self._pop()
+
+        confirm.confirmed.connect(commit)
+        page.add(confirm)
+        page.spacing(10)
+        page.add(result)
+        page.stretch()
+        self._push(page.widget)
+
+    # ---- write flows: fire an AR ad-hoc (AR-D7) ---------------------------
+
+    def _open_fire_form(self, executable: str = "block-ip", target: str = "") -> None:
+        aid, host = self._own_agent()
+        if not aid:
+            self._notify(self.t("need_own_agent"))
+            return
+        state = {"preview": None, "gen": 0}
+
+        page = Page()
+        page.add(back_link(self.ctx.t("title"), self._pop))
+        page.add(PageHeader(self.t("fire_now"), self.t("fire_for", host=host or aid)))
+
+        page.section(self.t("form_details"))
+        execu = QComboBox()
+        for ex in ar.EXECUTABLES:
+            execu.addItem(ex, ex)
+        idx = execu.findData(executable)
+        if idx >= 0:
+            execu.setCurrentIndex(idx)
+        page.add(self._field(self.t("field_executable"), execu))
+
+        target_field = QLineEdit(target)
+        target_field.setMinimumHeight(34)
+        page.add(self._field(self.t("field_target"), target_field))
+
+        def target_hint():
+            key = "target_user_hint" if execu.currentData() == "disable-account" \
+                else "target_ip_hint"
+            target_field.setPlaceholderText(self.t(key))
+
+        target_hint()
+        page.spacing(6)
+        page.add(_plain(muted(self.t("location_note", host=host or aid, agent=aid))))
+
+        page.section(self.t("section_preview"))
+        panel = Card()
+        self._fill_panel(panel, None, None)
+        page.add(panel)
+
+        preview_btn = QPushButton(self.t("run_preview"))
+        preview_btn.setObjectName("SurfaceBtn")
+        preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fire_btn = HoldButton(self.t("hold_fire"))
+        fire_btn.setEnabled(False)
+        result = _plain(muted(""))
+        result.hide()
+
+        def invalidate(*_a):
+            state["gen"] += 1
+            state["preview"] = None
+            fire_btn.setEnabled(False)
+
+        def do_preview():
+            err = ar.validate_fire(aid, execu.currentData(), target_field.text())
+            if err:
+                self._fill_panel(panel, None, err)
+                fire_btn.setEnabled(False)
+                return
+            preview_btn.setEnabled(False)
+            self._fill_panel(panel, None, None, loading=True)
+            # build_fire already pins location=defined-agent, so the preview
+            # and the fire below are the same payload shape.
+            payload = ar.build_fire(aid, execu.currentData(), target_field.text())
+            gen = state["gen"]
+
+            def work():
+                data, perr = ar.preview(payload)
+                self._after(lambda: done(data, perr, gen))
+
+            threading.Thread(target=work, daemon=True, name="ar-fire-preview").start()
+
+        def done(data, perr, gen):
+            try:
+                preview_btn.setEnabled(True)
+                if gen != state["gen"]:
+                    return  # a field changed after this preview started: stale
+                state["preview"] = data
+                self._fill_panel(panel, data, perr)
+                block = perr or ar.preview_blocks_save(data)
+                fire_btn.setEnabled(not block)
+                if data:
+                    fire_btn.set_duration_ms(hold_duration_ms(data.get("count", 1)))
+            except RuntimeError:
+                pass
+
+        def commit():
+            if ar.preview_blocks_save(state["preview"]):
+                return
+            fire_btn.setEnabled(False)
+            preview_btn.setEnabled(False)
+            result.setText(self.t("firing"))
+            result.show()
+            ex, tgt = execu.currentData(), target_field.text()
+
+            def work():
+                _data, werr = ar.fire(aid, ex, tgt)
+                self._after(lambda: fired(werr))
+
+            threading.Thread(target=work, daemon=True, name="ar-fire").start()
+
+        def fired(werr):
+            if werr:
+                try:
+                    result.setText(self.t("fire_failed", error=werr))
+                    preview_btn.setEnabled(True)
+                except RuntimeError:
+                    pass
+                return
+            self._reload()
+            self._pop()
+
+        preview_btn.clicked.connect(do_preview)
+        fire_btn.confirmed.connect(commit)
+        execu.currentIndexChanged.connect(lambda *_: (target_hint(), invalidate()))
+        target_field.textChanged.connect(invalidate)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        actions.addWidget(preview_btn)
+        actions.addWidget(fire_btn)
+        actions.addStretch(1)
+        page.spacing(14)
+        page.add_layout(actions)
+        page.spacing(10)
+        page.add(result)
+        page.stretch()
+        self._push(page.widget)
+
+    # ---- write flows: stop an active AR (AR-D7) ---------------------------
+
+    def _open_stop(self, e) -> None:
+        page = Page()
+        page.add(back_link(self.ctx.t("title"), self._pop))
+        page.add(PageHeader(self.t("stop_title"), e.get("target", "")))
+        page.section(self.t("section_remove"))
+        kv = KVList()
+        kv.add(self.t("field_target"), e.get("target") or "—")
+        kv.add(self.t("field_executable"), e.get("executable") or "—")
+        kv.add(self.t("col_agent"), e.get("agent_name") or e.get("agent_id") or "—")
+        for lbl in kv.findChildren(QLabel):
+            lbl.setTextFormat(Qt.TextFormat.PlainText)
+        page.add(kv)
+        page.spacing(12)
+        confirm = HoldButton(self.t("hold_stop"))
+        result = _plain(muted(""))
+        result.hide()
+
+        def commit():
+            confirm.setEnabled(False)
+            result.setText(self.t("stopping"))
+            result.show()
+
+            def work():
+                _data, werr = ar.stop(e.get("agent_id"), e.get("executable"),
+                                      e.get("target"))
+                self._after(lambda: done(werr))
+
+            threading.Thread(target=work, daemon=True, name="ar-stop").start()
+
+        def done(werr):
+            if werr:
+                try:
+                    confirm.setEnabled(True)
+                    result.setText(self.t("stop_failed", error=werr))
+                except RuntimeError:
+                    pass
+                return
+            self._reload()
+            self._pop()
+
+        confirm.confirmed.connect(commit)
+        page.add(confirm)
+        page.spacing(10)
+        page.add(result)
+        page.stretch()
+        self._push(page.widget)
