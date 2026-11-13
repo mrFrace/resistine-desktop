@@ -734,11 +734,27 @@ ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
 # runtime exceptions) is taken from the checked-in file as-is.
 if [ -f "$ENTITLEMENTS_FILE" ]; then
     APP_DIST_ENTITLEMENTS=$(mktemp -t phoenix-app-entitlements).plist
-    cp "$ENTITLEMENTS_FILE" "$APP_DIST_ENTITLEMENTS"
-    plutil -remove com.apple.security.application-groups "$APP_DIST_ENTITLEMENTS" >/dev/null 2>&1 || true
-    plutil -insert com.apple.security.application-groups -array "$APP_DIST_ENTITLEMENTS"
-    plutil -insert com.apple.security.application-groups -string "$APP_GROUP" -append "$APP_DIST_ENTITLEMENTS"
-    plutil -insert com.apple.security.application-groups -string "$TEAM_ID.*" -append "$APP_DIST_ENTITLEMENTS"
+    # plistlib, not plutil: plutil treats "." in a key path as a nesting
+    # separator, so com.apple.security.application-groups would be read as
+    # com -> apple -> security -> application-groups and silently produce a
+    # malformed entitlements file.
+    APP_GROUP="$APP_GROUP" TEAM_ID="$TEAM_ID" \
+    SRC="$ENTITLEMENTS_FILE" DEST="$APP_DIST_ENTITLEMENTS" \
+    python3 - <<'ENTPY' || { echo "  Error: could not generate app entitlements"; exit 1; }
+import os
+import plistlib
+
+with open(os.environ["SRC"], "rb") as fh:
+    ent = plistlib.load(fh)
+
+ent["com.apple.security.application-groups"] = [
+    os.environ["APP_GROUP"],
+    os.environ["TEAM_ID"] + ".*",
+]
+
+with open(os.environ["DEST"], "wb") as fh:
+    plistlib.dump(ent, fh)
+ENTPY
     ENTITLEMENTS_FILE="$APP_DIST_ENTITLEMENTS"
     echo "  - App entitlements: group $APP_GROUP, team $TEAM_ID"
 fi
