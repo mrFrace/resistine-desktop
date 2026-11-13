@@ -1089,8 +1089,9 @@ class Plugin(BasePlugin):
     def _alerts_data() -> dict:
         try:
             from plugins.chat import siem_alerts
+            from plugins.dashboard import digest
             st = siem_alerts.store()
-            return recent_alerts.panel_data(st.all(), st.unread)
+            return recent_alerts.panel_data(st.all(), st.unread, digest=digest.enabled())
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Dashboard alerts unavailable: {e}")
             return {"badge": ("info", "Unavailable"), "rows": {"Alerts": "Alerts are unavailable."}}
@@ -1137,10 +1138,10 @@ class Plugin(BasePlugin):
         if plugin is not None:
             plugin.show()
 
-    def _open_alert(self, event_id: str) -> None:
+    def _open_alert(self, event_id: str | None) -> None:
         plugin = self._alerts_plugin()
         if plugin is not None:
-            plugin.show(event_id)
+            plugin.show(event_id)  # None (a digest row): the list
 
     def _ask_ai_text(self, text: str) -> None:
         self._start_chat(lambda chat: chat.ask(text))

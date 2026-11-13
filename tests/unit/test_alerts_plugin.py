@@ -156,3 +156,41 @@ def test_sidebar_button_returns_to_the_list(qapp, isolated_settings, monkeypatch
     plugin.on_screen_shown()
     assert screen.currentIndex() == 0 and screen.count() == 1 and plugin._detail is None
     plugin.destroy()
+
+
+@pytest.mark.unit
+def test_digest_folds_quiet_days_and_opens_them(qapp, isolated_settings, monkeypatch, tmp_path):
+    from gui.page_kit import MenuRow
+    from plugins.dashboard import digest
+    plugin, siem_alerts, _ = _plugin(monkeypatch, tmp_path)
+    import time as _time
+    now = _time.time()
+    siem_alerts.publish("!r", "$h", HUNT, int((now - 600) * 1000))          # medium: folded
+    siem_alerts.publish("!r", "$r", RESULT_FP, int((now - 300) * 1000))     # info: folded
+    siem_alerts.publish("!r", "$t", TRIAGE, int((now - 60) * 1000))         # high: its own row
+    screen = plugin.create_main_screen()
+    rows, header = plugin._list
+    assert len(_titles(rows)) == 3
+    digest.set_enabled(True)
+    plugin.repaint()
+    titles = _titles(rows)
+    assert titles[0].startswith("25 alerts on AnubisAI") and titles[1] == "Today · 2 alerts"
+    assert header.subtitle.text() == "3 alerts, newest first · daily digest"
+    day_row = [r for r in rows.findChildren(MenuRow) if r.text() == "Today · 2 alerts"][0]
+    assert day_row._hint.text() == "1 medium · 1 info · AnubisAI"
+    day_row.clicked.emit()
+    assert plugin._day is not None and screen.count() == 2
+    day_titles = [r.text() for r in plugin._day.findChildren(MenuRow)]
+    assert day_titles[0].startswith("False positive") and day_titles[1].startswith("Investigating")
+    # An alert opened from the day page goes back to the day, not the list.
+    plugin.open_alert("$h")
+    assert screen.count() == 3 and plugin._day is not None
+    plugin._close_detail(animate=False)
+    assert screen.currentWidget() is plugin._day and screen.count() == 2
+    plugin.on_screen_shown()
+    assert screen.count() == 1 and plugin._day is None
+    assert siem_alerts.store().unread == 3  # folding reads nothing (the screen is hidden)
+    digest.set_enabled(False)
+    plugin.repaint()
+    assert len(_titles(rows)) == 3
+    plugin.destroy()
