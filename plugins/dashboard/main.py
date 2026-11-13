@@ -785,6 +785,7 @@ class Plugin(BasePlugin):
         self._grid: _PanelGrid | None = None
         self._vpn_switch = None
         self._lead: QLabel | None = None
+        self._posting = False  # the weekly post is on its way
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
@@ -1050,9 +1051,38 @@ class Plugin(BasePlugin):
         if lead is None:
             return
         try:
-            lead.setText(self.lead_text())
+            text = self.lead_text()
+            lead.setText(text)
         except RuntimeError:  # label deleted by a rebuild
             self._lead = None
+            return
+        self._maybe_post_weekly(text)
+
+    def _maybe_post_weekly(self, text: str) -> None:
+        """Once a week, the sentence goes to the SIEM alerts room too. Only
+        from a complete picture: every tile probed at least once."""
+        from utils import settings as app_settings
+
+        if self._posting or not app_settings.get("auth", "logged_in", False):
+            return
+        if any(self._data.get(k) is None for k in weekly.TILES):
+            return
+        weekly.first_post_clock()
+        if not weekly.post_due(app_settings.get("dashboard", "weekly_posted_at")):
+            return
+        self._posting = True
+
+        def work():
+            try:
+                from plugins.chat import matrix_transport
+                if matrix_transport.post_to_alerts_room(weekly.post_text(text)):
+                    weekly.mark_posted()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Dashboard weekly post: {e}")
+            finally:
+                self._posting = False
+
+        threading.Thread(target=work, name="weekly-post", daemon=True).start()
 
     # ---- recent alerts (SIEM alerts from siemgent over Matrix) --------------
     @staticmethod
