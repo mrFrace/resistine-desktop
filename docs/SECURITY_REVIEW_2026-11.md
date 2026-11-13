@@ -74,3 +74,15 @@ on. Fixed items landed on `hardening/fable-sweep`; the full unit suite
    privilege boundary crossed; resolved for the writer side already).
 10. **libolm/vodozemac**: chat E2EE bundles matrix-nio with vodozemac —
     confirm no libolm fallback ships in the frozen builds.
+
+## Follow-up — 2026-11-13: new surfaces since the sweep, and their guards
+
+| Surface | Guard | Tests |
+|---------|-------|-------|
+| Diagnostics export to the clipboard (`utils/diagnostics.py`) | `redact()`: http_trace masks + `PrivateKey =`/bearer/`ENC:` values, WireGuard-key, recovery-key and long-blob shapes; nothing read from the secret store | `tests/unit/test_diagnostics.py` |
+| Job store `jobs.json` and codes in chat (`utils/jobs.py`) | 0600, exclusive-create temp + `os.replace`; a code attaches local details to that turn only; the answer is rendered untrusted | `test_jobs.py`, `test_chat_plugin.py::TestJobCodes` |
+| Weekly sentence posted to the SIEM DM | counts and tile names only; the bot reads reactions only; the listener keeps the bot's messages only, so the post never returns as an alert | `test_chat_matrix_transport.py::TestPostToAlertsRoom` |
+| Daily alert digest | view only; critical/high always on their own row; the store is untouched; digest lines are counts and host names as plain text | `test_dashboard_digest.py`, `test_alerts_plugin.py` |
+| Undo of a job (`BasePlugin.undo`) | closed set per plugin, argument re-validated, same privileged path as the forward action, never the identity wipe; only the newest done job of a kind | `test_plugin_undo.py` |
+| "Fix all" (`utils/fixes.py`) | a queue of the plugins' own actions, ids without arguments, no composed command; `gate()` drops fixes about other hosts; agent install and antivirus setup excluded | `test_fixes.py`, `test_plugin_fixes.py` |
+
