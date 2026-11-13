@@ -66,6 +66,7 @@ from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture
 from plugins.devices import data, fixes, remote
 from plugins.devices.fixes_tab import FixesTab
+from plugins.devices.responses_tab import ResponsesTab
 from plugins.devices.sessions_tab import SessionsTab
 from plugins.devices.tabs import EventsTab, InventoryTab, VulnerabilitiesTab
 from plugins.devices.widgets import DailyBars, GradeBadge, SeverityBar, StatCard
@@ -569,6 +570,7 @@ class Plugin(BasePlugin):
         ("vulns", "tab_vulns"),
         ("events", "tab_events"),
         ("inventory", "tab_inventory"),
+        ("responses", "tab_responses"),
         ("sessions", "tab_sessions"),
     )
 
@@ -655,6 +657,7 @@ class Plugin(BasePlugin):
                 "vulns": VulnerabilitiesTab,
                 "events": EventsTab,
                 "inventory": InventoryTab,
+                "responses": ResponsesTab,
                 "sessions": SessionsTab,
             }[key]
             try:
