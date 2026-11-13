@@ -162,6 +162,7 @@ QLabel#NavCaption {{
 QLabel#H1 {{ font-size: 24px; font-weight: 700; }}
 QLabel#H2 {{ font-size: 18px; font-weight: 700; }}
 QLabel#Muted {{ color: {c('text_secondary')}; }}
+QLabel#Lead {{ font-size: 15px; font-weight: 500; }}
 QLabel#CardTitle {{ font-size: 16px; font-weight: 700; }}
 
 /* Flat page kit (gui/page_kit.py) */

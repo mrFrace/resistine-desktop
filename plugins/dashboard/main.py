@@ -44,7 +44,7 @@ from gui.qt_widgets import StatusBadge, scroll_page, set_pill
 from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
-from plugins.dashboard import mitigations, posture, protection, tile_layout
+from plugins.dashboard import mitigations, posture, protection, tile_layout, weekly
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -784,6 +784,8 @@ class Plugin(BasePlugin):
         self._panels: dict = {}
         self._grid: _PanelGrid | None = None
         self._vpn_switch = None
+        self._lead: QLabel | None = None
+        self._posting = False  # the weekly post is on its way
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
         self._posture_view = None    # (state, names) of the last refresh
@@ -847,6 +849,14 @@ class Plugin(BasePlugin):
         site.clicked.connect(lambda: webbrowser.open(WEBSITE_URL))
         head.addWidget(site, 0, Qt.AlignmentFlag.AlignVCenter)
         v.addLayout(head)
+        v.addSpacing(10)
+
+        # The week in one sentence: what the tiles below add up to.
+        self._lead = QLabel()
+        self._lead.setObjectName("Lead")
+        self._lead.setWordWrap(True)
+        self._lead.setTextFormat(Qt.TextFormat.PlainText)
+        v.addWidget(self._lead)
         v.addSpacing(16)
 
         # Protection = the Endpoint (Wazuh) agent is installed and healthy;
@@ -888,6 +898,7 @@ class Plugin(BasePlugin):
         self._sync_vpn_switch()
         for key, panel in self._panels.items():
             panel.set_data(self._data.get(key))
+        self._set_lead()
         self._subscribe_alerts()
         order = panel_order(app_settings.get("dashboard", "panel_order"), list(self._panels))
         self._grid = _PanelGrid(self._panels, order, self._save_layout,
@@ -978,6 +989,8 @@ class Plugin(BasePlugin):
                     st, names, todo=mitigations.summary(states) if states else None,
                     score_trend=posture.trend(hist))
                 data["_posture_view"] = (st, names)
+                data["todo_open"] = sum(1 for _, s in states
+                                        if s in (mitigations.OPEN, mitigations.REBOOT))
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard posture probe failed: {e}")
             for key, fn in (("antivirus", lambda: _antivirus_info(self.app)),
@@ -1014,12 +1027,62 @@ class Plugin(BasePlugin):
                 panel.set_data(self._data.get(panel_key))
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+        self._set_lead()
         self._sync_vpn_switch()
         if self._grid is not None:
             try:
                 self._grid.schedule()  # heights changed: re-pack the columns
             except RuntimeError:
                 self._grid = None
+
+    # ---- the week in one sentence ------------------------------------------
+    def lead_text(self) -> str:
+        try:
+            from plugins.chat import siem_alerts
+            st = siem_alerts.store()
+            alerts, unread = st.all(), st.unread
+        except Exception:  # noqa: BLE001 - the sentence then counts no alerts
+            alerts, unread = [], 0
+        tiles = {k: self._data.get(k) for k in weekly.TILES}
+        return weekly.sentence(alerts, unread, int(self._data.get("todo_open") or 0), tiles)
+
+    def _set_lead(self) -> None:
+        lead = getattr(self, "_lead", None)
+        if lead is None:
+            return
+        try:
+            text = self.lead_text()
+            lead.setText(text)
+        except RuntimeError:  # label deleted by a rebuild
+            self._lead = None
+            return
+        self._maybe_post_weekly(text)
+
+    def _maybe_post_weekly(self, text: str) -> None:
+        """Once a week, the sentence goes to the SIEM alerts room too. Only
+        from a complete picture: every tile probed at least once."""
+        from utils import settings as app_settings
+
+        if self._posting or not app_settings.get("auth", "logged_in", False):
+            return
+        if any(self._data.get(k) is None for k in weekly.TILES):
+            return
+        weekly.first_post_clock()
+        if not weekly.post_due(app_settings.get("dashboard", "weekly_posted_at")):
+            return
+        self._posting = True
+
+        def work():
+            try:
+                from plugins.chat import matrix_transport
+                if matrix_transport.post_to_alerts_room(weekly.post_text(text)):
+                    weekly.mark_posted()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"Dashboard weekly post: {e}")
+            finally:
+                self._posting = False
+
+        threading.Thread(target=work, name="weekly-post", daemon=True).start()
 
     # ---- recent alerts (SIEM alerts from siemgent over Matrix) --------------
     @staticmethod
@@ -1054,6 +1117,7 @@ class Plugin(BasePlugin):
 
     def _repaint_alerts(self) -> None:
         self._data["alerts"] = self._alerts_data()
+        self._set_lead()
         panel = self._panels.get("alerts")
         if panel is None:
             return

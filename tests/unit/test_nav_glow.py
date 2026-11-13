@@ -105,6 +105,7 @@ class TestApplyNavStatus:
 
         win = aw.AppWindow.__new__(aw.AppWindow)
         win._nav_status = {}
+        win._unknown_since, win._unknown_told = {}, set()
         btn = MagicMock()
         win._nav_buttons = {"VPN": btn}
         plugin = MagicMock()
@@ -125,3 +126,69 @@ class TestApplyNavStatus:
         assert btn.setIcon.call_count == 2
         assert win._nav_status["VPN"].label == "Unknown"
         assert win._nav_status_busy is False
+
+
+@pytest.mark.unit
+class TestUnknownTooLong:
+    """A plugin that sits in unknown past its limit gets one toast per
+    episode, with the reason."""
+
+    def _win(self, plugin):
+        from unittest.mock import MagicMock
+        win = aw.AppWindow.__new__(aw.AppWindow)
+        win._nav_status = {}
+        win._unknown_since, win._unknown_told = {}, set()
+        win._nav_buttons = {"Endpoint": MagicMock()}
+        win._plugin_by_name = lambda n: plugin
+        win._nav_icon = lambda p: "icon"
+        win.sidebar = MagicMock()
+        win.show_notification = MagicMock()
+        win._nav_status_busy = True
+        return win
+
+    def test_limit_from_freshness_window(self):
+        from unittest.mock import MagicMock
+        assert aw.unknown_limit(MagicMock(status_fresh_for=None)) == 3600
+        assert aw.unknown_limit(MagicMock(status_fresh_for=600)) == 3600
+        assert aw.unknown_limit(MagicMock(status_fresh_for=26 * 3600)) == 78 * 3600
+        assert aw.unknown_limit(object()) == 3600
+
+    def test_one_toast_per_episode(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from plugins.base_plugin import Status
+        plugin = MagicMock(status_fresh_for=None)
+        plugin.get_display_name.return_value = "Endpoint"
+        win = self._win(plugin)
+        clock = [1000.0]
+        monkeypatch.setattr(aw.time, "time", lambda: clock[0])
+        unknown = {"Endpoint": Status("unknown", "Not checked yet")}
+        win._apply_nav_status(unknown)
+        clock[0] += 3599
+        win._apply_nav_status(unknown)
+        win.show_notification.assert_not_called()
+        clock[0] += 1
+        win._apply_nav_status(unknown)
+        win.show_notification.assert_called_once_with(
+            "Endpoint: Not checked yet. Open it to check again.", "warning")
+        clock[0] += 7200
+        win._apply_nav_status(unknown)  # still unknown: told already
+        assert win.show_notification.call_count == 1
+        win._apply_nav_status({"Endpoint": Status("ok", "Running")})
+        assert "Endpoint" not in win._unknown_since
+        win._apply_nav_status(unknown)
+        clock[0] += 3600
+        win._apply_nav_status(unknown)  # a new episode: told again
+        assert win.show_notification.call_count == 2
+
+    def test_no_reason_says_status_unknown(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from plugins.base_plugin import Status
+        plugin = MagicMock(status_fresh_for=None)
+        plugin.get_display_name.return_value = "VPN"
+        win = self._win(plugin)
+        monkeypatch.setattr(aw, "unknown_limit", lambda p: 0)
+        win._apply_nav_status({"Endpoint": Status("unknown")})
+        win.show_notification.assert_called_once_with(
+            "VPN: Status unknown. Open it to check again.", "warning")

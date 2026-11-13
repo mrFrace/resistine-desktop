@@ -551,3 +551,79 @@ class TestMatrixUnavailableReason:
         from plugins.chat.main import Plugin
         p = Plugin(MagicMock())
         assert p.client is None and p._matrix_problem == "signin"
+
+
+@pytest.mark.unit
+class TestPostToAlertsRoom:
+    """The Dashboard's weekly sentence goes to the alerts room over the
+    running session; nothing is started for it."""
+
+    def _service(self, running=True, rooms=("!a:hs", "!b:hs")):
+        svc = mt.MatrixService.__new__(mt.MatrixService)
+        svc.room_id = None
+        svc._alert_rooms = set(rooms)
+        svc._error = None
+        svc._ready = threading.Event()
+        svc._ready.set()
+        svc.is_running = lambda: running
+        svc.sent = []
+
+        def run_coro(coro, timeout):
+            coro.close()  # the coroutine itself is exercised in test_send_text_checks_the_room
+            svc.sent.append(timeout)
+            return "$evt"
+        svc.run_coro = run_coro
+        svc.send_text = lambda room_id, text: _record(svc, room_id, text)
+        return svc
+
+    def test_no_session_or_no_room(self, monkeypatch, isolated_settings):
+        monkeypatch.setattr(mt, "_service", None)
+        assert mt.post_to_alerts_room("hi") is False
+        monkeypatch.setattr(mt, "_service", self._service(running=False))
+        assert mt.post_to_alerts_room("hi") is False
+        monkeypatch.setattr(mt, "_service", self._service())
+        assert mt.post_to_alerts_room("hi") is False  # no alert room known in settings
+
+    def test_posts_to_the_room_that_spoke_last(self, monkeypatch, isolated_settings, tmp_path):
+        from plugins.chat import siem_alerts
+        svc = self._service()
+        monkeypatch.setattr(mt, "_service", svc)
+        store = siem_alerts.AlertStore(str(tmp_path / "a.json"))
+        monkeypatch.setattr(siem_alerts, "store", lambda: store)
+        siem_alerts.add_alert_room("!a:hs")
+        siem_alerts.add_alert_room("!b:hs")
+        siem_alerts.add_alert_room("!stale:hs")  # known in settings, not in this session
+        assert mt.post_to_alerts_room("hi") is True
+        assert svc.calls == [("!a:hs", "hi")]
+        store.add({"room_id": "!b:hs", "event_id": "$1", "body": "x", "ts": 10})
+        store.add({"room_id": "!stale:hs", "event_id": "$2", "body": "x", "ts": 20})
+        assert mt.post_to_alerts_room("again") is True
+        assert svc.calls[-1] == ("!a:hs", "again")  # the stale room's alert doesn't count
+        store.add({"room_id": "!b:hs", "event_id": "$3", "body": "x", "ts": 30})
+        assert mt.post_to_alerts_room("third") is True
+        assert svc.calls[-1] == ("!b:hs", "third")
+
+    def test_send_failure_is_false_not_raised(self, monkeypatch, isolated_settings):
+        from plugins.chat import siem_alerts
+        svc = self._service()
+        svc.run_coro = MagicMock(side_effect=mt.MatrixTransportError("down"))
+        svc.send_text = lambda room_id, text: None  # nothing to await: run_coro fails first
+        monkeypatch.setattr(mt, "_service", svc)
+        siem_alerts.add_alert_room("!a:hs")
+        assert mt.post_to_alerts_room("hi") is False
+
+    def test_send_text_checks_the_room(self):
+        import asyncio
+        svc = mt.MatrixService.__new__(mt.MatrixService)
+        svc.room_id = "!dm:hs"
+        svc._alert_rooms = {"!a:hs"}
+        with pytest.raises(mt.MatrixTransportError):
+            asyncio.run(svc.send_text("!other:hs", "hi"))
+
+
+def _record(svc, room_id, text):
+    svc.__dict__.setdefault("calls", []).append((room_id, text))
+
+    async def coro():
+        return "$evt"
+    return coro()
