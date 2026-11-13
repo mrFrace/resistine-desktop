@@ -247,6 +247,63 @@ def fetch_executions(agent_id: str | None = None):
     return _parse_all(payload, "executions", parse_execution), None
 
 
+def same_agent(a, b) -> bool:
+    """Whether two Wazuh agent ids name the same agent. The manager pads ids
+    ("004"), posture cards and the inventory may not ("4"); the empty id
+    matches nothing."""
+    sa, sb = str(a or "").strip(), str(b or "").strip()
+    if not sa or not sb:
+        return False
+    if sa.isdigit() and sb.isdigit():
+        return int(sa) == int(sb)
+    return sa == sb
+
+
+def executions_for(executions: list, agent_id: str | None, host: str | None) -> list:
+    """The executions of one device. The backend lists every execution of the
+    caller's agents whatever ``?agent_id=`` says, so the device scope is
+    applied here: by agent id when the selected row has one, else by the
+    agent's name against the selected hostname. No device: all of them."""
+    if agent_id:
+        return [e for e in executions if same_agent(e.get("agent_id"), agent_id)]
+    if host:
+        want = host.strip().lower()
+        return [e for e in executions if (e.get("agent_name") or "").strip().lower() == want]
+    return list(executions)
+
+
+def agent_names(executions: list, rows: list) -> dict:
+    """agent_id -> display name, from the posture rows first (hostname) and
+    then from any execution that carries a name: a thin AR record names the
+    agent only by id ("004"), which reads as an unknown device next to rows
+    that say "francispc"."""
+    names: dict = {}
+    for r in rows or []:
+        aid, host = str(r.get("agent_id") or "").strip(), r.get("hostname")
+        if aid and host:
+            names.setdefault(_canonical_agent_id(aid), host)
+    for e in executions or []:
+        aid, name = str(e.get("agent_id") or "").strip(), e.get("agent_name")
+        if aid and name:
+            names.setdefault(_canonical_agent_id(aid), name)
+    return names
+
+
+def _canonical_agent_id(aid: str) -> str:
+    return str(int(aid)) if aid.isdigit() else aid
+
+
+def agent_display_name(execution: dict, names: dict) -> str:
+    """What the executions table shows for the agent of one execution."""
+    name = execution.get("agent_name")
+    if name:
+        return name
+    aid = str(execution.get("agent_id") or "").strip()
+    if aid:
+        return names.get(_canonical_agent_id(aid)) or aid
+    return "—"
+
+
 # --------------------------------------------------------------------------
 # Pure helpers the tab uses (kept here so they are testable without Qt)
 # --------------------------------------------------------------------------

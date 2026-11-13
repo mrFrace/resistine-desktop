@@ -170,6 +170,8 @@ class ResponsesTab:
         self._loading = False
         self._loaded_once = False
         self._loaded_at = 0.0
+        self._refetch_pending = False
+        self._fetched_for = None  # agent_id the in-flight executions fetch is for
         self._render()
         self._fetch()
 
@@ -206,8 +208,14 @@ class ResponsesTab:
     # ---- data --------------------------------------------------------------
 
     def set_scope(self) -> None:
-        """Scope changed: re-fetch the per-device executions and repaint
+        """Scope changed: repaint at once from what is cached (the device
+        filter is applied client-side), then re-fetch the executions
         (channels/monitors are global and stay cached)."""
+        if self._loaded_once:
+            try:
+                self._render()
+            except RuntimeError:
+                pass
         self._fetch(executions_only=True)
 
     def refresh(self) -> None:
@@ -216,9 +224,14 @@ class ResponsesTab:
 
     def _fetch(self, executions_only: bool = False) -> None:
         if self._loading:
+            # A scope change while a fetch is in flight is not lost: _loaded
+            # runs one more executions fetch for the scope selected by then.
+            self._refetch_pending = True
             return
         self._loading = True
+        self._refetch_pending = False
         agent_id, _ = self._selected()
+        self._fetched_for = agent_id
 
         def work():
             channels = monitors = None
@@ -254,7 +267,9 @@ class ResponsesTab:
         try:
             self._render()
         except RuntimeError:  # the page was torn down meanwhile
-            pass
+            return
+        if self._refetch_pending or self._fetched_for != self._selected()[0]:
+            self._fetch(executions_only=True)
 
     # ---- render ------------------------------------------------------------
 
@@ -290,7 +305,10 @@ class ResponsesTab:
         self._clear()
         col = self._col
         channels = self._channels or []
-        executions = self._executions or []
+        # The backend returns every execution of the caller's agents whatever
+        # ?agent_id= says: the device scope is applied here.
+        aid, host = self._selected()
+        executions = ar.executions_for(self._executions or [], aid, host)
 
         if not self._loaded_once:
             col.addWidget(_plain(muted(self.t("loading"))))
@@ -516,6 +534,9 @@ class ResponsesTab:
             col.addWidget(_plain(muted(self.t(key))))
             return
         names = ar.channel_name_by_id(self._channels or [])
+        # A thin AR record carries the agent id only; name it from the posture
+        # rows (or a sibling record) so "004" and "francispc" read as one device.
+        agent_names = ar.agent_names(self._executions or [], self.ctx.rows())
         columns = [
             (self.t("col_agent"), 0, 2),
             (self.t("col_action"), 0, 2),
@@ -527,7 +548,7 @@ class ResponsesTab:
         rows = []
         for e in executions:
             agent = _stacked(
-                e["agent_name"] or e["agent_id"] or "—",
+                ar.agent_display_name(e, agent_names),
                 self.t("agent_id", id=e["agent_id"]) if e["agent_id"] else "",
             )
             action = QWidget()
