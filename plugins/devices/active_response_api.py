@@ -334,14 +334,6 @@ def channel_name_by_id(channels: list) -> dict:
 # --------------------------------------------------------------------------
 
 
-def target_field(executable: str, target: str) -> dict:
-    """The AR target keyed by executable: ``block-ip`` carries an ``ip``,
-    ``disable-account`` a ``user``. The manager resolves the real target from
-    a finding; this is what the operator typed."""
-    key = "user" if executable == "disable-account" else "ip"
-    return {key: (target or "").strip()}
-
-
 def build_policy(*, name: str, executable: str, trigger: str,
                  stateful_timeout, agent_id: str,
                  config_id: str | None = None) -> dict:
@@ -373,7 +365,9 @@ def build_fire(agent_id: str, executable: str, target: str) -> dict:
         "agent_id": (agent_id or "").strip(),
         "executable": executable,
         "location": "defined-agent",
-        "target": target_field(executable, target),
+        # The server keys the target by executable (block-ip -> source.ip,
+        # disable-account -> user.name); send the raw value it typed, a plain string.
+        "target": (target or "").strip(),
     }
 
 
