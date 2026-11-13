@@ -133,7 +133,15 @@ The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed ma
 
 ### External Artifacts
 
-VPN CLI binary and ClamAV binaries are fetched during the build via `gh` CLI (currently from legacy artifact repos — being re-homed to Phoenix infrastructure along with signing certificates).
+VPN CLI binary and ClamAV binaries are fetched during the build via `gh` CLI. The VPN artifacts come from Phoenix's fork `DatOneOPGuy/phoenix-vpn-macos` (`scripts/build/download-vpn-artifacts.sh`, override with `VPN_ARTIFACTS_REPO`); they must carry the `exposed.phoenix.*` bundle IDs, `build-distribution.sh` rejects an extension whose identifier disagrees with the host app. ClamAV binaries still come from the legacy `ClamAV-Mac` repo (being re-homed).
+
+### macOS signing identity
+
+The app is signed by Apple team `KTKS453599` with App Group `group.exposed.phoenix.wireguard` (`plugins/vpn/wireguard/vpn_functions_darwin.py:APP_GROUP_ID`; the pre-migration `group.Resistine.WireguardTest` is kept in `LEGACY_APP_GROUP_IDS` for the uninstaller only). `build-distribution.sh` pins both the Application and the Installer certificate to that team (`EXPECTED_TEAM_ID`) rather than taking the first match in the keychain, and rewrites every entitlements file at build time with plistlib — never `plutil`, which reads a dotted key such as `com.apple.security.application-groups` as nesting. `BUNDLE_ID` in `packaging/Resistine.spec` is taken from the environment so the app and its bundled extension always agree.
+
+### Drake's fork
+
+Drake builds macOS from `DatOneOPGuy/phoenix-desktop` (remote `drake`), whose history diverged from `main` on 2026-10-20: merging any of his branches yields dozens of spurious conflicts, so take his work by `git cherry-pick -x` of the commits above his last `merge-nov*` commit, after checking whether a fix already exists here. Mac test builds are pushed to `mrFrace/resistine-desktop` branch `testmacbuild`, which mirrors `main`.
 
 ## Key Conventions
 

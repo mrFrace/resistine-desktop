@@ -110,8 +110,11 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
    - Development: Not available (run `build-installer.sh` first)
 
 ### Code Signing
-- CLI signed with `-i com.resistine.resistine-vpn-cli` identifier
-- Network Extension has bundle ID: `com.resistine.wireguard-apple.network-extension`
+- CLI wrapped as `exposed.phoenix.desktop.vpnxpc` (`CLI_BUNDLE_ID`), Network
+  Extension bundle ID `exposed.phoenix.desktop.network-extension` (pre-2026-11
+  artifacts carried `com.resistine.*` and are refused by `build-distribution.sh`)
+- Team `KTKS453599`; App Group `group.exposed.phoenix.wireguard` (the uninstaller
+  also clears the legacy `group.Resistine.WireguardTest` container)
 - Both have NetworkExtension and App Sandbox entitlements
 
 ## Communication Flow Examples

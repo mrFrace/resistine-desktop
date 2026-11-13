@@ -106,6 +106,11 @@ exposed.phoenix.desktop.clamonacc                  ← ClamAV on-access helper
 Until 2026-11-12 these were `com.resistine.desktop.*`. The Swift VPN build
 must use the same IDs: `build-distribution.sh` refuses a network extension
 whose `CFBundleIdentifier` is not `exposed.phoenix.desktop.network-extension`.
+Since 2026-11-13 the signing team is `KTKS453599` and the App Group shared by
+the app, the CLI and the extension is `group.exposed.phoenix.wireguard`
+(`APP_GROUP` in `build-distribution.sh`, `APP_GROUP_ID` in
+`plugins/vpn/wireguard/vpn_functions_darwin.py`); bundle IDs, App Group and
+team ID are globally unique per team, so all three changed together.
 
 ### Step 3: Register App IDs in Apple Developer Portal
 
@@ -113,7 +118,7 @@ whose `CFBundleIdentifier` is not `exposed.phoenix.desktop.network-extension`.
 
 2. **Create App ID** for your new component:
    - Click "+" → "App IDs" → "App"
-   - Enter Bundle ID: `com.resistine.wireguard-apple.your-new-extension`
+   - Enter Bundle ID: `exposed.phoenix.desktop.your-new-extension`
    - Enable required capabilities (e.g., "System Extension", "Network Extension", etc.)
 
 3. **Enable specific capability types** if required:
@@ -155,7 +160,8 @@ Create an entitlements file for your new component:
     <!-- App Groups for IPC between components -->
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>$(TeamIdentifierPrefix)com.resistine.shared</string>
+        <string>group.exposed.phoenix.wireguard</string>
+        <string>$(TeamIdentifierPrefix)*</string>
     </array>
     
     <!-- Your specific capability -->

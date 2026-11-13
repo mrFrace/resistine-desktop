@@ -24,6 +24,18 @@ Record significant architectural choices and their rationale here.
 - **Rationale:** Python can't directly use NetworkExtension; CLI bridge keeps Python side simple
 - **Consequences:** Extra build artifact, 5s polling gap for status sync
 
+### 2026-11-13 — Drake's fork is cherry-picked, never merged
+- **Context:** Drake builds macOS from his GitHub fork (`DatOneOPGuy/phoenix-desktop`), whose history diverged from `main` on 2026-10-20 and carries the same later work under different hashes; a trial merge of `hardening/deferred-nov13` produced 62 conflicts across the repo.
+- **Decision:** Take his work commit by commit with `git cherry-pick -x` (the commits above his last `merge-nov*` commit), checking first whether a fix already exists here. Of the 2026-11-13 batch only the 5 macOS signing commits were taken; the security commit `1db4158` was left out.
+- **Rationale:** The rename was wanted, the security commit touches 19 files, conflicts in 7, duplicates three fixes already made here (Sysmon pinning, SSH host key, https-only telemetry) and needs a manual port for the Matrix transport; it is tracked in the security review queue instead.
+- **Consequences:** Mac test builds go out through `mrFrace/resistine-desktop` branch `testmacbuild`, kept as a mirror of `main` (force-pushed), not as a branch of that repo's own history.
+
+### 2026-11-13 — The Devices page adapts to the backend as served, not as documented
+- **Context:** `/v1/me/inventory` went live in the Wazuh manager's native shape, `/v1/me/active-response/executions` ignores its `agent_id` filter, and the posture service names an unscanned agent "Unknown"; each of these rendered as a wrong or empty screen.
+- **Decision:** Normalize at the API client (`normalize_inventory_device`), apply the device scope client-side (`executions_for`), and fill a placeholder name or OS from the other feed the page already has (inventory ↔ posture). Hide what has no data (the Inventory view dropdown) rather than show empty views.
+- **Rationale:** The desktop ships ahead of the backend; the documented contract stays the target and the backend gaps are listed in the queue, but the screen must be right with what exists today.
+- **Consequences:** Two accepted shapes per feed (documented keys win); the hidden dropdown and the client-side filter are to be removed when the backend catches up.
+
 ### 2026-11-12 — Removing a device runs on the server
 - **Context:** Devices → Sessions lists every device of the account and removes the old ones (dev-docs/plans/device-sessions.md).
 - **Decision:** The app calls `DELETE /v1/devices/{id}` on the Phoenix API; the server finishes the MAS session and drops the VPN peer and Wazuh agent.
