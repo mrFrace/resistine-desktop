@@ -30,6 +30,8 @@ Track completed work and active blockers here.
 - Server: `/v1/devices`, the MAS admin client and the revocation sync are live on briareosai since 2026-11-12 (`~/flakes` 33723a8; verified 2026-11-13: GET /v1/devices 200, sync every 300 s, grace 86400 s). The sync's cap error now names the devices (`~/flakes` 1599318, pushed, deploy pending).
 - Security review deferred items: Sysmon config bundled and pinned (LF bytes, MR !82 + !83); telemetry refuses non-https collectors; `publish-linux-repos.sh` signs the RPMs themselves (`rpmsign`, verified with `rpm --checksig`); the Windows build VM's host key is pinned after the first build (`$GOLDEN_DIR/known_hosts`).
 - GUI ideation security notes 1–5 built (MR !75–!79); the week's sentence in Recent alerts and "Fix N things" in the System tile (MR !80); docs caught up (MR !81).
+- macOS identity moved to Phoenix's Apple team: Drake's 5 commits from `hardening/deferred-nov13` cherry-picked (team `KTKS453599`, App Group `group.exposed.phoenix.wireguard`, plistlib entitlements, installer certificate pinned, VPN artifacts from `DatOneOPGuy/phoenix-vpn-macos`). His security commit `1db4158` was deliberately not taken (three of its fixes already exist here; the rest is listed under the security review below). GitHub `mrFrace/resistine-desktop` branch `testmacbuild` mirrors `main` for the Mac build.
+- Devices against the backend as it is: the inventory list's Wazuh-native shape is normalized (`09bbc90`), the Inventory view dropdown is hidden until the detail endpoint exists (`4b01b3b`), the Responses tab filters executions per device itself and names thin AR records (`18741bf`), and a posture card with hostname "Unknown" takes its name from the inventory (`692dd22`).
 
 ## Queue (as of 2026-11-13, after the server/infra pass)
 
@@ -39,8 +41,10 @@ Needs the operator (one-off)
 - First real `publish-linux-repos.sh` run with the release key signs the RPMs; then switch the published `.repo` file to `gpgcheck=1`.
 
 Server / infrastructure (blocked or needs a decision)
-- Swift VPN helper rebuild for the `exposed.phoenix.*` bundle IDs; macOS VPN testing waits for the Apple developer account.
-- Legacy artifact repos (VPN CLI, ClamAV binaries) to re-home to Phoenix infrastructure with signing certificates: where, and which certificates.
+- Swift VPN helper rebuild for the `exposed.phoenix.*` bundle IDs; macOS VPN testing waits for the Apple developer account. First distribution build on the new team: confirm `KTKS453599` is the Phoenix team (it is now hardcoded in `packaging/Resistine.entitlements`) and that the build Mac can reach `DatOneOPGuy/phoenix-vpn-macos` (the `mrFrace` gh account cannot).
+- ClamAV binaries still come from the legacy `ClamAV-Mac` repo: re-home with signing certificates. (VPN artifacts are re-homed to Drake's fork.)
+- LLMAgent-api: `GET /v1/me/active-response/executions` should honour `?agent_id=` (the desktop filters client-side meanwhile); `GET /v1/me/posture` sends hostname/os `"Unknown"` for an agent without a scan (036) instead of the manager's agent name.
+- phoenix-provisioning: `GET /v1/me/inventory` should carry `os` and `hardware` per device and `GET /v1/me/inventory/{id}` (processes, ports, network, packages) is still missing; the Inventory view dropdown stays hidden until then.
 - VPN provisioning "Later": request signing with the device's ed25519 key (design).
 - Build-image pinning by digest in `publish-linux-repos.sh` / `build-windows-vm.sh`.
 

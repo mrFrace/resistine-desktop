@@ -110,8 +110,10 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
    - Development: Not available (run `build-installer.sh` first)
 
 ### Code Signing
-- CLI signed with `-i exposed.phoenix.phoenix-vpn-cli` identifier
-- Network Extension has bundle ID: `exposed.phoenix.wireguard-apple.network-extension`
+- CLI wrapped as `exposed.phoenix.desktop.vpnxpc` (`CLI_BUNDLE_ID`), Network
+  Extension bundle ID `exposed.phoenix.desktop.network-extension`
+  (`build-distribution.sh` refuses an extension with any other ID)
+- Team `KTKS453599`; App Group `group.exposed.phoenix.wireguard`
 - Both have NetworkExtension and App Sandbox entitlements
 
 ## Communication Flow Examples

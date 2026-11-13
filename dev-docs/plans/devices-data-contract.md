@@ -147,6 +147,18 @@ GET /api/v1/me/inventory?limit=200&offset=0
   } ] }
 ```
 
+**As served on 2026-11-13** (phoenix-provisioning, AR-B7): the list answers
+with the Wazuh manager's own `/agents` projection in its envelope,
+`{"data": {"affected_items": [{"id": "004", "name": "francispc",
+"status": "active", "ip": "127.0.0.1"}]}}`, without `os`, `hardware`,
+`has_more` or `total_devices`. `plugins/devices/api.normalize_inventory_device`
+maps `id/name/ip` onto the documented `agent_*` keys (documented keys win
+when both are present), and the store fills a missing name or OS from the
+posture cards. The per-device detail below is not deployed yet (404 →
+`NOT_AVAILABLE`), so the Inventory view dropdown (Processes / Ports /
+Network / Packages) is hidden until it is; CPU / RAM stays "—" until the
+list carries `hardware`.
+
 Per device detail:
 
 ```
