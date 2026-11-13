@@ -379,7 +379,7 @@ class ResponsesTab:
             (self.t("col_type"), 120, 0),
             (self.t("col_affects"), 70, 0),
             (self.t("col_triggered_by"), 0, 2),
-            (self.t("col_manage"), 110, 0),
+            (self.t("col_manage"), 180, 0),
         ]
         rows = []
         for c in channels:
@@ -438,10 +438,13 @@ class ResponsesTab:
         edit = QPushButton(self.t("edit"))
         edit.setObjectName("SurfaceBtn")
         edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        # Size each button to its label (plus padding) so the text is never clipped to "di"/"le".
+        edit.setMinimumWidth(edit.sizeHint().width() + 16)
         edit.clicked.connect(lambda _=False, c=channel: self._open_policy_form(c))
         delete = QPushButton(self.t("delete"))
         delete.setObjectName("SurfaceBtn")
         delete.setCursor(Qt.CursorShape.PointingHandCursor)
+        delete.setMinimumWidth(delete.sizeHint().width() + 16)
         delete.clicked.connect(lambda _=False, c=channel: self._open_delete(c))
         h.addWidget(edit)
         h.addWidget(delete)
