@@ -616,6 +616,13 @@ class Plugin(BasePlugin):
 
     # ── Installation (background thread) ───────────────────────────────
 
+    def _finish_install_job(self, success: bool, summary: str = "") -> None:
+        from utils import jobs
+        code = getattr(self, "_install_job", None)
+        if code:
+            self._install_job = None
+            jobs.finish(code, ok=success, summary=summary or ("agent installed" if success else "failed"))
+
     def _start_installation(self):
         """User clicked Install — route to platform-specific install flow."""
         if _PLATFORM == "Darwin":
@@ -626,7 +633,9 @@ class Plugin(BasePlugin):
         """Windows/Linux: run full_install() in a background daemon thread."""
         if self._installing:
             return
+        from utils import jobs
         self._installing = True
+        self._install_job = jobs.start("agent_install", "Endpoint agent install")["code"]
         self._set_install_btn("Installing...", enabled=False)
         bar = getattr(self, "_install_bar", None)
         if bar is not None:
@@ -640,6 +649,7 @@ class Plugin(BasePlugin):
 
         def _done(success):
             self._installing = False
+            self._finish_install_job(success)
             if success:
                 self.app.show_notification(
                     "SIEM agent installed!", type="success")
@@ -671,7 +681,9 @@ class Plugin(BasePlugin):
             return
         if _safe(get_install_state) == STATE_INSTALL_FAILED:
             _safe(retry)
+        from utils import jobs
         self._installing = True
+        self._install_job = jobs.start("agent_install", "Endpoint agent install")["code"]
         self._install_poll_count = 0
         self._set_install_btn("Installing...", enabled=False)
 
@@ -685,6 +697,7 @@ class Plugin(BasePlugin):
                 self.app.after(0, self._poll_install)
             else:
                 self._installing = False
+                self._finish_install_job(False, "the installer could not be started")
                 self.app.after(0, self._refresh_screen)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -724,6 +737,7 @@ class Plugin(BasePlugin):
 
         if result.get("finished"):
             self._installing = False
+            self._finish_install_job(bool(result.get("success")))
             if result.get("success"):
                 self.app.show_notification(
                     "Security agent installed!", type="success")

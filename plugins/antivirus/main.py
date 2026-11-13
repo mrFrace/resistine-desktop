@@ -1323,8 +1323,10 @@ class Plugin(BasePlugin):
 
     def _run_multi_scan(self, targets: list[str], label: str = "Computer"):
         from plugins.antivirus.scanner import ScanResult, scan
+        from utils import jobs
 
         self._scanning = True
+        job = jobs.start("antivirus_scan", "Antivirus scan", label.lower())
         self._cancel_requested = False
         self._scan_file_count = 0
         self._scan_total_files = 0
@@ -1422,6 +1424,10 @@ class Plugin(BasePlugin):
                 duration=duration,
                 error="Scan cancelled." if agg["cancelled"] else "",
             )
+            jobs.finish(job["code"], ok=not agg["cancelled"],
+                        summary="cancelled" if agg["cancelled"] else
+                        f"{agg['infected']} threat{'s' if agg['infected'] != 1 else ''} "
+                        f"in {agg['scanned']:,} files, {duration}")
             self.app.after(0, self._handle_scan_complete, final)
 
         threading.Thread(target=_worker, daemon=True).start()

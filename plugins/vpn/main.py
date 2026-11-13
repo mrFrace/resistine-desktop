@@ -802,13 +802,20 @@ class Plugin(BasePlugin):
     def _toggle_worker(self, switch_value, selected_conf_file):
         """Run the blocking connect/disconnect, then marshal UI back."""
         global my_vpn_status, active_client_name
+        from utils import jobs
+        want = "Running" if switch_value == 1 else "Stopped"
+        job = jobs.start("vpn", "VPN " + ("connect" if switch_value == 1 else "disconnect"),
+                         str(selected_conf_file or ""))
         try:
             if IS_WINDOWS:
                 self._toggle_windows(switch_value, selected_conf_file)
             else:
                 self._toggle_posix(switch_value, selected_conf_file)
+            ok = my_vpn_status == want
+            jobs.finish(job["code"], ok=ok, summary=f"VPN is {str(my_vpn_status).lower()}")
         except Exception as e:
             logger.error(f"VPN toggle failed: {e}")
+            jobs.finish(job["code"], ok=False, summary=f"{type(e).__name__}: {e}")
             try:
                 self.app.after(
                     0, self.app.show_notification, "VPN action failed", "error"

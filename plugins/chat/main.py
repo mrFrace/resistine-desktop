@@ -1678,6 +1678,14 @@ class Plugin(BasePlugin):
         self._pin_row_to_top(user_row)
         self.conversation_history.append(
             {"role": "user", "content": user_text})
+        # A job code (PX-4K7Q) in the question attaches that job's local
+        # details (utils/jobs.py) to this turn only, and the answer about
+        # local state is rendered like any other untrusted text.
+        from utils import jobs
+        job_context = jobs.context_for(jobs.codes_in(user_text))
+        if job_context:
+            self._current_asst_bubble.mark_untrusted()
+        sent_text = f"{job_context}\n\n{user_text}" if job_context else user_text
 
         self.chat_entry.setEnabled(False)
         self.send_button.setEnabled(True)
@@ -1694,8 +1702,9 @@ class Plugin(BasePlugin):
         self._stream_ctrl = StreamController(
             app=self.app, on_chunk=self._on_stream_chunk,
             on_done=self._on_stream_done, on_error=self._on_stream_error)
-        msgs = ([{"role": "user", "content": user_text}]
-                if self.base_url else list(self.conversation_history))
+        msgs = ([{"role": "user", "content": sent_text}]
+                if self.base_url else
+                list(self.conversation_history[:-1]) + [{"role": "user", "content": sent_text}])
         # The server keeps the conversation per session, so every turn of a
         # chat must carry the same id: the local chat id is that id.
         session = self.session_id or self._history.get_active_id()
