@@ -8,6 +8,7 @@ are monkeypatched.
 """
 
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -378,6 +379,24 @@ class TestScreen:
     def test_not_protected_glow(self, built, dashboard_plugin):
         built(False)
         dashboard_plugin.app.set_protection_status.assert_called_with("error")
+
+    def test_lead_sentence_follows_the_data(self, built, dashboard_plugin, monkeypatch):
+        from plugins.chat import siem_alerts
+        store = MagicMock(unread=0)
+        store.all.return_value = []
+        monkeypatch.setattr(siem_alerts, "store", lambda: store)
+        screen = built(True)
+        assert dashboard_plugin._lead.text() == "No alerts this week. Nothing needs you."
+        dashboard_plugin._busy = True
+        dashboard_plugin._apply({"endpoint": {"badge": ("unknown", "Not checked"), "rows": {}},
+                                 "todo_open": 2})
+        assert dashboard_plugin._lead.text() == \
+            "No alerts this week. 2 fixes to do on this machine. Endpoint not checked."
+        store.unread = 1
+        store.all.return_value = [{"event_id": "e", "body": "🔴 x", "ts": time.time()}]
+        dashboard_plugin.repaint_alerts()
+        assert dashboard_plugin._lead.text().startswith("1 alert this week, not all read yet.")
+        del screen
 
     def test_no_protection_banner(self, built):
         from PyQt6.QtWidgets import QLabel

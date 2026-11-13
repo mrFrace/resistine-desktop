@@ -277,6 +277,16 @@ class TestActivity:
         assert inc[0]["severity"] == "high" and inc[0]["ts"] == items[0]["ts"]
         assert ra.breakdown(items, NOW) == "3 incidents: 2 high · 1 medium"
 
+    def test_incident_verdict_from_hunt_results(self):
+        tp = RESULT_FP.replace("False positive* (55% FP)", "True positive* (5% FP)")
+        at = "*When:* 2026-10-16 12:26:59 CEST\n*What:*"
+        fp, inc, tp = (b.replace("*What:*", at) for b in (RESULT_FP, RESULT_INC, tp))
+        assert ra.incidents([alert(TRIAGE, 30, "t")])[0]["verdict"] is None
+        assert ra.incidents([alert(TRIAGE, 30, "t"), alert(fp, 20, "f")])[0]["verdict"] == "fp"
+        assert ra.incidents([alert(fp, 20, "f"), alert(inc, 19, "i")])[0]["verdict"] == "open"
+        assert ra.incidents([alert(inc, 20, "i"), alert(tp, 19, "t"), alert(fp, 18, "f")])[0]["verdict"] == "tp"
+        assert ra.incidents([alert(RESULT_FP, 5, "x")])[0]["verdict"] == "fp"  # no time: on its own
+
     def test_other_machines_are_other_incidents(self):
         other = TRIAGE.replace("AnubisAI agent 007", "francispc agent 004")
         assert len(ra.incidents([alert(TRIAGE, 3, "a"), alert(other, 2, "b")])) == 2
