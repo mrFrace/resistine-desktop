@@ -28,7 +28,8 @@ MONITORS = [
 EXECS = [
     {"agent_id": "004", "agent_name": "lab-host", "executable": "firewall-drop",
      "command": "enable", "target": "203.0.113.7", "timestamp": "2026-11-13T10:00:00Z",
-     "status": "completed", "finding_id": "fnd-abc", "monitor_id": "mon-1", "config_id": "cfg-1"},
+     "status": "completed", "finding_id": "fnd-abc", "rule_title": "SSH brute force",
+     "monitor_id": "mon-1", "config_id": "cfg-1"},
 ]
 
 ROWS = [
@@ -59,6 +60,8 @@ class _Ctx:
     def __init__(self, scope=None):
         self.app = _App()
         self._scope = scope
+        self.pushed = []
+        self.notes = []
 
     @staticmethod
     def t(key, **fmt):
@@ -75,6 +78,17 @@ class _Ctx:
         if self._scope is None:
             return list(ROWS)
         return [r for r in ROWS if r["hostname"] == self._scope]
+
+    def push(self, page):
+        self.pushed.append(page)
+
+    def pop(self):
+        if self.pushed:
+            self.pushed.pop()
+
+
+# make the test app able to raise a notification (used by write flows)
+_App.show_notification = lambda self, text, type=None: None
 
 
 @pytest.fixture
@@ -172,3 +186,92 @@ def test_server_strings_are_plain_text(tab):
     t = tab()
     name = next(lbl for lbl in t.widget.findChildren(QLabel) if lbl.text() == "ar-smoke-test")
     assert name.textFormat() == Qt.TextFormat.PlainText
+
+
+# ---- P2 additions ---------------------------------------------------------
+
+DISABLED_CHANNELS = [
+    {"config_id": "cfg-off", "name": "off-policy", "executable": "block-ip",
+     "location": "all", "agent_id": "", "type": "stateful", "stateful_timeout": "600",
+     "is_enabled": False, "affects_me": True},
+]
+
+
+def test_hold_duration_scales_with_blast_radius():
+    assert responses_tab.hold_duration_ms(1) == responses_tab.HOLD_BASE_MS
+    assert responses_tab.hold_duration_ms(5) > responses_tab.hold_duration_ms(1)
+    assert responses_tab.hold_duration_ms(10_000) == responses_tab.HOLD_MAX_MS
+
+
+def test_ledger_disabled_policy_shows_no(tab):
+    # AR-D8a: a disabled channel (location=all) must read "No (off)", not Yes.
+    t = tab(channels=DISABLED_CHANNELS, monitors=[], execs=[], scope="lab-host")
+    labels = _labels(t.widget)
+    assert t.t("run_no_disabled") in labels
+    assert t.t("run_yes") not in labels
+
+
+def test_new_policy_and_fire_buttons_present(tab):
+    from PyQt6.QtWidgets import QPushButton
+    t = tab(scope="lab-host")
+    btns = [b.text() for b in t.widget.findChildren(QPushButton)]
+    assert t.t("new_policy") in btns
+    assert t.t("fire_now") in btns
+    assert t.t("gitops_note") in _labels(t.widget)
+
+
+def test_new_policy_disabled_without_own_agent(qapp, monkeypatch):
+    from PyQt6.QtWidgets import QPushButton
+    # a scope whose row carries no agent_id -> cannot create a defined-agent policy
+    rows = [{"agent_id": "", "hostname": "no-agent", "this_machine": False}]
+    monkeypatch.setattr(responses_tab.threading, "Thread", _SyncThread)
+    monkeypatch.setattr(ar, "fetch_channels", lambda: (CHANNELS, None))
+    monkeypatch.setattr(ar, "fetch_monitors", lambda: (MONITORS, None))
+    monkeypatch.setattr(ar, "fetch_executions", lambda agent_id=None: (EXECS, None))
+
+    class C(_Ctx):
+        def rows(self):
+            return list(rows)
+
+        def scoped_rows(self):
+            return [r for r in rows if r["hostname"] == self._scope]
+
+    t = responses_tab.ResponsesTab(C("no-agent"))
+    new_btn = next(b for b in t.widget.findChildren(QPushButton)
+                   if b.text() == t.t("new_policy"))
+    assert new_btn.isEnabled() is False
+
+
+def test_open_policy_form_pushes_a_form(tab):
+    t = tab(scope="lab-host")
+    t._open_policy_form(None)
+    assert t.ctx.pushed, "the create form should be pushed onto the stack"
+    form = t.ctx.pushed[-1]
+    labels = _labels(form)
+    assert t.t("field_executable") in labels
+    assert t.t("field_timeout") in labels
+    # the self-test gate starts blocked: no hold-to-save until a clean preview
+    saves = [w for w in form.findChildren(responses_tab.HoldButton)
+             if w.text().startswith(t.t("hold_save"))]
+    assert saves and saves[0].isEnabled() is False
+
+
+def test_fill_panel_blocks_save_on_self_hit(tab):
+    t = tab(scope="lab-host")
+    card = responses_tab.Card()
+    failed = ar.parse_preview({
+        "count": 1, "included": [{"agent_id": "004"}],
+        "self_test": {"would_fire_on_self": True, "offending": ["10.42.10.252"]},
+    })
+    t._fill_panel(card, failed, None)
+    labels = [lbl.text() for lbl in card.findChildren(QLabel)]
+    assert t.t("selftest_fail") in labels
+    assert ar.preview_blocks_save(failed) is not None
+
+
+def test_open_fire_form_pushes_a_form(tab):
+    t = tab(scope="lab-host")
+    t._open_fire_form()
+    assert t.ctx.pushed
+    labels = _labels(t.ctx.pushed[-1])
+    assert t.t("field_target") in labels
