@@ -15,9 +15,17 @@ The system uses a **hybrid storage strategy** to balance security and usability:
 
 Configuration files are stored in platform-specific directories:
 
-- **macOS**: `~/Library/Application Support/Resistine/`
-- **Linux**: `~/.config/resistine/`
-- **Windows**: `%APPDATA%\Resistine\`
+- **macOS**: `~/Library/Application Support/Phoenix/`
+- **Linux**: `~/.config/phoenix/`
+- **Windows**: `%APPDATA%\Phoenix\`
+
+A pre-rebrand `Resistine`/`resistine` directory and the `resistine-master-key`
+keyring entry are migrated on first start.
+
+Next to the per-namespace JSON files the directory holds `logs/phoenix.log`,
+`siem_alerts.json` (received SIEM alerts) and `jobs.json` (the last 50 jobs
+with their codes, see `utils/jobs.py`); both JSON stores are written 0600
+through an exclusive-create temp file and `os.replace`.
 
 ## API Reference
 
