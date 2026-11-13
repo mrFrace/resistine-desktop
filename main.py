@@ -303,6 +303,9 @@ def main() -> int:
         trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))
         logger.info(f"HTTP trace enabled: {trace_file}")
     _install_excepthook()
+    # The persisted UI language, before any plugin builds its screen.
+    from utils import i18n
+    i18n.set_language(settings.get("ui", "language", i18n.DEFAULT_LANGUAGE))
     if sys.platform == "darwin":
         from utils.functions import remove_legacy_bundle
 

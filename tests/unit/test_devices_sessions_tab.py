@@ -248,3 +248,36 @@ def test_no_stale_row_on_another_hostname(tab, monkeypatch):
     monkeypatch.setattr(sessions_tab.socket, "gethostname", lambda: "somewhere-else")
     t = tab()
     assert t.t("stale_row") not in _titles(t.widget)
+
+
+def test_plugin_offers_stale_fix_without_the_sessions_tab(qapp, monkeypatch):
+    """"Fix all" must see this machine's earlier installs from the plugin's
+    own device fetch, before the Sessions tab was ever opened."""
+    from plugins.devices import main as devmain
+
+    monkeypatch.setattr(sessions_api, "list_devices",
+                        lambda: (sessions_api.parse_devices(ROWS), None))
+    monkeypatch.setattr(devmain.socket, "gethostname", lambda: "old-box")
+    plugin = devmain.Plugin(app=None)
+    assert plugin.fixes() == []          # nothing fetched yet: nothing offered
+    plugin._fetch_devices()              # what _kick_fetch does on its worker
+    offered = plugin.fixes()
+    assert [f.id for f in offered] == ["stale_installs"] and "1 earlier install" in offered[0].why
+    removed = []
+    monkeypatch.setattr(sessions_api, "remove_device",
+                        lambda dev: (removed.append(dev), (True, None))[1])
+    ok, text = plugin.run_fix("stale_installs")
+    assert ok and removed == ["PHX_AAAAAAAAAAAAAAAA"] and text == "1 removed"
+    assert plugin.fixes() == []          # the cached list forgets what was removed
+
+
+def test_plugin_fetch_devices_keeps_the_last_list_on_error(monkeypatch):
+    from plugins.devices import main as devmain
+
+    monkeypatch.setattr(sessions_api, "list_devices",
+                        lambda: (sessions_api.parse_devices(ROWS), None))
+    plugin = devmain.Plugin(app=None)
+    plugin._fetch_devices()
+    monkeypatch.setattr(sessions_api, "list_devices", lambda: (None, "network: boom"))
+    plugin._fetch_devices()
+    assert len(plugin._devices_rows) == len(ROWS["devices"])

@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from plugins.devices.tables import SEVERITIES
-from plugins.devices.widgets import severity_color
+from plugins.devices.widgets import _t, severity_color
 
 DIM_ALPHA = 0.25
 
@@ -120,7 +120,7 @@ class Donut(QWidget):
         p.drawText(
             inner.adjusted(0, 14, 0, 14),
             Qt.AlignmentFlag.AlignCenter,
-            "CVEs" if total else "No CVEs",
+            _t("donut_cves") if total else _t("donut_no_cves"),
         )
         p.end()
 

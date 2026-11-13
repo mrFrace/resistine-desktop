@@ -251,6 +251,10 @@ class Plugin(BasePlugin):
         self._poll_armed = False
         self._remote_kicked = False
         self._store = remote.store()
+        # The account's signed-in devices (sessions_api.list_devices), fetched
+        # with the posture so fixes() can offer this machine's earlier installs
+        # before the Sessions tab was ever opened. None until the first answer.
+        self._devices_rows: list | None = None
         # Shell: fixed header + tab strip over a stack (overview | tabs).
         self._shell: QWidget | None = None
         self._header: PageHeader | None = None
@@ -415,6 +419,7 @@ class Plugin(BasePlugin):
                             if r.get("agent_id")
                         ]
                     )
+                    self._fetch_devices()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[DEVICES] refresh failed: {e}")
             finally:
@@ -427,10 +432,30 @@ class Plugin(BasePlugin):
         self._kick_fetch(force=True)
 
     # ---- fixes ("Fix all") ------------------------------------------------
+    def _fetch_devices(self) -> None:
+        """Blocking, on a worker: the account's signed-in devices, kept for
+        fixes(). A failed answer keeps the previous list."""
+        from plugins.devices import sessions_api
+
+        try:
+            rows, error = sessions_api.list_devices()
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[DEVICES] devices list failed: {e}")
+            return
+        if rows is not None:
+            self._devices_rows = rows
+        elif error and error != sessions_api.NOT_AVAILABLE:
+            logger.debug(f"[DEVICES] devices list: {error}")
+
     def _stale_rows(self) -> list:
+        """This machine's earlier installs: from the Sessions tab when it is
+        open (it knows about removals at once), else from the plugin's own
+        fetch (so "Fix all" can offer them without that tab ever opened)."""
         from plugins.devices import sessions_api
         tab = self._tabs.get("sessions")
         rows = getattr(tab, "_rows", None)
+        if rows is None:
+            rows = self._devices_rows
         return sessions_api.stale_installs(rows, socket.gethostname()) if rows else []
 
     def fixes(self) -> list:
@@ -450,13 +475,16 @@ class Plugin(BasePlugin):
         from plugins.devices import sessions_api
         if fix_id != "stale_installs":
             return False, "not offered"
-        failed, removed = [], 0
+        failed, removed, gone = [], 0, set()
         for r in self._stale_rows():
             ok, error = sessions_api.remove_device(r.device_id)
             if ok or error == "gone":
                 removed += 1
+                gone.add(r.device_id)
             else:
                 failed.append(f"{r.device_id}: {error or '?'}")
+        if self._devices_rows and gone:
+            self._devices_rows = [r for r in self._devices_rows if r.device_id not in gone]
         tab = self._tabs.get("sessions")
         if tab is not None:
             tab._loaded_at = 0.0
