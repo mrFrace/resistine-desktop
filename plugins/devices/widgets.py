@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidg
 
 from gui import theme
 from gui.qt_widgets import Card, set_pill
-from plugins.devices.data import SEVERITIES
+from plugins.devices.data import SEVERITIES, _t
 
 # Severity -> the badge key whose text colour paints it.
 SEVERITY_KIND = {
@@ -59,7 +59,7 @@ class SeverityBar(QWidget):
         self.setToolTip(
             " · ".join(f"{self._counts[s]} {s}" for s in SEVERITIES)
             if total
-            else "No vulnerabilities"
+            else _t("sev_no_vulns")
         )
 
     def paintEvent(self, _e):
@@ -188,10 +188,10 @@ class StatCard(Card):
                 kind,
                 {
                     "ok": "OK",
-                    "info": "Info",
-                    "warning": "Attention",
-                    "error": "Action needed",
-                    "critical": "Critical",
+                    "info": _t("stat_info"),
+                    "warning": _t("stat_attention"),
+                    "error": _t("stat_action"),
+                    "critical": _t("stat_critical"),
                 }.get(kind, ""),
             )
             head.addWidget(pill, 0, Qt.AlignmentFlag.AlignVCenter)

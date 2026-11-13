@@ -262,7 +262,41 @@ class Plugin(BasePlugin):
         lay.addWidget(SettingRow(
             "Mode", "System follows your computer's light/dark setting",
             self.appearance_combo))
+        from utils import i18n
+
+        self.language_combo = _NoScrollComboBox()
+        available = set(i18n.get_available_languages())
+        for code in sorted(i18n.LANGUAGE_NAMES, key=lambda c: (c != i18n.DEFAULT_LANGUAGE, c)):
+            if code in available:  # LANGUAGE_NAMES, not every JSON in the folder
+                self.language_combo.addItem(i18n.LANGUAGE_NAMES[code], code)
+        self.language_combo.setCurrentIndex(
+            max(0, self.language_combo.findData(i18n.get_language())))
+        self.language_combo.setMinimumWidth(160)
+        self.language_combo.currentIndexChanged.connect(self.change_language)
+        lay.addWidget(SettingRow(
+            _label("settings.language.label", "Language"),
+            _t("settings.language.hint", "Menus and pages switch at once."),
+            self.language_combo))
         return box
+
+    def change_language(self, index: int):
+        from utils import i18n
+
+        code = self.language_combo.itemData(index)
+        if not code or code == i18n.get_language():
+            return
+        settings.set("ui", "language", code)
+        i18n.set_language(code)
+        # Every screen is built from get_text() at construction: rebuild the
+        # shell (deferred, so the combo's popup has closed) and come back here.
+        self.app.after(0, self._rebuild_in_new_language)
+
+    def _rebuild_in_new_language(self):
+        try:
+            self.app.refresh_navigation()
+            self.app.navigate(self.get_name())
+        except Exception as e:
+            logger.error(f"Language switch failed: {e}")
 
     # ---- Notifications ----------------------------------------------------
     def _notifications_card(self) -> QWidget:

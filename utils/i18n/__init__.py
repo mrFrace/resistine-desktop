@@ -14,8 +14,49 @@ from utils.logger import logger
 # Translation storage - loaded from JSON files
 TEXTS = {}
 
-# Default language
+# Default language (and the fallback for a key a locale lacks)
 DEFAULT_LANGUAGE = 'en'
+
+# Active language for get_text() when no explicit lang is passed. Set at
+# startup from the persisted "ui.language" setting via set_language(); i18n
+# itself must not import utils.settings (utils.settings -> utils.encryption
+# -> utils.i18n would be circular).
+_current_language = DEFAULT_LANGUAGE
+
+# Display names for the language picker in Settings.
+# Keys must match the utils/i18n/<code>.json file stems.
+LANGUAGE_NAMES = {
+    'en': 'English',
+    'es-ES': 'Español (España)',
+    'es-419': 'Español (Latinoamérica)',
+    'de-DE': 'Deutsch',
+    'cs-CZ': 'Čeština',
+    'fr-FR': 'Français',
+    'it-IT': 'Italiano',
+    'nl-NL': 'Nederlands',
+    'pt-BR': 'Português (Brasil)',
+    'ja-JP': '日本語',
+    'tr-TR': 'Türkçe',
+    'ar': 'العربية',
+    'uk-UA': 'Українська',
+}
+
+
+def set_language(lang):
+    """Set the active language for get_text() calls without an explicit
+    lang. An unknown code falls back to the default language."""
+    global _current_language
+    if lang in TEXTS:
+        _current_language = lang
+    else:
+        if lang:
+            logger.warning(f"i18n: unknown language '{lang}', using '{DEFAULT_LANGUAGE}'")
+        _current_language = DEFAULT_LANGUAGE
+
+
+def get_language():
+    """The active language code."""
+    return _current_language
 
 
 def load_language_files():
@@ -109,13 +150,14 @@ def get_text(key, lang=None, **kwargs):
     Get a translated text string with optional formatting.
     
     :param key: The text key in dot notation (e.g., 'encryption.insecure_backend')
-    :param lang: Language code (defaults to DEFAULT_LANGUAGE)
+    :param lang: Language code (defaults to the active language set via
+                 set_language(), itself defaulting to DEFAULT_LANGUAGE)
     :param kwargs: Optional formatting parameters for the text template
     :return: The translated and formatted text string
     :raises KeyError: If the key is not found in the specified language
     """
     if lang is None:
-        lang = DEFAULT_LANGUAGE
+        lang = _current_language
     
     # Try requested language
     if lang in TEXTS and key in TEXTS[lang]:

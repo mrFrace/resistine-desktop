@@ -20,10 +20,16 @@ import time
 from collections.abc import Iterable
 from datetime import datetime
 
+from utils.i18n import get_text
+
 SEVERITIES = ("critical", "high", "medium", "low")
 ALL_DEVICES = "all"
 DAYS = 7
 MAX_TEXT = 120
+
+
+def _t(key: str, **fmt) -> str:
+    return get_text(f"devices.{key}", **fmt)
 
 
 def _int(v) -> int:
@@ -78,12 +84,12 @@ def age_text(when: datetime | None, now: datetime | None = None) -> str:
         0.0, ((now or datetime.now()).replace(tzinfo=None) - when).total_seconds()
     )
     if secs < 3600:
-        return "Less than an hour ago"
+        return _t("age_lt_hour")
     if secs < 86400:
         h = int(secs // 3600)
-        return f"{h} hour{'s' if h != 1 else ''} ago"
+        return _t("age_hour" if h == 1 else "age_hours", n=h)
     d = int(secs // 86400)
-    return f"{d} day{'s' if d != 1 else ''} ago"
+    return _t("age_day" if d == 1 else "age_days", n=d)
 
 
 def is_this_machine(
@@ -247,56 +253,36 @@ def header_summary(
     not_enrolled | error | None (first fetch still running).
     """
     if status == "signed_out":
-        return {
-            "pill": ("info", "Sign in"),
-            "subtitle": "Sign in to Phoenix to see the posture of your devices.",
-            "note": "",
-        }
+        return {"pill": ("info", _t("hdr_sign_in")), "subtitle": _t("hdr_sign_in_sub"), "note": ""}
     if status == "not_enrolled":
-        return {
-            "pill": ("info", "Not enrolled"),
-            "subtitle": "Your account has no devices enrolled for security posture yet.",
-            "note": "",
-        }
+        return {"pill": ("info", _t("hdr_not_enrolled")), "subtitle": _t("hdr_not_enrolled_sub"),
+                "note": ""}
     if not rows:
         if status is None:
-            return {
-                "pill": ("info", "Loading"),
-                "subtitle": "Reading the posture of your devices…",
-                "note": "",
-            }
+            return {"pill": ("info", _t("hdr_loading")), "subtitle": _t("hdr_loading_sub"), "note": ""}
         if status == "error":
-            return {
-                "pill": ("warning", "Unavailable"),
-                "subtitle": "The posture service could not be reached.",
-                "note": _text(error, 160),
-            }
-        return {
-            "pill": ("info", "No data"),
-            "subtitle": "No posture has been computed for your devices yet.",
-            "note": "",
-        }
+            return {"pill": ("warning", _t("hdr_unavailable")), "subtitle": _t("hdr_unavailable_sub"),
+                    "note": _text(error, 160)}
+        return {"pill": ("info", _t("hdr_no_data")), "subtitle": _t("hdr_no_data_sub"), "note": ""}
     n = len(rows)
     grade = worst_grade(rows)
     pill = (
-        (grade_kind(grade), f"Worst grade {grade}") if grade else ("info", "No grade")
+        (grade_kind(grade), _t("hdr_worst_grade", grade=grade)) if grade
+        else ("info", _t("hdr_no_grade"))
     )
     ago = ""
     if fetched_at:
         secs = max(0, (now or time.time()) - float(fetched_at))
-        ago = (
-            " · checked just now"
-            if secs < 120
-            else (
-                f" · checked {int(secs // 60)} min ago"
-                if secs < 7200
-                else f" · checked {int(secs // 3600)} h ago"
-            )
+        ago = " · " + (
+            _t("hdr_checked_now") if secs < 120
+            else _t("hdr_checked_min", n=int(secs // 60)) if secs < 7200
+            else _t("hdr_checked_h", n=int(secs // 3600))
         )
-    subtitle = f"{n} device{'s' if n != 1 else ''} with a security posture{ago}"
+    subtitle = (_t("hdr_devices_one", ago=ago) if n == 1
+                else _t("hdr_devices_many", n=n, ago=ago))
     note = ""
     if status == "error":
-        note = "Showing the last known posture. " + _text(error, 160)
+        note = _t("hdr_last_known") + " " + _text(error, 160)
     return {"pill": pill, "subtitle": subtitle, "note": note}
 
 
