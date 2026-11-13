@@ -2,7 +2,7 @@
 set -e
 
 # Download pre-built VPN artifacts from GitHub Actions
-# Requires: GitHub CLI (gh) authenticated with access to Resistine/resistine-vpn-macos
+# Requires: GitHub CLI (gh) authenticated with access to DatOneOPGuy/phoenix-vpn-macos
 #
 # Usage:
 #   ./download-vpn-artifacts.sh                  # download latest from main
@@ -13,7 +13,11 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACTS_DIR="$SCRIPT_DIR/vpn-artifacts"
-REPO="Resistine/resistine-vpn-macos"
+# Phoenix's own fork. The old Resistine/resistine-vpn-macos stops being
+# reachable the day org access is revoked, and its artifacts still carry the
+# pre-migration com.resistine.* bundle IDs, which build-distribution.sh now
+# rejects. Override with VPN_ARTIFACTS_REPO if you need a different fork.
+REPO="${VPN_ARTIFACTS_REPO:-DatOneOPGuy/phoenix-vpn-macos}"
 VERSION_FILE="$ARTIFACTS_DIR/.vpn-version"
 
 # Check for gh CLI
