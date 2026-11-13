@@ -77,3 +77,22 @@ def test_summaries_are_capped_and_printable():
     assert len(job["kind"]) == 40 and len(job["title"]) == 80 and len(job["detail"]) == 120
     done = jobs.finish(job["code"], summary="x" * 1000)
     assert len(done["summary"]) == jobs._SUMMARY_MAX and done["summary"].endswith("…")
+
+
+def test_undo_declaration_and_undoable():
+    assert jobs.start("x", "no undo")["undo"] is None
+    assert jobs.start("x", "bad undo", undo={"label": "Undo"})["undo"] is None  # no plugin/action
+    a = jobs.start("vpn", "VPN connect", "box",
+                   undo={"label": "Disconnect", "plugin": "VPN", "action": "vpn_disconnect", "arg": "box"})
+    assert a["undo"] == {"label": "Disconnect", "plugin": "VPN", "action": "vpn_disconnect", "arg": "box"}
+    assert jobs.undoable(a) is False                       # still running
+    jobs.finish(a["code"], ok=True)
+    assert jobs.undoable(jobs.find(a["code"])) is True
+    b = jobs.start("vpn", "VPN disconnect", "box",
+                   undo={"label": "Connect", "plugin": "VPN", "action": "vpn_connect", "arg": "box"})
+    assert jobs.undoable(jobs.find(a["code"])) is True     # b is still running: a is the newest done
+    jobs.finish(b["code"], ok=False)
+    assert jobs.undoable(jobs.find(a["code"])) is False    # a later job of the kind ended
+    assert jobs.undoable(jobs.find(b["code"])) is False    # failed jobs are not undone
+    assert jobs.undoable(None) is False
+    assert jobs.latest("vpn")["code"] == b["code"] and jobs.latest("nope") is None
