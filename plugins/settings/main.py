@@ -33,6 +33,7 @@ from gui.page_kit import (
     MenuRow,
     Page,
     PageHeader,
+    RowList,
     SettingRow,
     muted,
     section_heading,
@@ -152,6 +153,7 @@ class Plugin(BasePlugin):
         page.add(self._appearance_card())
         page.add(self._notifications_card())
         page.add(self._updates_card())
+        page.add(self._diagnostics_card())
         page.add(self._uninstall_card())
         page.stretch()
         return page.widget
@@ -297,7 +299,50 @@ class Plugin(BasePlugin):
                 except Exception:  # noqa: BLE001
                     pass
 
-    # ---- Software Updates -------------------------------------------------
+    # ---- Diagnostics -----------------------------------------------------
+    def _diagnostics_card(self) -> QWidget:
+        """Versions, the recent jobs with their codes, and a redacted report
+        for the clipboard (utils/diagnostics.py)."""
+        from utils import diagnostics
+
+        box, lay = self._section("Diagnostics")
+        lay.addWidget(KVList(diagnostics.facts()))
+        events = diagnostics.events(limit=6)
+        if events:
+            lay.addSpacing(10)
+            self._events = RowList()
+            for code, text in events:
+                row = MenuRow("activity", code, text,
+                              on_click=lambda c=code: self._ask_ai_about_job(c))
+                row._hint.setTextFormat(Qt.TextFormat.PlainText)
+                row.setToolTip("Ask Phoenix AI what happened in this job")
+                self._events.add_row(row)
+            lay.addWidget(self._events)
+        lay.addSpacing(10)
+        copy = MenuRow("copy", "Copy diagnostics",
+                       "Versions, states, recent jobs and the end of the log, with secrets removed",
+                       on_click=self._copy_diagnostics, chevron=False)
+        lay.addWidget(copy)
+        return box
+
+    def _copy_diagnostics(self) -> None:
+        from PyQt6.QtWidgets import QApplication
+
+        from utils import diagnostics
+        try:
+            text = diagnostics.report(getattr(self.app, "_nav_status", None))
+            QApplication.clipboard().setText(text)
+            self.app.show_notification("Diagnostics copied, with secrets removed.", type="info")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Copy diagnostics failed: {e}")
+            self.app.show_notification("Could not copy the diagnostics.", type="error")
+
+    def _ask_ai_about_job(self, code: str) -> None:
+        chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)
+        if chat is None or not chat.ask(f"What happened in {code}?"):
+            self.app.show_notification(
+                "Phoenix AI isn't set up yet. Choose an AI in Settings first.", type="warning")
+
     def _updates_card(self) -> QWidget:
         box, lay = self._section("Updates")
         check = MenuRow("refresh-cw", "Check for updates",
@@ -438,12 +483,16 @@ class Plugin(BasePlugin):
                          daemon=True).start()
 
     def _update_check_worker(self):
+        from utils import jobs
+        job = jobs.start("update_check", "Update check")
         try:
             from utils.updates import channel
             text = update_check_text(channel.check())
+            jobs.finish(job["code"], ok=True, summary=text)
         except Exception as e:  # noqa: BLE001  PackageError messages are user-safe
             logger.warning(f"Update check failed: {e}")
             text = f"Update check failed: {e}"
+            jobs.finish(job["code"], ok=False, summary=str(e))
         self.app.after(0, lambda: self._safe_set_text(self.update_status_label, text))
 
     def _get_app_version(self):

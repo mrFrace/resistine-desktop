@@ -752,3 +752,30 @@ class TestClearUserData:
 
         assert isolated_settings.get("chat", "disable_animation") is True
         assert isolated_settings.get("antivirus", "auto_update_enabled") is True
+
+
+@pytest.mark.unit
+class TestDiagnostics:
+    def test_section_lists_jobs_and_copies_a_redacted_report(self, settings_plugin, qapp, monkeypatch):
+        from PyQt6.QtWidgets import QApplication
+
+        from gui.page_kit import MenuRow
+        from utils import jobs
+        jobs._reset_for_tests()
+        job = jobs.start("vpn", "VPN connect", "box")
+        jobs.finish(job["code"], ok=False, summary="PrivateKey = abc")
+        settings_plugin._test_page = settings_plugin.create_main_screen()
+        rows = {r.text(): r for r in settings_plugin._test_page.findChildren(MenuRow)}
+        assert job["code"] in rows and rows[job["code"]]._hint.text().startswith("VPN connect (box) · failed")
+        chat = MagicMock()
+        chat.get_name.return_value = "Chat"
+        settings_plugin.app.plugins = [chat]
+        rows[job["code"]].clicked.emit()
+        chat.ask.assert_called_once_with(f"What happened in {job['code']}?")
+        rows["Copy diagnostics"].clicked.emit()
+        text = QApplication.clipboard().text()
+        assert text.startswith("Phoenix Desktop diagnostics") and job["code"] in text
+        assert "PrivateKey = [redacted]" in text and "abc" not in text.split(job["code"], 1)[1].splitlines()[0]
+        settings_plugin.app.show_notification.assert_called_with(
+            "Diagnostics copied, with secrets removed.", type="info")
+        jobs._reset_for_tests()
