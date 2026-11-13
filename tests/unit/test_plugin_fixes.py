@@ -73,7 +73,29 @@ def test_antivirus_fixes_and_run(monkeypatch, isolated_settings):
     assert p.run_fix("x") == (False, "not offered")
 
 
-def test_vpn_fixes_and_run(monkeypatch):
+def test_vpn_switched_off_by_hand_is_not_a_fix(monkeypatch, isolated_settings):
+    from plugins.vpn import main as vpn
+    monkeypatch.setattr("utils.fixes.this_host", lambda: "box")
+    monkeypatch.setattr(vpn, "_phoenix_signed_in", lambda: True)
+    monkeypatch.setattr(vpn, "my_vpn_status", "Stopped")
+    monkeypatch.setattr(vpn.threading, "Thread", lambda **kw: MagicMock())
+    p = vpn.Plugin.__new__(vpn.Plugin)
+    p._toggle_busy = False
+    p.vpn_toggle_switch = None
+    p.get_name = lambda: "VPN"
+    p.get_selected_conf_file_name = lambda: "drake-laptop"
+    assert [f.id for f in p.fixes()] == ["vpn_connect"]
+    p.request_toggle(0)                      # the user switches it off
+    assert isolated_settings.get("vpn", "user_disconnected") is True
+    p._toggle_busy = False
+    assert p.fixes() == []                   # their call, not a fault
+    p.request_toggle(1)                      # and on again, by hand
+    assert isolated_settings.get("vpn", "user_disconnected") is False
+    p._toggle_busy = False
+    assert [f.id for f in p.fixes()] == ["vpn_connect"]
+
+
+def test_vpn_fixes_and_run(monkeypatch, isolated_settings):
     from plugins.vpn import main as vpn
     monkeypatch.setattr("utils.fixes.this_host", lambda: "box")
     monkeypatch.setattr(vpn, "_phoenix_signed_in", lambda: True)
