@@ -433,3 +433,43 @@ class TestNewChat:
         assert screen.conversation_history[-1]["content"] == "r1"
 
 
+
+
+# ===========================================================================
+# Job codes
+# ===========================================================================
+@pytest.mark.unit
+class TestJobCodes:
+    """A job code in the question attaches that job's local details to the
+    turn (and only then); the answer is rendered as untrusted text."""
+
+    def test_code_attaches_local_context_for_this_turn_only(self, screen, stream_cls, isolated_settings):
+        from utils import jobs
+        jobs._reset_for_tests()
+        job = jobs.start("antivirus_scan", "Antivirus scan", "files")
+        jobs.finish(job["code"], ok=True, summary="0 threats in 12 files")
+        _send(screen, f"What happened in {job['code']}?")
+        sent = stream_cls.return_value.start.call_args.kwargs["messages"][-1]["content"]
+        assert sent.startswith(f"[Phoenix job {job['code']}: Antivirus scan (files) · finished just now · 0 threats in 12 files]\n\n")
+        assert sent.endswith(f"What happened in {job['code']}?")
+        assert screen.conversation_history[-1]["content"] == f"What happened in {job['code']}?"
+        assert screen._current_asst_bubble._untrusted is True
+        jobs._reset_for_tests()
+
+    def test_no_code_sends_the_text_as_is(self, screen, stream_cls):
+        _send(screen, "hello there")
+        assert stream_cls.return_value.start.call_args.kwargs["messages"] == [
+            {"role": "user", "content": "hello there"}]
+        assert screen._current_asst_bubble._untrusted is False
+
+    def test_local_mode_keeps_the_history_and_adds_context_to_the_last_turn(self, screen, stream_cls, isolated_settings):
+        from utils import jobs
+        jobs._reset_for_tests()
+        screen.base_url = None
+        screen.conversation_history = [dict(chat_main._SYS_MSG), {"role": "assistant", "content": "hi"}]
+        _send(screen, "and PX-ZZZZ?")
+        msgs = stream_cls.return_value.start.call_args.kwargs["messages"]
+        assert msgs[:2] == [dict(chat_main._SYS_MSG), {"role": "assistant", "content": "hi"}]
+        assert msgs[2]["content"] == "[Phoenix job PX-ZZZZ: no such job on this machine]\n\nand PX-ZZZZ?"
+        assert screen.conversation_history[-1]["content"] == "and PX-ZZZZ?"
+        jobs._reset_for_tests()

@@ -22,6 +22,11 @@ failures must go through the same redaction as `utils/http_trace.py`
 include the recovery key, the WireGuard private key or the agent key. The
 timeline shown in the app is fine; the export is the risk.
 
+Built 2026-11-13: Settings → Diagnostics (`utils/diagnostics.py`). The
+report goes through `redact()`: the http_trace masks plus "PrivateKey =",
+bearer, `ENC:` values, WireGuard-key, recovery-key and long-blob shapes.
+Nothing is read from the secret store.
+
 ## Job tracking codes shown in Chat
 
 If every fix/scan/install gets a short code the user can ask the AI
@@ -30,12 +35,20 @@ local data only; do not send job details to the chat endpoint unless the
 user asked about that code, and treat the returned text like any other
 untrusted content (`markdown_to_html(..., allow_html=False)`, links off).
 
+Built 2026-11-13: `utils/jobs.py` (codes `PX-4K7Q`, local `jobs.json`,
+0600). The chat attaches a job's details only when its code is in the
+question, and marks that answer's bubble untrusted.
+
 ## Batching or delaying SIEM alerts ("hold mail", daily digest)
 
 Alert batching must bypass for high severity: a critical alert is shown
 immediately whatever the digest setting. The batching happens in the
 view, never by acknowledging alerts on the server. Alert text stays
 untrusted when quoted in a digest line.
+
+Built 2026-11-13: `plugins/dashboard/digest.py`, Settings → Notifications
+→ Daily alert digest. Critical and high always on their own row; the
+store is untouched; digest lines carry counts and host names only.
 
 ## Undo / "returns desk" for applied fixes
 
