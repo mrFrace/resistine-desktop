@@ -81,6 +81,26 @@ prune "$REPO/apt/pool/main/p/phoenix" 'phoenix_*.deb'
 prune "$REPO/rpm" 'phoenix-*.rpm'
 prune "$REPO/arch" 'phoenix-*.pkg.tar.*[!g]'
 
+# RPM: the packages carry their own OpenPGP signature (rpmsign through the
+# same gpg-agent), so dnf can run with gpgcheck=1, not just repo_gpgcheck.
+if command -v rpmsign >/dev/null; then
+	RPMSIGN=(rpmsign)
+	RPM=(rpm)
+else
+	RPMSIGN=(nix shell nixpkgs#rpm -c rpmsign)
+	RPM=(nix shell nixpkgs#rpm -c rpm)
+fi
+GPG_BIN=$(command -v gpg || echo gpg)
+for p in "$REPO"/rpm/phoenix-*.rpm; do
+	[ -f "$p" ] || continue
+	"${RPM[@]}" --checksig "$p" 2>/dev/null | grep -q "signatures OK" && continue
+	log "signing $(basename "$p")"
+	"${RPMSIGN[@]}" --define "_gpg_name $FPR" --define "__gpg $GPG_BIN" --addsign "$p" >/dev/null
+	"${RPM[@]}" --define "_dbpath $REPO/rpm/.rpmdb" --import "$KEY" 2>/dev/null || true
+	"${RPM[@]}" --define "_dbpath $REPO/rpm/.rpmdb" --checksig "$p" | grep -q "signatures OK" || die "rpm signature check failed: $p"
+done
+rm -rf "$REPO/rpm/.rpmdb"
+
 # Arch: detached package signatures first; repo-add records them in the db.
 for p in "$REPO"/arch/phoenix-*.pkg.tar.xz "$REPO"/arch/phoenix-*.pkg.tar.zst; do
 	[ -f "$p" ] && [ ! -f "$p.sig" ] || continue

@@ -31,7 +31,8 @@ from plugins.wazuh.config import (
     WAZUH_REGISTRATION_PORT,
     WINDOWS_WAZUH_DIR,
     WINDOWS_SYSMON_ZIP_URL,
-    WINDOWS_SYSMON_CONFIG_URL,
+    WINDOWS_SYSMON_CONFIG_RESOURCE,
+    WINDOWS_SYSMON_CONFIG_SHA256,
 )
 
 _OSSEC_CONF = os.path.join(WINDOWS_WAZUH_DIR, "ossec.conf")
@@ -381,10 +382,37 @@ def _prepare_sysmon_download(progress_callback=None):
             return None
 
     tmp_sysmon_config = os.path.join(tmp_sysmon, "sysmonconfig-export.xml")
-    if not _download_file(WINDOWS_SYSMON_CONFIG_URL, tmp_sysmon_config, progress_callback, "Downloading Sysmon config..."):
+    if not _bundled_sysmon_config(tmp_sysmon_config):
         return None
 
     return {"dir": tmp_sysmon, "exe": tmp_sysmon_exe, "config": tmp_sysmon_config}
+
+
+def _bundled_sysmon_config(dest_path: str) -> bool:
+    """Copy the bundled Sysmon configuration to *dest_path* after checking
+    its SHA-256 against the pin in plugins/wazuh/config.py. The file is
+    applied elevated, so a bundle that does not match the pin is refused."""
+    import hashlib
+    import shutil
+
+    from utils.functions import get_resource_path
+
+    src = get_resource_path(os.path.join(*WINDOWS_SYSMON_CONFIG_RESOURCE))
+    try:
+        with open(src, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+    except OSError as e:
+        logger.error(f"Bundled Sysmon config missing: {e}")
+        return False
+    if digest != WINDOWS_SYSMON_CONFIG_SHA256:
+        logger.error("Bundled Sysmon config does not match its pinned SHA-256; refusing to apply it")
+        return False
+    try:
+        shutil.copyfile(src, dest_path)
+    except OSError as e:
+        logger.error(f"Could not stage the Sysmon config: {e}")
+        return False
+    return True
 
 
 def _sysmon_install_ps(sysmon):

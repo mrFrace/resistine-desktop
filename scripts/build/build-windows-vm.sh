@@ -82,7 +82,18 @@ docker run -d --name "$VM_NAME" \
     -v "$VM_DIR":/storage --stop-timeout 120 "$DOCKUR_IMAGE" >/dev/null
 ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$VM_NAME")"
 [ -n "$ip" ] || die "no IP for $VM_NAME"
-SSH_OPTS=(-i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR)
+# The golden image's SSH host key is pinned in $GOLDEN_DIR/known_hosts under
+# the alias phoenix-golden (the VM's address changes per run). The first build
+# after make_golden records it (trust on first use, once per image); every
+# later build refuses a VM whose key differs.
+KNOWN_HOSTS="$GOLDEN_DIR/known_hosts"
+SSH_OPTS=(-i "$KEY" -o HostKeyAlias=phoenix-golden -o UserKnownHostsFile="$KNOWN_HOSTS" -o ConnectTimeout=10 -o LogLevel=ERROR)
+if [ -s "$KNOWN_HOSTS" ]; then
+    SSH_OPTS+=(-o StrictHostKeyChecking=yes)
+else
+    log "no $KNOWN_HOSTS yet: recording the golden image's host key on this first connection"
+    SSH_OPTS+=(-o StrictHostKeyChecking=accept-new)
+fi
 ssh_vm() { ssh "${SSH_OPTS[@]}" "phoenix@$ip" "$@"; }
 
 for i in $(seq 1 60); do
