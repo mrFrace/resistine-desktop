@@ -54,7 +54,18 @@ rm -rf build/
 
 # Detect signing identity
 echo "  - Detecting code signing certificate..."
-DEV_ID_CERT=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | awk '{print $2}')
+# Prefer the team the app actually belongs to. Picking the first match signs
+# a build with a legacy team's certificate, whose entitlements no current
+# provisioning profile matches — it builds, then fails at runtime.
+EXPECTED_TEAM_ID="${EXPECTED_TEAM_ID:-KTKS453599}"
+DEV_ID_CERTS=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application")
+DEV_ID_CERT=$(echo "$DEV_ID_CERTS" | grep "($EXPECTED_TEAM_ID)" | head -1 | awk '{print $2}')
+if [ -z "$DEV_ID_CERT" ] && [ -n "$DEV_ID_CERTS" ]; then
+    echo "  ⚠️  No Developer ID Application certificate for team $EXPECTED_TEAM_ID."
+    echo "     Available:"
+    echo "$DEV_ID_CERTS" | sed 's/^/       /'
+    echo "     Not falling back to another team — set EXPECTED_TEAM_ID to choose one."
+fi
 
 if [ -z "$DEV_ID_CERT" ]; then
     echo "  ⚠️  Warning: No Developer ID Application certificate found"

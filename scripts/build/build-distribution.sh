@@ -1103,12 +1103,25 @@ print(m.group(1) if m else '1.0.0')
 ")
 echo "  App version: $APP_VERSION"
 
-# Detect Developer ID Installer certificate
-INSTALLER_IDENTITY=$(security find-identity -v -p basic 2>/dev/null | grep "Developer ID Installer" | head -1 | awk '{print $2}')
+# Detect the Developer ID Installer certificate, pinned to the same team as
+# the app. Taking the first match would sign the installer with a legacy
+# team's certificate while the app inside carries ours — the bundle would
+# still notarize, so nothing catches it until someone inspects the shipped
+# pkg and finds another company's name on it.
+INSTALLER_CERTS=$(security find-identity -v -p basic 2>/dev/null | grep "Developer ID Installer")
+INSTALLER_LINE=$(echo "$INSTALLER_CERTS" | grep "($TEAM_ID)" | head -1)
+INSTALLER_IDENTITY=""
 INSTALLER_NAME=""
-if [ -n "$INSTALLER_IDENTITY" ]; then
-    INSTALLER_NAME=$(security find-identity -v -p basic 2>/dev/null | grep "$INSTALLER_IDENTITY" | sed 's/.*"\(.*\)".*/\1/')
+if [ -n "$INSTALLER_LINE" ]; then
+    INSTALLER_IDENTITY=$(echo "$INSTALLER_LINE" | awk '{print $2}')
+    INSTALLER_NAME=$(echo "$INSTALLER_LINE" | sed 's/.*"\(.*\)".*/\1/')
     echo "  Installer signing with: $INSTALLER_NAME"
+elif [ -n "$INSTALLER_CERTS" ]; then
+    echo "  Error: no Developer ID Installer certificate for team $TEAM_ID."
+    echo "  The app is signed by $TEAM_ID; signing the installer with another"
+    echo "  team would ship a mismatched package. Certificates available:"
+    echo "$INSTALLER_CERTS" | sed 's/^/    /'
+    exit 1
 else
     echo "  Warning: No Developer ID Installer certificate found"
     echo "  PKG will not be signed (install one for distribution)"
