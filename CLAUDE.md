@@ -73,11 +73,19 @@ Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over
 
 All features are plugins in `plugins/`. Each plugin subclasses `plugins/base_plugin.py:BasePlugin` and overrides `create_main_screen()` (returns a QWidget). Plugins are discovered by scanning the `plugins/` directory (and a user plugins directory) at runtime. `plugins/plugin_manager.py` handles dynamic loading, ordering, and Store downloads.
 
-Core (non-uninstallable) plugins: Dashboard, Store, Help, Settings. Optional: Login, Chat, VPN, Wazuh (Endpoint), Devices, Antivirus. `plugins/devices/` is the successor of the removed Wazuh Overview: it is built on the posture cards from `GET /v1/me/posture` (`plugins/dashboard/posture.py`), the SIEM alerts from Matrix and the local agent state, because the Phoenix API has no vulnerability/inventory/SCA endpoints; its charts are QPainter (no matplotlib).
+Core (non-uninstallable) plugins: Dashboard, Alerts, Store, Help, Settings. Optional: Login, Chat, VPN, Wazuh (Endpoint), Devices, Antivirus. `plugins/devices/` is the successor of the removed Wazuh Overview: it is built on the posture cards from `GET /v1/me/posture` (`plugins/dashboard/posture.py`), the SIEM alerts from Matrix and the local agent state, because the Phoenix API has no vulnerability/inventory/SCA endpoints; its charts are QPainter (no matplotlib).
 
 ### GUI (PyQt6)
 
 `main.py` is the entry point (QApplication). `gui/app_window.py` hosts the icon-rail sidebar (SVG nav icons with status glow), a QStackedWidget of plugin screens, and slide-in sub-views. `gui/page_kit.py` is the flat page kit (Page, PageHeader, SettingRow, MenuRow) plugin screens are built from; `gui/qt_widgets.py` has shared widgets (Card, CardGrid, StatusBadge, set_pill). Theming is palette-driven in `gui/theme.py` (Phoenix brand tokens, light/dark pairs) — use `theme.color(name)`, never hardcoded hex in screens.
+
+### Plugin status, jobs, fixes
+
+- **Status:** `BasePlugin.check_status()` returns a `Status(kind, reason, at)` with kind `ok / warning / error / off / unknown` (legacy strings still accepted); the shell reads `status_info()`, which turns a failed check or an OK older than `status_fresh_for` into `unknown`. Unknown glows amber in the rail with the reason as a caption, and a plugin unknown past 3× its freshness window gets one "Check now" toast per episode (`recheck()`). Never map "not checked" to a warning or a stale green.
+- **Data has an age:** `PageHeader.set_as_of()` / tile `as_of` lines ("As of 7 min ago · next check 22:39"). The Dashboard's Recent alerts tile opens with the week in one sentence (`plugins/dashboard/weekly.py`), which withholds "Nothing needs you." while any tile is unknown; once a week the sentence is posted into the user's SIEM alerts DM (counts and tile names only).
+- **Jobs:** long actions (scan, agent install, VPN connect/disconnect, update check, every fix) register in `utils/jobs.py` and get a code like `PX-4K7Q` (`<config>/jobs.json`, owner-only). Settings → Diagnostics lists them; a code typed into the chat attaches that job's local details to that turn only, and the answer is rendered untrusted. A job may declare its `undo` (`BasePlugin.undo(action, arg)`: closed set, argument re-validated, same privileged path as the forward action); only the newest done job of a kind is undoable.
+- **Fixes ("Fix all", `utils/fixes.py`):** `BasePlugin.fixes()` offers repairs from cached state, `run_fix(id)` runs one through the plugin's own function and elevation; ids are a closed set and a fix has no arguments. `gate()` drops any fix whose host is not this machine. Agent install and antivirus setup are not fixes (they run at sign-in); package upgrades and restarts are never run; a VPN switched off by hand (`vpn.user_disconnected`) is not offered.
+- **Diagnostics export:** `utils/diagnostics.report()` (Settings → Copy diagnostics) goes through `redact()`; extend the patterns there before adding anything to the report.
 
 ### i18n
 
@@ -85,7 +93,7 @@ Core (non-uninstallable) plugins: Dashboard, Store, Help, Settings. Optional: Lo
 
 ### Chat & SIEM alerts
 
-`plugins/chat/` has a pluggable transport: OpenAI-compatible HTTPS (`utils/chat_endpoint.py`, internal root CA in `resources/certs/`) or end-to-end-encrypted Matrix (`matrix_transport.py`). SIEM alerts from siemgent arrive over Matrix into a read-only alerts view (`siem_alerts.py`) and the Dashboard. **Alert text is untrusted** (it quotes monitored-host data): render it with `markdown_to_html(..., allow_html=False)` and links disabled — both the Dashboard's `_AlertText` and chat's `untrusted=True` bubbles do this; follow that pattern for any new alert surface.
+`plugins/chat/` has a pluggable transport: OpenAI-compatible HTTPS (`utils/chat_endpoint.py`, internal root CA in `resources/certs/`) or end-to-end-encrypted Matrix (`matrix_transport.py`). SIEM alerts from siemgent arrive over Matrix into a read-only alerts view (`siem_alerts.py`, shown by `plugins/alerts/`) and the Dashboard. The optional daily digest (`plugins/dashboard/digest.py`) folds a day's quieter alerts into one row in the view only: high and critical alerts always stay on their own row with their notification, and nothing is read, acknowledged or dropped on the server by folding. **Alert text is untrusted** (it quotes monitored-host data): render it with `markdown_to_html(..., allow_html=False)` and links disabled — both the Dashboard's `_AlertText` and chat's `untrusted=True` bubbles do this; follow that pattern for any new alert surface.
 
 ### Platform-Specific Code
 
@@ -97,6 +105,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 - Never write predictable fixed paths in shared temp dirs for privileged reads/writes — use `tempfile.mkdtemp()`/uuid-suffixed names.
 - Updates and plugins are executable content: signatures are mandatory (a missing signature is a hard failure, same as a bad one), downloads are HTTPS-only.
 - Secrets go through `utils/settings.py` `set_secret`/`get_secret` (Fernet, `ENC:` prefix, master key in system keyring). `get_secret` fails closed on un-prefixed values.
+- "Fix all" never composes privileged commands: a fix is one of a plugin's own actions, run by its own function; add new fixes to that plugin's closed set, not to the runner. Anything exported (diagnostics, traces) goes through a redaction function with tests for every secret shape it may carry.
 - Server-supplied WireGuard configs go through `plugins/vpn/wireguard/config_validation.py` (rejects `PostUp`/`PreUp`/... script hooks). Files holding private keys are 0600/SYSTEM-only.
 
 ### Settings & Secrets

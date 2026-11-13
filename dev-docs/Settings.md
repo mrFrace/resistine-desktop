@@ -19,6 +19,11 @@ Configuration files are stored in platform-specific directories:
 - **Linux**: `~/.config/phoenix/`
 - **Windows**: `%APPDATA%\Phoenix\`
 
+Next to the per-namespace JSON files the directory holds `logs/phoenix.log`,
+`siem_alerts.json` (received SIEM alerts) and `jobs.json` (the last 50 jobs
+with their codes, see `utils/jobs.py`); both JSON stores are written 0600
+through an exclusive-create temp file and `os.replace`.
+
 ## API Reference
 
 Import the settings module:

@@ -14,17 +14,34 @@ protection status — start there.
 
 Each item in the sidebar is a feature:
 
-- **Dashboard** — See your protection status at a glance.
-- **Chat** — Ask the Phoenix AI assistant for help and guidance.
+- **Dashboard** — Your week in one sentence, the security posture of your
+  machines, recent alerts and each feature's state. When Phoenix can put
+  something right on this computer, the System tile shows **Fix N things**:
+  each fix is one of the features' own actions, run one at a time, and the
+  page tells you how many password prompts to expect. Phoenix never updates
+  packages or restarts your computer for you.
+- **Alerts** — Security alerts about your machines from the Phoenix SIEM.
+  Turn on **Daily alert digest** in Settings to see a day's quieter alerts as
+  one row; high and critical alerts always appear on their own.
+- **Chat** — Ask the Phoenix AI assistant for help and guidance. Type a job
+  code (for example `PX-4K7Q`, from Settings → Diagnostics) to ask about
+  something Phoenix did on this computer.
 - **VPN** — Connect to a secure WireGuard VPN and manage your configurations.
 - **Endpoint** — Install and manage the SIEM agent that monitors your device.
+- **Devices** — Every machine on your account, their posture, and the
+  sessions signed in to it.
 - **Antivirus** — Scan, quarantine, and protect against malware.
 - **Store** — Browse and install additional plugins.
 - **Help** — This documentation.
-- **Settings** — Manage your account and application preferences.
+- **Settings** — Your account, the AI assistant, appearance, notifications,
+  updates and **Diagnostics**.
 
-Some features (such as Chat and the Endpoint agent) require an active VPN
-connection. If a feature seems unavailable, connect the VPN first.
+Chat needs the Endpoint agent running. If a feature seems unavailable, check
+the Endpoint screen first.
+
+An amber glow on a feature's icon means Phoenix could not check it: the
+caption under the icon says why. If it stays that way, a message offers
+**Check now**.
 
 ## Troubleshooting
 
@@ -32,8 +49,14 @@ connection. If a feature seems unavailable, connect the VPN first.
   connected to the VPN. Restarting the app clears most transient issues.
 - **VPN won't connect** — Check your internet connection and confirm your
   configuration under the VPN tab.
-- **Something looks wrong** — Phoenix updates itself automatically. See
-  **Releases** (in the dropdown above) for version and update details.
+- **Something looks wrong** — Settings → **Check for updates** fetches the
+  current release; see **Releases** (in the dropdown above) for details.
+- **Asking for help** — Settings → Diagnostics → **Copy diagnostics** puts
+  versions, states, recent jobs and the end of the log on the clipboard, with
+  keys, tokens and passwords removed, ready to paste into a message.
+- **Undoing something Phoenix did** — Settings → Diagnostics lists recent
+  jobs; where one can be undone (a VPN connection, an agent install) the row
+  offers **Undo**, which asks once more before it runs.
 
 ## More Information
 
