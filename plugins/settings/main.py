@@ -311,11 +311,16 @@ class Plugin(BasePlugin):
         if events:
             lay.addSpacing(10)
             self._events = RowList()
+            from utils import jobs
             for code, text in events:
                 row = MenuRow("activity", code, text,
                               on_click=lambda c=code: self._ask_ai_about_job(c))
                 row._hint.setTextFormat(Qt.TextFormat.PlainText)
                 row.setToolTip("Ask Phoenix AI what happened in this job")
+                job = jobs.find(code)
+                if jobs.undoable(job):
+                    row.layout().insertWidget(2, self._undo_button(job), 0,
+                                              Qt.AlignmentFlag.AlignVCenter)
                 self._events.add_row(row)
             lay.addWidget(self._events)
         lay.addSpacing(10)
@@ -336,6 +341,56 @@ class Plugin(BasePlugin):
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Copy diagnostics failed: {e}")
             self.app.show_notification("Could not copy the diagnostics.", type="error")
+
+    _UNDO_CONFIRM_MS = 6000
+
+    def _undo_button(self, job: dict) -> QPushButton:
+        """"Undo: Disconnect" asks once more in place ("Confirm: Disconnect",
+        six seconds) before it runs: no dialog, no accidental click."""
+        from PyQt6.QtCore import QTimer
+
+        label = job["undo"]["label"]
+        btn = QPushButton(f"Undo: {label}")
+        btn.setObjectName("Link")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setProperty("armed", False)
+
+        def disarm():
+            try:
+                btn.setProperty("armed", False)
+                btn.setText(f"Undo: {label}")
+            except RuntimeError:
+                pass
+
+        def click():
+            if not btn.property("armed"):
+                btn.setProperty("armed", True)
+                btn.setText(f"Confirm: {label}")
+                QTimer.singleShot(self._UNDO_CONFIRM_MS, disarm)
+                return
+            btn.setEnabled(False)
+            self._undo_job(job)
+
+        btn.clicked.connect(click)
+        return btn
+
+    def _undo_job(self, job: dict) -> None:
+        from utils import jobs
+        undo = job.get("undo") or {}
+        plugin = next((p for p in getattr(self.app, "plugins", [])
+                       if p.get_name() == undo.get("plugin")), None)
+        ok = False
+        if plugin is not None and jobs.undoable(jobs.find(job["code"])):
+            try:
+                ok = bool(plugin.undo(undo["action"], undo.get("arg", "")))
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Undo of {job['code']} failed: {e}")
+        if ok:
+            self.app.show_notification(f"{undo['label']}: started as a new job.", type="info")
+        else:
+            self.app.show_notification(
+                f"{job['code']} can't be undone now: what it changed is no longer there.",
+                type="warning")
 
     def _ask_ai_about_job(self, code: str) -> None:
         chat = next((p for p in getattr(self.app, "plugins", []) if p.get_name() == "Chat"), None)

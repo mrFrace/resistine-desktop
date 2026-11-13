@@ -799,13 +799,31 @@ class Plugin(BasePlugin):
             return
         self._toggle_worker(switch_value, name)
 
+    _UNDO = {"vpn_disconnect": 0, "vpn_connect": 1}
+
+    def undo(self, action: str, arg: str = "") -> bool:
+        """Undo a connect (disconnect) or a disconnect (connect): the same
+        request_toggle path, only for the config that is selected now."""
+        value = self._UNDO.get(action)
+        if value is None or self._toggle_busy:
+            return False
+        if not arg or arg != self.get_selected_conf_file_name():
+            return False  # a different config is selected now: nothing to restore
+        self.request_toggle(value)
+        return True
+
     def _toggle_worker(self, switch_value, selected_conf_file):
         """Run the blocking connect/disconnect, then marshal UI back."""
         global my_vpn_status, active_client_name
         from utils import jobs
         want = "Running" if switch_value == 1 else "Stopped"
-        job = jobs.start("vpn", "VPN " + ("connect" if switch_value == 1 else "disconnect"),
-                         str(selected_conf_file or ""))
+        connecting = switch_value == 1
+        job = jobs.start("vpn", "VPN " + ("connect" if connecting else "disconnect"),
+                         str(selected_conf_file or ""),
+                         undo={"label": "Disconnect" if connecting else "Connect",
+                               "plugin": self.get_name(),
+                               "action": "vpn_disconnect" if connecting else "vpn_connect",
+                               "arg": str(selected_conf_file or "")})
         try:
             if IS_WINDOWS:
                 self._toggle_windows(switch_value, selected_conf_file)

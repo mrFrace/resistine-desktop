@@ -56,3 +56,11 @@ A revert of a system change (VPN config, agent reinstall, ClamAV units)
 cannot be promised in general. If offered, each fix declares whether it
 is reversible and how; the undo runs the same privileged, allowlisted
 path as the fix, with the same validation of what is being restored.
+
+Built 2026-11-13: a job declares its undo when it starts (`utils/jobs.py`
+`undo={label, plugin, action, arg}`); `BasePlugin.undo(action, arg)` keeps
+a closed set per plugin and re-validates the argument. VPN connect ↔
+disconnect through `request_toggle`; agent install → `remove_agent()`,
+the reinstall path's own function, never the identity wipe. A scan and
+an update check declare nothing. Only the newest done job of a kind can
+be undone; the Diagnostics row confirms in place, no dialog.
