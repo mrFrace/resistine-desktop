@@ -23,6 +23,8 @@ happen at sign-in). `gate()` drops any fix whose host is not this
 machine; the fleet view never runs a repair on another device. One job
 per fix; a failure skips only what depended on it; admin prompts happen
 inside each fix's own function and the page says how many to expect.
+A VPN switched off by hand is remembered (`vpn.user_disconnected`) and
+not offered as a fix until the user switches it on again.
 
 ## "Copy diagnostics" / recent-events timeline
 
