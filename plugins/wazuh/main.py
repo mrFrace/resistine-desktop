@@ -888,6 +888,15 @@ class Plugin(BasePlugin):
         self._stop_status_polling()
         self._status_poll_id = self.app.after(_POLL_INTERVAL_MS, self._poll_tick)
 
+    def recheck(self) -> bool:
+        """The shell's "Check now": one extra read of the agent state on a
+        worker, outside the regular poll."""
+        if not _platform_supported or self._destroyed:
+            return False
+        self._stop_status_polling()  # the result re-arms: one chain, from now
+        self._poll_tick()
+        return True
+
     def _poll_tick(self):
         """Re-arming background poll: read status on a worker, marshal back."""
         if self._destroyed:

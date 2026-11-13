@@ -290,6 +290,12 @@ class Plugin(BasePlugin):
     _INITIAL_POLL_RETRIES = 8
     _INITIAL_POLL_INTERVAL = 2
 
+    def recheck(self) -> bool:
+        """The shell's "Check now": read the daemon state again on a worker,
+        the same way the start-up poll does."""
+        threading.Thread(target=self._poll_initial_status, daemon=True).start()
+        return True
+
     def _poll_initial_status(self):
         """Poll daemon state so the sidebar icon AND dashboard tile are right."""
         self._init_ready.wait(timeout=10)

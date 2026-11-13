@@ -1,6 +1,7 @@
 """Sidebar nav icons glow in their plugin's status colour."""
 
 import os
+from unittest.mock import ANY
 
 import pytest
 
@@ -170,7 +171,7 @@ class TestUnknownTooLong:
         clock[0] += 1
         win._apply_nav_status(unknown)
         win.show_notification.assert_called_once_with(
-            "Endpoint: Not checked yet. Open it to check again.", "warning")
+            "Endpoint: Not checked yet.", "warning", action="Check now", on_action=ANY)
         clock[0] += 7200
         win._apply_nav_status(unknown)  # still unknown: told already
         assert win.show_notification.call_count == 1
@@ -191,4 +192,36 @@ class TestUnknownTooLong:
         monkeypatch.setattr(aw, "unknown_limit", lambda p: 0)
         win._apply_nav_status({"Endpoint": Status("unknown")})
         win.show_notification.assert_called_once_with(
-            "VPN: Status unknown. Open it to check again.", "warning")
+            "VPN: Status unknown.", "warning", action="Check now", on_action=ANY)
+
+    def test_check_now_opens_the_plugin_and_measures_again(self, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from plugins.base_plugin import BasePlugin, Status
+        plugin = MagicMock(status_fresh_for=None)
+        plugin.get_display_name.return_value = "Endpoint"
+        win = self._win(plugin)
+        win.navigate = MagicMock()
+        win.after = MagicMock()
+        win._refresh_nav_status = MagicMock()
+        clock = [1000.0]
+        monkeypatch.setattr(aw.time, "time", lambda: clock[0])
+        unknown = {"Endpoint": Status("unknown", "Not checked yet")}
+        win._apply_nav_status(unknown)
+        clock[0] += 3600
+        win._apply_nav_status(unknown)
+        on_action = win.show_notification.call_args.kwargs["on_action"]
+        clock[0] += 10
+        on_action()
+        win.navigate.assert_called_once_with("Endpoint")
+        plugin.recheck.assert_called_once_with()
+        win.after.assert_called_once_with(1500, win._refresh_nav_status)
+        # A new episode from now: told again only after another limit.
+        assert win._unknown_since["Endpoint"] == clock[0]
+        win._apply_nav_status(unknown)
+        assert win.show_notification.call_count == 1
+        clock[0] += 3600
+        win._apply_nav_status(unknown)
+        assert win.show_notification.call_count == 2
+        # Plugins without a cache have nothing to re-measure.
+        assert BasePlugin.recheck(MagicMock()) is False
