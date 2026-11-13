@@ -41,3 +41,9 @@ Record significant architectural choices and their rationale here.
 - **Decision:** Only this device can be verified from the app; other sessions show their status and are verified from Element.
 - **Rationale:** Signing another device's keys from a list is trust-on-first-use and would make "verified" meaningless.
 - **Consequences:** Users with several Phoenix installs verify each one on that computer.
+
+### 2026-11-13 — Unknown is a state of its own; data has an age
+- **Context:** The shell showed every unreadable or stale check as a warning or as green, and nothing said how old the numbers were (GUI ideation, idea 3).
+- **Decision:** `BasePlugin.status_info()` returns ok / warning / error / off / unknown with a reason; unknown glows amber in the rail with the reason as a caption. Headers and tiles carry "As of 7 min ago · next check 22:39". The Dashboard opens with one sentence ("3 alerts this week, all false positives. Nothing needs you.") that withholds the verdict while any tile is unknown; once a week the sentence is posted into the user's SIEM alerts DM; a plugin unknown past 3× its freshness window gets one toast per episode.
+- **Rationale:** Not knowing must never look calmer than a minor problem, and never redder than a real one. Posting into the bot's DM reuses the running Matrix session and the room the user already watches on the phone; siemgent reads reactions only, and the listener keeps the bot's messages only, so the post never comes back as an alert.
+- **Consequences:** Legacy `get_status()` strings stay for Store and Dashboard consumers. Only counts and tile names leave the machine in the post; alert text never does. One post per machine per week, labelled with the hostname.
