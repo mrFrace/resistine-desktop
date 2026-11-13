@@ -45,6 +45,7 @@ from gui.toggle import ToggleSwitch
 from plugins.base_plugin import BasePlugin
 from plugins.dashboard import alerts as recent_alerts
 from plugins.dashboard import mitigations, posture, protection, tile_layout, weekly
+from utils import fixes as fixes_mod
 from utils import chat_config
 from utils.functions import get_resource_path
 from utils.logger import logger
@@ -785,6 +786,10 @@ class Plugin(BasePlugin):
         self._grid: _PanelGrid | None = None
         self._vpn_switch = None
         self._lead: QLabel | None = None
+        self._fix_link: QPushButton | None = None
+        self._fixes: list = []            # utils.fixes.Fix items for this machine
+        self._fixes_page = None           # (page widget, {fix.key: MenuRow}, header, fix-all button)
+        self._fixing = False
         self._posting = False  # the weekly post is on its way
         self._views: SlideStack | None = None
         self._detail = None          # (page widget, RowList, PageHeader) while open
@@ -852,11 +857,21 @@ class Plugin(BasePlugin):
         v.addSpacing(10)
 
         # The week in one sentence: what the tiles below add up to.
+        lead_row = QHBoxLayout()
+        lead_row.setSpacing(12)
         self._lead = QLabel()
         self._lead.setObjectName("Lead")
         self._lead.setWordWrap(True)
         self._lead.setTextFormat(Qt.TextFormat.PlainText)
-        v.addWidget(self._lead)
+        lead_row.addWidget(self._lead, 1)
+        self._fix_link = QPushButton()
+        self._fix_link.setObjectName("Link")
+        self._fix_link.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._fix_link.setToolTip("What Phoenix can put right on this machine, one step at a time")
+        self._fix_link.clicked.connect(self._show_fixes)
+        self._fix_link.hide()
+        lead_row.addWidget(self._fix_link, 0, Qt.AlignmentFlag.AlignVCenter)
+        v.addLayout(lead_row)
         v.addSpacing(16)
 
         # Protection = the Endpoint (Wazuh) agent is installed and healthy;
@@ -933,9 +948,11 @@ class Plugin(BasePlugin):
         screen is changing anyway)."""
         if self._views is None:
             return
-        pages = [self._mitigation_page, self._detail[0] if self._detail is not None else None]
+        pages = [self._mitigation_page, self._detail[0] if self._detail is not None else None,
+                 self._fixes_page[0] if self._fixes_page is not None else None]
         self._mitigation_page = None
         self._detail = None
+        self._fixes_page = None
         self._recheck_btn = None
         try:
             self._views.home()
@@ -993,6 +1010,10 @@ class Plugin(BasePlugin):
                                         if s in (mitigations.OPEN, mitigations.REBOOT))
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Dashboard posture probe failed: {e}")
+            try:
+                data["fixes"] = self._collect_fixes()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Dashboard fixes probe failed: {e}")
             for key, fn in (("antivirus", lambda: _antivirus_info(self.app)),
                             ("vpn", lambda: _vpn_info(self.app)),
                             ("endpoint", _endpoint_info),
@@ -1027,6 +1048,8 @@ class Plugin(BasePlugin):
                 panel.set_data(self._data.get(panel_key))
             except RuntimeError:  # panel deleted by a rebuild
                 pass
+        if "fixes" in data:
+            self._fixes = data["fixes"]
         self._set_lead()
         self._sync_vpn_switch()
         if self._grid is not None:
@@ -1053,10 +1076,138 @@ class Plugin(BasePlugin):
         try:
             text = self.lead_text()
             lead.setText(text)
+            self._paint_fix_link()
         except RuntimeError:  # label deleted by a rebuild
             self._lead = None
             return
         self._maybe_post_weekly(text)
+
+    # ---- fixes ("Fix all"): what the plugins can put right here ------------
+    def _collect_fixes(self) -> list:
+        """Worker thread: every plugin's fixes(), kept to this machine."""
+        items = []
+        for p in getattr(self.app, "plugins", []):
+            try:
+                items.extend(p.fixes())
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"{p.get_name()}: fixes() failed: {e}")
+        return fixes_mod.gate(items, posture.local_names(include_agent=False))
+
+    def _paint_fix_link(self) -> None:
+        link = self._fix_link
+        if link is None:
+            return
+        n = len(self._fixes)
+        if n and not self._fixing:
+            link.setText(f"Fix {n} thing{'s' if n != 1 else ''}")
+            link.show()
+        else:
+            link.hide()
+
+    def _show_fixes(self) -> None:
+        if self._views is None or self._fixes_page is not None:
+            return
+        page = Page()
+        page.add(back_link("Dashboard", self._hide_fixes))
+        n = len(self._fixes)
+        header = PageHeader("Fixes", f"{n} thing{'s' if n != 1 else ''} Phoenix can put right on this machine")
+        fix_all = QPushButton("Fix all")
+        fix_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        fix_all.clicked.connect(lambda: self._run_fixes(list(self._fixes)))
+        header.add_control(fix_all)
+        page.add(header)
+        prompts = fixes_mod.admin_prompts(self._fixes)
+        if prompts:
+            page.spacing(6)
+            page.add(muted(f"This will ask for your password {prompts} time{'s' if prompts != 1 else ''}: "
+                           "each fix runs through its own step, nothing is combined."))
+        page.spacing(18)
+        rows = RowList()
+        row_of = {}
+        for f in fixes_mod.plan(self._fixes):
+            row = MenuRow("key" if f.needs_admin else "play", f.title, f.why,
+                          on_click=lambda fx=f: self._run_fixes([fx]))
+            row._hint.setTextFormat(Qt.TextFormat.PlainText)
+            rows.add_row(row)
+            row_of[f.key] = row
+        page.add(rows)
+        page.spacing(14)
+        page.add(muted("Each fix is one of the plugins' own actions and gets a job code "
+                       "(Settings → Diagnostics). Phoenix never updates packages or restarts "
+                       "the machine for you."))
+        page.stretch()
+        self._views.addWidget(page.widget)
+        self._fixes_page = (page.widget, row_of, header, fix_all)
+        self._views.push(page.widget)
+
+    def _hide_fixes(self) -> None:
+        if self._views is None or self._fixes_page is None:
+            return
+        page = self._fixes_page[0]
+        self._fixes_page = None
+        self._views.back()
+        QTimer.singleShot(400, lambda: (self._views.removeWidget(page), page.deleteLater())
+                          if self._views is not None else None)
+
+    def _run_fixes(self, items: list) -> None:
+        """Run *items* one after another on a worker; the rows follow."""
+        if self._fixing or not items:
+            return
+        self._fixing = True
+        self._paint_fix_link()
+        if self._fixes_page is not None:
+            self._fixes_page[3].setEnabled(False)
+        plugins = {p.get_name(): p for p in getattr(self.app, "plugins", [])}
+
+        def run_one(f):
+            plugin = plugins.get(f.plugin)
+            if plugin is None:
+                return False, "its plugin is gone"
+            return plugin.run_fix(f.id)
+
+        def on_state(f, state, text):
+            self.app.after(0, lambda: self._fix_state(f, state, text))
+
+        def work():
+            results = {}
+            try:
+                results = fixes_mod.run(items, run_one, on_state)
+            finally:
+                self.app.after(0, lambda: self._fixes_done(items, results))
+
+        threading.Thread(target=work, name="fix-all", daemon=True).start()
+
+    _FIX_STATE = {fixes_mod.RUNNING: "Running…", fixes_mod.DONE: "Done",
+                  fixes_mod.FAILED: "Failed", fixes_mod.SKIPPED: "Needs you"}
+
+    def _fix_state(self, f, state: str, text: str) -> None:
+        if self._fixes_page is None:
+            return
+        row = self._fixes_page[1].get(f.key)
+        if row is None:
+            return
+        try:
+            label = self._FIX_STATE.get(state, state)
+            row._hint.setText(f"{label}" + (f" · {text}" if text else ""))
+            row.setEnabled(state not in (fixes_mod.RUNNING, fixes_mod.DONE))
+        except RuntimeError:
+            pass
+
+    def _fixes_done(self, items: list, results: dict) -> None:
+        self._fixing = False
+        done = {k for k, (st, _) in results.items() if st == fixes_mod.DONE}
+        self._fixes = [f for f in self._fixes if f.key not in done]
+        if self._fixes_page is not None:
+            try:
+                self._fixes_page[3].setEnabled(bool(self._fixes))
+                n = len(self._fixes)
+                self._fixes_page[2].set_subtitle(
+                    "Everything Phoenix could do here is done." if not n else
+                    f"{n} thing{'s' if n != 1 else ''} still to do")
+            except RuntimeError:
+                self._fixes_page = None
+        self._paint_fix_link()
+        self.refresh()
 
     def _maybe_post_weekly(self, text: str) -> None:
         """Once a week, the sentence goes to the SIEM alerts room too. Only

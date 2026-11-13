@@ -14,6 +14,16 @@ One admin prompt per sweep is fine only where the platform's elevation
 helper already supports it. A fix that needs settings- or server-supplied
 values keeps the per-value sanitisation (CLAUDE.md, security conventions).
 
+Built 2026-11-13: `utils/fixes.py`. "Fix all" is a queue of the plugins'
+own actions (`BasePlugin.fixes()` / `run_fix(id)`, a closed set of ids,
+no arguments): start or re-enrol the Endpoint agent, update antivirus
+signatures, connect the VPN, remove this machine's earlier installs.
+Installing the agent and setting up the antivirus are not in it (both
+happen at sign-in). `gate()` drops any fix whose host is not this
+machine; the fleet view never runs a repair on another device. One job
+per fix; a failure skips only what depended on it; admin prompts happen
+inside each fix's own function and the page says how many to expect.
+
 ## "Copy diagnostics" / recent-events timeline
 
 A clipboard export of log tail, versions, service states and recent
