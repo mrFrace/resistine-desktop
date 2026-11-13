@@ -121,20 +121,62 @@ def is_this_machine(
 # --------------------------------------------------------------------------
 
 
+def is_placeholder(value) -> bool:
+    """A server-side "don't know" for a name or an OS: empty, or the literal
+    placeholders the posture service emits when the agent has not reported
+    (its card then says hostname "Unknown", os "Unknown")."""
+    return str(value or "").strip().lower() in ("", "unknown", "n/a", "none", "—", "-")
+
+
+def canonical_agent_id(agent_id) -> str:
+    """"004" and "4" are one agent; the manager pads, other sources may not."""
+    s = str(agent_id or "").strip()
+    return str(int(s)) if s.isdigit() else s
+
+
+def inventory_names(devices: Iterable[dict] | None) -> dict:
+    """agent_id (canonical) -> {name, os} from the /me/inventory devices
+    (plugins.devices.api.fetch_inventory_full), to name a posture card the
+    posture service could not."""
+    out: dict = {}
+    for d in devices or []:
+        if not isinstance(d, dict) or not d.get("agent_id"):
+            continue
+        os_info = d.get("os") if isinstance(d.get("os"), dict) else {}
+        out[canonical_agent_id(d["agent_id"])] = {
+            "name": d.get("agent_name") or "",
+            "os": os_info.get("name") or "",
+        }
+    return out
+
+
 def fleet_rows(
     cards: Iterable[dict],
     local_names: Iterable[str],
     local_agent_ids: Iterable[str] = (),
     now: datetime | None = None,
+    names_by_agent: dict | None = None,
 ) -> list:
-    """Cards as rows, this machine first, then by grade (worst first) and name."""
+    """Cards as rows, this machine first, then by grade (worst first) and name.
+
+    ``names_by_agent`` (see inventory_names) fills a hostname or OS the posture
+    card lacks: the posture service reports an agent it has no scan for as
+    hostname "Unknown", which would otherwise be the device's name in the
+    scope picker and the header."""
     names = [str(n) for n in local_names if n]
     rows = []
     for c in cards or []:
         if not isinstance(c, dict):
             continue
-        host = _text(c.get("hostname") or c.get("agent_id") or "—", 64)
         agent_id = _text(c.get("agent_id"), 16)
+        known = (names_by_agent or {}).get(canonical_agent_id(agent_id)) or {}
+        host_raw = c.get("hostname")
+        if is_placeholder(host_raw) and known.get("name"):
+            host_raw = known["name"]
+        os_raw = c.get("os")
+        if is_placeholder(os_raw) and known.get("os"):
+            os_raw = known["os"]
+        host = _text(host_raw or c.get("agent_id") or "—", 64)
         v = (
             c.get("vulnerabilities")
             if isinstance(c.get("vulnerabilities"), dict)
@@ -147,7 +189,7 @@ def fleet_rows(
             {
                 "hostname": host,
                 "agent_id": agent_id,
-                "os": _text(c.get("os"), 64),
+                "os": _text(os_raw, 64),
                 "grade": _text(c.get("grade") or "?", 2).upper(),
                 "score": _int(c.get("score")) if c.get("score") is not None else None,
                 "health": _text(c.get("health"), 32).replace("_", " "),
