@@ -467,10 +467,13 @@ def shape_inventory_agent(summary: dict, detail: dict | None, caller_groups=()) 
     {basic_info, syscollector, hardware} shape the Inventory tab reads."""
     os_info = summary.get("os") if isinstance(summary.get("os"), dict) else {}
     hw = summary.get("hardware") if isinstance(summary.get("hardware"), dict) else {}
+    # The backend's Wazuh-native {id, name, ip} is normalized to agent_* by
+    # plugins.devices.api.normalize_inventory_device; accept it here too for
+    # callers that shape raw items directly.
     basic_info = {
-        "id": summary.get("agent_id"),
-        "name": summary.get("agent_name"),
-        "ip": summary.get("agent_ip") or "—",
+        "id": summary.get("agent_id") or summary.get("id"),
+        "name": summary.get("agent_name") or summary.get("name"),
+        "ip": summary.get("agent_ip") or summary.get("ip") or "—",
         "status": summary.get("status"),
         "os": os_info,
         "lastKeepAlive": os_info.get("last_scan") or hw.get("last_scan"),

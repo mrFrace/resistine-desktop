@@ -415,7 +415,11 @@ class Plugin(BasePlugin):
                     self._remote_kicked = True
                     self._store.refresh(
                         [
-                            {"agent_id": r["agent_id"], "agent_name": r["hostname"]}
+                            {
+                                "agent_id": r["agent_id"],
+                                "agent_name": r["hostname"],
+                                "os": r.get("os"),
+                            }
                             for r in rows
                             if r.get("agent_id")
                         ]

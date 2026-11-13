@@ -374,6 +374,26 @@ def fetch_sca():
     return items[:200], None
 
 
+def normalize_inventory_device(raw: dict) -> dict:
+    """One /me/inventory device in the documented ``agent_*`` shape.
+
+    The backend (phoenix-provisioning, AR-B7) answers with the Wazuh manager's
+    own ``/agents`` projection ``{id, name, status, ip}``; the data contract
+    (dev-docs/plans/devices-data-contract.md) names the same fields
+    ``agent_id`` / ``agent_name`` / ``agent_ip``. Accept both so the rest of
+    the plugin reads one shape; the documented keys win when both are present.
+    """
+    d = dict(raw)
+    for want, alt in (("agent_id", "id"), ("agent_name", "name"), ("agent_ip", "ip")):
+        if not d.get(want) and d.get(alt) not in (None, ""):
+            d[want] = d[alt]
+    if not d.get("agent_name") and d.get("hostname"):
+        d["agent_name"] = d["hostname"]
+    if d.get("agent_id") is not None:
+        d["agent_id"] = str(d["agent_id"])
+    return d
+
+
 def fetch_inventory_full(page_size: int = 200):
     """GET /v1/me/inventory, every page: the account's device summaries."""
     devices, offset = [], 0
@@ -383,7 +403,11 @@ def fetch_inventory_full(page_size: int = 200):
             return None, err
         if not isinstance(payload, dict):
             return None, "bad shape"
-        page = [d for d in _list(payload, "devices", "items") if isinstance(d, dict)]
+        page = [
+            normalize_inventory_device(d)
+            for d in _list(payload, "devices", "items")
+            if isinstance(d, dict)
+        ]
         devices.extend(page)
         if payload.get("has_more") is False or not page:
             break

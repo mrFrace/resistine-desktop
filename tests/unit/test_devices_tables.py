@@ -35,6 +35,44 @@ class TestApiGet:
             items, err = api.fetch_sca()
         assert err is None and items[0]["invalid"] == 3
 
+    def test_inventory_accepts_the_wazuh_native_agent_shape(self):
+        # phoenix-provisioning (AR-B7) answers with the manager's /agents
+        # projection {id, name, status, ip} in a {data: {affected_items}}
+        # envelope; the plugin reads the documented agent_* keys.
+        with patch(
+            "plugins.vpn.provisioning._authorized_request",
+            return_value=_resp(
+                200,
+                {
+                    "data": {
+                        "affected_items": [
+                            {"id": "029", "name": "DrakeHP", "status": "active", "ip": "10.0.0.5"},
+                            {"id": 7, "name": "", "status": "disconnected", "ip": None},
+                        ]
+                    }
+                },
+            ),
+        ):
+            devices, err = api.fetch_inventory_full()
+        assert err is None and len(devices) == 2
+        assert devices[0]["agent_id"] == "029"
+        assert devices[0]["agent_name"] == "DrakeHP"
+        assert devices[0]["agent_ip"] == "10.0.0.5"
+        assert devices[0]["status"] == "active"
+        assert devices[1]["agent_id"] == "7" and not devices[1].get("agent_name")
+        agent = tables.shape_inventory_agent(devices[0], None)
+        assert agent["basic_info"]["id"] == "029"
+        assert agent["basic_info"]["name"] == "DrakeHP"
+        assert agent["basic_info"]["ip"] == "10.0.0.5"
+
+    def test_inventory_documented_keys_win_over_aliases(self):
+        d = api.normalize_inventory_device(
+            {"agent_id": "1", "id": "9", "agent_name": "doc", "name": "alias", "hostname": "h"}
+        )
+        assert (d["agent_id"], d["agent_name"]) == ("1", "doc")
+        d = api.normalize_inventory_device({"id": "2", "hostname": "h"})
+        assert (d["agent_id"], d["agent_name"]) == ("2", "h")
+
     def test_signed_out_is_an_error_string(self):
         from plugins.vpn.provisioning import ProvisioningError
 
@@ -136,6 +174,31 @@ class TestStore:
     def test_start_is_exclusive(self):
         st = remote.RemoteStore()
         assert st._start("vulns") and not st._start("vulns")
+
+    def test_inventory_fills_name_and_os_from_posture(self):
+        import time
+
+        # The inventory endpoint knows {id, status, ip} only; hostname and OS
+        # come from the posture cards the Devices screen already holds.
+        st = remote.RemoteStore()
+        with patch.object(
+            api,
+            "fetch_inventory_full",
+            return_value=([{"agent_id": "029", "status": "active", "agent_ip": "10.0.0.5"}], None),
+        ), patch.object(
+            api, "fetch_device_inventory", return_value=(None, api.NOT_AVAILABLE)
+        ):
+            st.kick_inventory([{"agent_id": "029", "agent_name": "DrakeHP", "os": "Windows 11"}])
+            deadline = time.monotonic() + 5
+            while not st.slot("agents").ready and time.monotonic() < deadline:
+                time.sleep(0.02)
+        slot = st.slot("agents")
+        assert slot.ready and slot.error is None
+        bi = slot.data[0]["basic_info"]
+        assert bi["name"] == "DrakeHP" and bi["id"] == "029"
+        row = tables.inventory_rows(slot.data, [], [])[0]
+        assert row["name"] == "DrakeHP" and row["os"] == "Windows 11"
+        assert tables.last_seen_text(row) == "Active now"
 
 
 @pytest.mark.unit
