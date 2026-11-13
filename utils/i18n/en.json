@@ -304,6 +304,8 @@
   "page.ago_days": "{n} d ago",
   "status.check_failed": "Status check failed",
   "status.stale": "Last checked {age} ago",
+  "status.unknown": "Status unknown",
+  "status.unknown_too_long": "{plugin}: {reason}. Open it to check again.",
   "vpn.status_connected": "Connected",
   "vpn.status_off": "Not connected",
   "wazuh.status_unsupported": "Not available on this system",

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -56,6 +57,7 @@ from gui import theme
 from gui.qt_toast import Toast
 from gui.qt_widgets import resource
 from plugins.base_plugin import UNKNOWN, Status
+from utils.i18n import get_text
 from utils.logger import logger
 
 
@@ -74,6 +76,15 @@ STATUS_GLOW = {
     "Critical": "#FF4040",
     "Unknown": "#F5B623",
 }
+UNKNOWN_TOAST_AFTER_S = 3600
+
+
+def unknown_limit(plugin) -> float:
+    """How long a plugin may sit in unknown before the shell says so."""
+    fresh = getattr(plugin, "status_fresh_for", None)
+    if isinstance(fresh, (int, float)) and fresh > 0:
+        return max(3 * float(fresh), UNKNOWN_TOAST_AFTER_S)
+    return UNKNOWN_TOAST_AFTER_S
 
 
 def _blur(img: QImage, radius: float) -> QImage:
@@ -270,6 +281,10 @@ class AppWindow(QMainWindow):
         self._nav_buttons: dict[str, QPushButton] = {}
         self._nav_status: dict[str, str | None] = {}
         self._nav_status_busy = False
+        # Unknown that lasts: when a plugin first went unknown, and which
+        # ones were already told about (one toast per episode).
+        self._unknown_since: dict[str, float] = {}
+        self._unknown_told: set[str] = set()
         self._nav_status_timer = QTimer(self)
         self._nav_status_timer.setInterval(5000)
         self._nav_status_timer.timeout.connect(self._refresh_nav_status)
@@ -487,12 +502,14 @@ class AppWindow(QMainWindow):
     def _apply_nav_status(self, statuses: dict) -> None:
         self._nav_status_busy = False
         for name, info in statuses.items():
+            plugin = self._plugin_by_name(name)
+            if plugin is not None:
+                self._watch_unknown(name, info, plugin)
             old = self._nav_status.get(name)
             if old is not None and (old.kind, old.reason) == (info.kind, info.reason):
                 continue
             self._nav_status[name] = info
             btn = self._nav_buttons.get(name)
-            plugin = self._plugin_by_name(name)
             if btn is None or plugin is None:
                 continue
             try:
@@ -501,6 +518,30 @@ class AppWindow(QMainWindow):
                 self.sidebar.set_caption(btn, info.reason)
             except RuntimeError:  # sidebar rebuilt meanwhile
                 pass
+
+    def _watch_unknown(self, name: str, info: Status, plugin) -> None:
+        """Amber is calm by design, so neglect has to say something: a
+        plugin that has sat in unknown past its limit gets one toast per
+        episode, with the reason. The limit is three times the plugin's own
+        freshness window (a daily report may be a day late), at least an
+        hour; a plugin without one gets the hour."""
+        if info.kind != UNKNOWN:
+            self._unknown_since.pop(name, None)
+            self._unknown_told.discard(name)
+            return
+        now = time.time()
+        since = self._unknown_since.setdefault(name, now)
+        if name in self._unknown_told or now - since < unknown_limit(plugin):
+            return
+        self._unknown_told.add(name)
+        try:
+            shown = plugin.get_display_name()
+        except Exception:  # noqa: BLE001
+            shown = name
+        reason = info.reason or get_text("status.unknown")
+        self.show_notification(
+            get_text("status.unknown_too_long", plugin=shown, reason=reason.rstrip(".")),
+            "warning")
 
     def _logo_widget(self) -> QWidget:
         # The square Phoenix app mark (same art as the login screen). It
