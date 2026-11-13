@@ -294,7 +294,9 @@ def incidents(alerts: list) -> list:
     a hunt result. Messages about one machine whose events are at most
     INCIDENT_GAP_S apart are one incident; a message with no machine or
     event time is one on its own. Each: {"ts": first message, "severity":
-    the worst of its messages, "count": messages}."""
+    the worst of its messages, "count": messages, "verdict": what the
+    hunt results said: "tp" (a true positive), "fp" (every result a false
+    positive), "open" (an inconclusive one) or None (no result yet)}."""
     by_host: dict = {}
     out = []
     for a in alerts or []:
@@ -303,22 +305,41 @@ def incidents(alerts: list) -> list:
         info = parse(a.get("body", ""))
         host = (info["agent"] or info["host"]).lower()
         et = event_time(info["when"])
+        verdict = _verdict(info)
         if not host or et is None:
-            out.append({"ts": a["ts"], "severity": info["severity"], "count": 1})
+            out.append({"ts": a["ts"], "severity": info["severity"], "count": 1,
+                        "verdict": verdict})
             continue
-        by_host.setdefault(host, []).append((et, a["ts"], info["severity"]))
+        by_host.setdefault(host, []).append((et, a["ts"], info["severity"], verdict))
     for events in by_host.values():
         events.sort()
         last = None
-        for et, ts, sev in events:
+        for et, ts, sev, verdict in events:
             if last is None or et - last > INCIDENT_GAP_S:
-                cur = {"ts": ts, "severity": sev, "count": 0}
+                cur = {"ts": ts, "severity": sev, "count": 0, "verdict": None}
                 out.append(cur)
             cur["ts"] = min(cur["ts"], ts)
             cur["severity"] = _worst((cur["severity"], sev))
             cur["count"] += 1
+            cur["verdict"] = _combine_verdicts(cur["verdict"], verdict)
             last = et
     return sorted(out, key=lambda i: i["ts"])
+
+
+_VERDICT_RANK = {None: 0, "fp": 1, "open": 2, "tp": 3}
+
+
+def _verdict(info: dict) -> Optional[str]:
+    if info["kind"] != "result":
+        return None
+    v = info["verdict"].lower()
+    return "fp" if "false" in v else "tp" if "true" in v else "open"
+
+
+def _combine_verdicts(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    """A true positive outranks everything; one undecided hunt keeps the
+    incident open; false positives close it only when they are all it has."""
+    return max((a, b), key=lambda v: _VERDICT_RANK.get(v, 0))
 
 
 def activity(alerts: list, now: Optional[float] = None, days: int = DAYS) -> list:
