@@ -541,7 +541,25 @@ class AppWindow(QMainWindow):
         reason = info.reason or get_text("status.unknown")
         self.show_notification(
             get_text("status.unknown_too_long", plugin=shown, reason=reason.rstrip(".")),
-            "warning")
+            "warning", action=get_text("status.check_now"),
+            on_action=lambda n=name: self._recheck(n))
+
+    def _recheck(self, name: str) -> None:
+        """The toast's "Check now": open the plugin, ask it to measure again
+        (plugins marshal their own threads), and read the rail soon after.
+        The unknown episode restarts, so a check that stays unknown is
+        told about again after another limit, not at once."""
+        plugin = self._plugin_by_name(name)
+        if plugin is None:
+            return
+        self._unknown_since[name] = time.time()
+        self._unknown_told.discard(name)
+        self.navigate(name)
+        try:
+            plugin.recheck()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"{name}: recheck failed: {e}")
+        self.after(1500, self._refresh_nav_status)
 
     def _logo_widget(self) -> QWidget:
         # The square Phoenix app mark (same art as the login screen). It
@@ -827,10 +845,13 @@ class AppWindow(QMainWindow):
     # ===================================================================
     #  Notifications
     # ===================================================================
-    def show_notification(self, message, type="info", centered=False) -> None:
+    def show_notification(self, message, type="info", centered=False,
+                          action=None, on_action=None) -> None:
+        """A toast. With *action* (a short verb) it carries one button
+        that calls *on_action* and stays longer."""
         try:
             host = self.centralWidget() or self
-            toast = Toast(host, str(message), kind=type)
+            toast = Toast(host, str(message), kind=type, action=action, on_action=on_action)
             toast.show_for()
         except Exception as e:
             logger.debug(f"Toast failed: {e}")
