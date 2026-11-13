@@ -135,6 +135,7 @@ def test_devices_fixes_and_run(monkeypatch):
     tab = MagicMock(_rows=rows, _loaded_at=99.0)
     p = dv.Plugin.__new__(dv.Plugin)
     p._destroyed = False
+    p._devices_rows = None
     p._tabs = {"sessions": tab}
     p.get_name = lambda: "Devices"
     [f] = p.fixes()
