@@ -779,3 +779,36 @@ class TestDiagnostics:
         settings_plugin.app.show_notification.assert_called_with(
             "Diagnostics copied, with secrets removed.", type="info")
         jobs._reset_for_tests()
+
+    def test_undo_asks_once_more_in_place_then_runs(self, settings_plugin, qapp, monkeypatch):
+        from PyQt6.QtWidgets import QPushButton
+
+        from gui.page_kit import MenuRow
+        from utils import jobs
+        jobs._reset_for_tests()
+        job = jobs.start("vpn", "VPN connect", "box", undo={
+            "label": "Disconnect", "plugin": "VPN", "action": "vpn_disconnect", "arg": "box"})
+        jobs.finish(job["code"], ok=True, summary="VPN is running")
+        plain = jobs.start("antivirus_scan", "Antivirus scan")
+        jobs.finish(plain["code"], ok=True)
+        vpn = MagicMock()
+        vpn.get_name.return_value = "VPN"
+        vpn.undo.return_value = True
+        settings_plugin.app.plugins = [vpn]
+        settings_plugin._test_page = settings_plugin.create_main_screen()
+        rows = {r.text(): r for r in settings_plugin._test_page.findChildren(MenuRow)}
+        assert rows[plain["code"]].findChild(QPushButton) is None   # nothing to undo
+        btn = rows[job["code"]].findChild(QPushButton)
+        assert btn.text() == "Undo: Disconnect"
+        btn.click()
+        assert btn.text() == "Confirm: Disconnect" and vpn.undo.call_count == 0
+        btn.click()
+        vpn.undo.assert_called_once_with("vpn_disconnect", "box")
+        assert not btn.isEnabled()
+        settings_plugin.app.show_notification.assert_called_with(
+            "Disconnect: started as a new job.", type="info")
+        # Refused by the plugin (another config is selected now): said so.
+        vpn.undo.return_value = False
+        settings_plugin._undo_job(jobs.find(job["code"]))
+        assert "can't be undone now" in settings_plugin.app.show_notification.call_args.args[0]
+        jobs._reset_for_tests()

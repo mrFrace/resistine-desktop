@@ -616,6 +616,41 @@ class Plugin(BasePlugin):
 
     # ── Installation (background thread) ───────────────────────────────
 
+    def _install_undo(self) -> dict:
+        return {"label": "Remove agent", "plugin": self.get_name(), "action": "remove_agent", "arg": ""}
+
+    def undo(self, action: str, arg: str = "") -> bool:
+        """Undo an install: remove the agent with the same remove_agent()
+        the reinstall path runs, on a worker, as a job of its own."""
+        if action != "remove_agent" or self._installing or self._destroyed:
+            return False
+        from utils import jobs
+        self._installing = True
+        job = jobs.start("agent_remove", "Endpoint agent removal")
+
+        def _run():
+            try:
+                if _PLATFORM == "Darwin":
+                    from plugins.wazuh.agent.wazuh_functions_darwin import remove_agent
+                elif _PLATFORM == "Linux":
+                    from plugins.wazuh.agent.wazuh_functions_linux import remove_agent
+                else:
+                    from plugins.wazuh.agent.wazuh_functions_windows import remove_agent
+                ok = bool(remove_agent())
+                summary = "agent removed" if ok else "removal failed"
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"Agent removal error: {e}")
+                ok, summary = False, f"{type(e).__name__}: {e}"
+            self._installing = False
+            jobs.finish(job["code"], ok=ok, summary=summary)
+            self.app.after(0, lambda: self.app.show_notification(
+                "Endpoint agent removed" if ok else "Agent removal failed",
+                type="info" if ok else "error"))
+            self.app.after(100, self._refresh_screen)
+
+        threading.Thread(target=_run, daemon=True).start()
+        return True
+
     def _finish_install_job(self, success: bool, summary: str = "") -> None:
         from utils import jobs
         code = getattr(self, "_install_job", None)
@@ -635,7 +670,8 @@ class Plugin(BasePlugin):
             return
         from utils import jobs
         self._installing = True
-        self._install_job = jobs.start("agent_install", "Endpoint agent install")["code"]
+        self._install_job = jobs.start("agent_install", "Endpoint agent install",
+                                       undo=self._install_undo())["code"]
         self._set_install_btn("Installing...", enabled=False)
         bar = getattr(self, "_install_bar", None)
         if bar is not None:
@@ -683,7 +719,8 @@ class Plugin(BasePlugin):
             _safe(retry)
         from utils import jobs
         self._installing = True
-        self._install_job = jobs.start("agent_install", "Endpoint agent install")["code"]
+        self._install_job = jobs.start("agent_install", "Endpoint agent install",
+                                       undo=self._install_undo())["code"]
         self._install_poll_count = 0
         self._set_install_btn("Installing...", enabled=False)
 

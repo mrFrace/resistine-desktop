@@ -132,6 +132,14 @@ class BasePlugin:
         """A ``Status``, a legacy string ("OK", "Warning", ...) or None (off)."""
         return self.status
 
+    def undo(self, action: str, arg: str = "") -> bool:
+        """Reverse one of this plugin's jobs (utils/jobs.py declares the
+        action when the job starts). A plugin that offers undo keeps a
+        closed set of actions, re-validates *arg* against what is there
+        now, and runs the same privileged, allowlisted path as the forward
+        action. False: not offered, or refused."""
+        return False
+
     def recheck(self) -> bool:
         """Measure again now, on demand (the shell's "Check now" after a
         long unknown). Plugins that cache their status override this and

@@ -87,13 +87,26 @@ def new_code(taken=()) -> str:
             return code
 
 
-def start(kind: str, title: str, detail: str = "") -> dict:
-    """Register a job that just started; returns it (its "code" is the handle)."""
+def _undo_spec(undo) -> Optional[dict]:
+    """A job's declaration of how it is undone: which plugin, which of its
+    allowlisted undo actions, with what argument. A declaration only: the
+    plugin's undo() re-validates the argument when it runs."""
+    if not isinstance(undo, dict):
+        return None
+    out = {k: _plain(undo.get(k), 80) for k in ("label", "plugin", "action", "arg")}
+    return out if out["label"] and out["plugin"] and out["action"] else None
+
+
+def start(kind: str, title: str, detail: str = "", undo: Optional[dict] = None) -> dict:
+    """Register a job that just started; returns it (its "code" is the
+    handle). *undo* ({"label", "plugin", "action", "arg"}) says how the
+    job is reversed, when it is; most are not."""
     with _lock:
         jobs = _load_locked()
         job = {"code": new_code(j["code"] for j in jobs), "kind": _plain(kind, 40),
                "title": _plain(title, 80), "detail": _plain(detail, 120),
-               "status": RUNNING, "started_at": time.time(), "ended_at": None, "summary": ""}
+               "status": RUNNING, "started_at": time.time(), "ended_at": None, "summary": "",
+               "undo": _undo_spec(undo)}
         jobs.append(job)
         del jobs[:-MAX_JOBS]
         _save_locked()
@@ -126,6 +139,24 @@ def recent(limit: int = 20) -> list:
     """Newest first."""
     with _lock:
         return [dict(j) for j in reversed(_load_locked()[-limit:])]
+
+
+def latest(kind: str) -> Optional[dict]:
+    """The newest job of *kind* that is not running."""
+    with _lock:
+        for j in reversed(_load_locked()):
+            if j.get("kind") == kind and j.get("status") != RUNNING:
+                return dict(j)
+    return None
+
+
+def undoable(job: dict) -> bool:
+    """A done job that declared an undo, and the newest of its kind: undoing
+    an older VPN connect after a later one would restore the wrong state."""
+    if not job or job.get("status") != DONE or not job.get("undo"):
+        return False
+    newest = latest(job["kind"])
+    return bool(newest and newest["code"] == job["code"])
 
 
 def codes_in(text: str) -> list:
