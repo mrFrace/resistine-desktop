@@ -275,3 +275,77 @@ def test_open_fire_form_pushes_a_form(tab):
     assert t.ctx.pushed
     labels = _labels(t.ctx.pushed[-1])
     assert t.t("field_target") in labels
+
+
+def _find(form, cls, pred=lambda w: True):
+    return next(w for w in form.findChildren(cls) if pred(w))
+
+
+def _gate_label(t, form):
+    from PyQt6.QtWidgets import QLabel
+    gate_texts = {t.t(k) for k in ("gate_run_first", "gate_rerun", "gate_previewing",
+                                   "gate_ready", "gate_blocked")}
+    # gate_fix carries a placeholder, so match by prefix too
+    return next(l for l in form.findChildren(QLabel)
+                if l.text() in gate_texts or l.text().startswith(t.t("gate_fix", error="")[:10]))
+
+
+def test_fire_gate_unlocks_on_clean_preview_and_relocks_on_edit(tab, monkeypatch):
+    from PyQt6.QtWidgets import QLineEdit, QPushButton
+    good = ar.parse_preview({"count": 1, "included": [{"agent_id": "004"}],
+                             "self_test": {"would_fire_on_self": False, "offending": []}})
+    monkeypatch.setattr(ar, "preview", lambda payload: (good, None))
+
+    t = tab(scope="lab-host")
+    t._open_fire_form()
+    form = t.ctx.pushed[-1]
+    target = _find(form, QLineEdit)
+    preview_btn = _find(form, QPushButton, lambda b: b.text() == t.t("run_preview"))
+    fire_btn = _find(form, responses_tab.HoldButton)
+    gate = _gate_label(t, form)
+
+    # initial: locked, told to preview
+    assert fire_btn.isEnabled() is False
+    assert gate.text() == t.t("gate_run_first")
+
+    # a clean preview unlocks the hold-to-fire
+    target.setText("203.0.113.7")
+    preview_btn.click()
+    assert fire_btn.isEnabled() is True
+    assert gate.text() == t.t("gate_ready")
+
+    # editing the target re-locks it and tells the user to preview again (the
+    # live-tested bug: fire must not stay armed against an un-previewed target)
+    target.setText("203.0.113.8")
+    assert fire_btn.isEnabled() is False
+    assert gate.text() == t.t("gate_rerun")
+
+
+def test_fire_gate_stays_locked_when_self_test_would_fire(tab, monkeypatch):
+    from PyQt6.QtWidgets import QLineEdit, QPushButton
+    bad = ar.parse_preview({"count": 1, "included": [{"agent_id": "004"}],
+                            "self_test": {"would_fire_on_self": True, "offending": ["10.42.10.252"]}})
+    monkeypatch.setattr(ar, "preview", lambda payload: (bad, None))
+    t = tab(scope="lab-host")
+    t._open_fire_form()
+    form = t.ctx.pushed[-1]
+    _find(form, QLineEdit).setText("10.42.10.252")
+    _find(form, QPushButton, lambda b: b.text() == t.t("run_preview")).click()
+    assert _find(form, responses_tab.HoldButton).isEnabled() is False
+    assert _gate_label(t, form).text() == t.t("gate_blocked")
+
+
+def test_sections_do_not_leak_widgets_on_rerender(tab):
+    from PyQt6.QtWidgets import QLabel
+    t = tab(scope="lab-host")
+
+    def live_headings():
+        return sum(1 for l in t.widget.findChildren(QLabel)
+                   if l.objectName() == "Section" and l.isVisibleTo(t.widget))
+
+    assert live_headings() == 3
+    t._render()
+    t._render()
+    # the AR-D3 section headers were added via addLayout; _clear must still
+    # drop them, or stale headers/buttons pile up and paint behind the tables
+    assert live_headings() == 3
