@@ -260,11 +260,24 @@ class ResponsesTab:
 
     def _clear(self) -> None:
         while self._col.count():
-            item = self._col.takeAt(0)
-            w = item.widget()
-            if w is not None:
-                w.hide()
-                w.deleteLater()
+            self._drop_item(self._col.takeAt(0))
+
+    def _drop_item(self, item) -> None:
+        """Hide+delete a layout item. A nested layout (e.g. a section header
+        row added with addLayout) owns widgets that must be dropped too, or
+        they stay parented to the tab and keep painting behind the next
+        render."""
+        if item is None:
+            return
+        w = item.widget()
+        if w is not None:
+            w.hide()
+            w.deleteLater()
+            return
+        lay = item.layout()
+        if lay is not None:
+            while lay.count():
+                self._drop_item(lay.takeAt(0))
 
     def _hard_error(self):
         """A real failure (not a not-yet-deployed 404) with nothing to show."""
@@ -336,13 +349,23 @@ class ResponsesTab:
 
     # ---- section 1: AR policies -------------------------------------------
 
+    def _section_header(self, title: str, button: QWidget | None = None) -> QWidget:
+        """A section heading with an optional right-aligned action button, as a
+        single widget so ``_clear`` removes it cleanly (a bare ``addLayout``
+        row would leak its children)."""
+        row = QWidget()
+        row.setObjectName("Transparent")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.addWidget(section_heading(title))
+        h.addStretch(1)
+        if button is not None:
+            h.addWidget(button)
+        return row
+
     def _section_policies(self, col, channels) -> None:
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 0)
-        head.addWidget(section_heading(self.t("section_policies")))
-        head.addStretch(1)
-        head.addWidget(self._new_policy_button())
-        col.addLayout(head)
+        col.addWidget(self._section_header(self.t("section_policies"),
+                                           self._new_policy_button()))
         col.addSpacing(4)
         col.addWidget(_plain(muted(self.t("gitops_note"))))
         col.addSpacing(10)
@@ -478,12 +501,8 @@ class ResponsesTab:
     _DONE_STATUS = {"failed", "error", "disabled", "reverted", "expired", "stopped"}
 
     def _section_executions(self, col, executions) -> None:
-        head = QHBoxLayout()
-        head.setContentsMargins(0, 0, 0, 0)
-        head.addWidget(section_heading(self.t("section_executions")))
-        head.addStretch(1)
-        head.addWidget(self._fire_now_button())
-        col.addLayout(head)
+        col.addWidget(self._section_header(self.t("section_executions"),
+                                           self._fire_now_button()))
         col.addSpacing(10)
         _, host = self._selected()
         if host:
@@ -725,6 +744,7 @@ class ResponsesTab:
         preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save = HoldButton(self.t("hold_save"))
         save.setEnabled(False)
+        gate = _plain(muted(self.t("gate_run_first")))
         result = _plain(muted(""))
         result.hide()
 
@@ -743,6 +763,7 @@ class ResponsesTab:
             state["gen"] += 1
             state["preview"] = None
             save.setEnabled(False)
+            gate.setText(self.t("gate_rerun"))
 
         def do_preview():
             err = ar.validate_policy(
@@ -751,9 +772,11 @@ class ResponsesTab:
             if err:
                 self._fill_panel(panel, None, err)
                 save.setEnabled(False)
+                gate.setText(self.t("gate_fix", error=err))
                 return
             preview_btn.setEnabled(False)
             self._fill_panel(panel, None, None, loading=True)
+            gate.setText(self.t("gate_previewing"))
             payload = build()
             gen = state["gen"]
 
@@ -772,6 +795,7 @@ class ResponsesTab:
                 self._fill_panel(panel, data, perr)
                 block = perr or ar.preview_blocks_save(data)
                 save.setEnabled(not block)
+                gate.setText(self.t("gate_blocked") if block else self.t("gate_ready"))
                 if data:
                     save.set_duration_ms(hold_duration_ms(data.get("count", 1)))
             except RuntimeError:
@@ -820,6 +844,8 @@ class ResponsesTab:
         actions.addStretch(1)
         page.spacing(14)
         page.add_layout(actions)
+        page.spacing(6)
+        page.add(gate)
         page.spacing(10)
         page.add(result)
         page.stretch()
@@ -916,22 +942,29 @@ class ResponsesTab:
         preview_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fire_btn = HoldButton(self.t("hold_fire"))
         fire_btn.setEnabled(False)
+        gate = _plain(muted(self.t("gate_run_first")))
         result = _plain(muted(""))
         result.hide()
 
         def invalidate(*_a):
+            # The target/executable changed: the shown preview no longer
+            # describes what would be fired. Re-lock and tell the user to
+            # Preview again (so they aren't left holding a dead button).
             state["gen"] += 1
             state["preview"] = None
             fire_btn.setEnabled(False)
+            gate.setText(self.t("gate_rerun"))
 
         def do_preview():
             err = ar.validate_fire(aid, execu.currentData(), target_field.text())
             if err:
                 self._fill_panel(panel, None, err)
                 fire_btn.setEnabled(False)
+                gate.setText(self.t("gate_fix", error=err))
                 return
             preview_btn.setEnabled(False)
             self._fill_panel(panel, None, None, loading=True)
+            gate.setText(self.t("gate_previewing"))
             # build_fire already pins location=defined-agent, so the preview
             # and the fire below are the same payload shape.
             payload = ar.build_fire(aid, execu.currentData(), target_field.text())
@@ -952,6 +985,7 @@ class ResponsesTab:
                 self._fill_panel(panel, data, perr)
                 block = perr or ar.preview_blocks_save(data)
                 fire_btn.setEnabled(not block)
+                gate.setText(self.t("gate_blocked") if block else self.t("gate_ready"))
                 if data:
                     fire_btn.set_duration_ms(hold_duration_ms(data.get("count", 1)))
             except RuntimeError:
@@ -995,6 +1029,8 @@ class ResponsesTab:
         actions.addStretch(1)
         page.spacing(14)
         page.add_layout(actions)
+        page.spacing(6)
+        page.add(gate)
         page.spacing(10)
         page.add(result)
         page.stretch()
