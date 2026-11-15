@@ -369,7 +369,9 @@ def setup_logging(level="INFO", log_to_file=True):
             _stream = getattr(sys, _attr, None)
             if _stream is None:
                 continue
-            if getattr(_stream, "encoding", "utf-8").lower() == "utf-8":
+            # encoding can be present but None (StringIO, some redirected
+            # streams); getattr's default only covers an absent attribute.
+            if (getattr(_stream, "encoding", None) or "utf-8").lower() == "utf-8":
                 continue
             # Wrap the raw buffer — more reliable than reconfigure on Windows
             if hasattr(_stream, "buffer"):
