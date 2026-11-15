@@ -657,6 +657,28 @@ if [ ! -f "$MAIN_PROFILE" ]; then
     exit 1
 fi
 
+# A profile whose team does not match the signing identity still signs,
+# notarizes AND staples cleanly -- it only fails at launch, where AMFI
+# rejects the spawn with a bare "Launchd job spawn failed" (errno 163).
+# Catch it here instead of shipping an app that cannot start.
+for _prof in "$NE_PROFILE" "$XPC_PROFILE" "$MAIN_PROFILE" "$CLAMONACC_PROFILE"; do
+    [ -f "$_prof" ] || continue
+    _plist="$(mktemp)"
+    if ! security cms -D -i "$_prof" -o "$_plist" 2>/dev/null; then
+        echo "  Error: could not decode provisioning profile: $_prof"
+        rm -f "$_plist"; exit 1
+    fi
+    if ! grep -q "$EXPECTED_TEAM_ID" "$_plist"; then
+        echo "  Error: $(basename "$_prof") is not for team $EXPECTED_TEAM_ID."
+        echo "         It would sign and notarize, then fail to launch."
+        _got="$(plutil -extract Entitlements.com\\.apple\\.application-identifier raw "$_plist" 2>/dev/null)"
+        [ -n "$_got" ] && echo "         profile app-id: $_got"
+        rm -f "$_plist"; exit 1
+    fi
+    rm -f "$_plist"
+done
+echo "  - Provisioning profiles verified for team $EXPECTED_TEAM_ID"
+
 # Embedding Developer ID profiles into components
 echo "  - Embedding Developer ID profile into system extension..."
 cp "$NE_PROFILE" "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension/Contents/embedded.provisionprofile"

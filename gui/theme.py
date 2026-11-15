@@ -218,10 +218,14 @@ QComboBox QAbstractItemView {{
 QTextBrowser {{ background-color: transparent; border: none; }}
 
 QProgressBar {{
-    background-color: {c('track')}; border: none; border-radius: 6px;
+    background-color: {c('track')}; border: none; border-radius: 5px;
     height: 10px; text-align: center; color: transparent;
 }}
-QProgressBar::chunk {{ background-color: {c('accent')}; border-radius: 6px; }}
+/* radius is exactly half the height: a larger value gets clamped and the
+   indeterminate chunk then renders a square edge where it meets the track. */
+QProgressBar::chunk {{
+    background-color: {c('accent')}; border-radius: 5px; margin: 0px;
+}}
 
 QCheckBox {{ spacing: 8px; background: transparent; }}
 QCheckBox::indicator {{
