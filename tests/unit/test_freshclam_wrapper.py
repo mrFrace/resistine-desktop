@@ -81,11 +81,11 @@ def _run_wrapper(tmp_path, env_extra, *, freshclam_body, conf_exists=True,
         f'FRESHCLAM="{fake_freshclam!s}"',
     )
     src = src.replace(
-        'CONF="/Library/Application Support/Resistine/clamav/freshclam.conf"',
+        'CONF="/Library/Application Support/Phoenix/clamav/freshclam.conf"',
         f'CONF="{conf!s}"',
     )
     src = src.replace(
-        'STAMP="/Library/Application Support/Resistine/clamav/run/freshclam-last-run"',
+        'STAMP="/Library/Application Support/Phoenix/clamav/run/freshclam-last-run"',
         f'STAMP="{stamp!s}"',
     )
     patched = tmp_path / "wrapper.sh"
@@ -113,7 +113,7 @@ class TestFreshclamWrapperRunOnce:
         # (StartCalendarInterval) owns the cadence, so there is no loop here.
         proc, _, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert proc.returncode == 0
@@ -128,7 +128,7 @@ class TestFreshclamWrapperRunOnce:
         marker = tmp_path / "ran"
         proc, _, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body=(
                 f'#!/usr/bin/env bash\necho "$@" > {marker!s}\necho x >> {count!s}\nexit 0\n'
             ),
@@ -138,11 +138,11 @@ class TestFreshclamWrapperRunOnce:
         assert count.read_text().count("x") == 1, "freshclam called more than once"
 
     def test_jitter_skipped_in_test_mode(self, tmp_path, allow_subprocess):
-        # With RESISTINE_FRESHCLAM_INTERVAL set (test mode), the pre-update
+        # With PHOENIX_FRESHCLAM_INTERVAL set (test mode), the pre-update
         # jitter sleep is skipped entirely — nothing recorded.
         _, intervals, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert intervals == [], f"jitter should be skipped in test mode; got {intervals}"
@@ -162,7 +162,7 @@ class TestFreshclamWrapperRunOnce:
         # invite throttling/backoff.
         proc, _, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/usr/bin/env bash\nexit 47\n',
         )
         assert proc.returncode == 0
@@ -172,7 +172,7 @@ class TestFreshclamWrapperRunOnce:
         # The attempt must be recorded so the once-per-hour guard can see it.
         proc, _, stamp = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body='#!/usr/bin/env bash\nexit 0\n',
         )
         assert proc.returncode == 0
@@ -214,7 +214,7 @@ class TestFreshclamWrapperRateLimit:
         marker = tmp_path / "ran"
         proc, _, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             stamp_age=60,
         )
@@ -229,7 +229,7 @@ class TestFreshclamWrapperGuard:
         marker = tmp_path / "ran"
         proc, intervals, _ = _run_wrapper(
             tmp_path,
-            {"RESISTINE_FRESHCLAM_INTERVAL": "1"},
+            {"PHOENIX_FRESHCLAM_INTERVAL": "1"},
             freshclam_body=f'#!/usr/bin/env bash\necho ran > {marker!s}\nexit 0\n',
             conf_exists=False,
         )

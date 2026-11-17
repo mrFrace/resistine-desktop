@@ -307,15 +307,21 @@ def start_agent():
     parts = []
     # Restore client.keys from backup if it's missing — checked unprivileged
     # first (backup lives outside /Library/Phoenix/ so is always readable).
-    if os.path.exists(_KEY_BACKUP):
+    if os.path.exists(_KEY_BACKUP) or os.path.exists(_LEGACY_KEY_BACKUP):
         parts.append(
             f"if [ ! -s {_sh(_CLIENT_KEYS)} ]; then "
-            # Try Keychain first (encrypted at rest), fall back to file.
+            # Try Keychain first (encrypted at rest), fall back to file. Each
+            # is tried under the current name, then the pre-rename one.
             f"KC=$(security find-generic-password -k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} -w 2>/dev/null); "
+            f"if [ -z \"$KC\" ]; then "
+            f"KC=$(security find-generic-password -k {_sh(_KEYCHAIN)} -s {_sh(_LEGACY_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} -w 2>/dev/null); "
+            f"fi; "
             f"if [ -n \"$KC\" ]; then "
             f"echo \"$KC\" > {_sh(_CLIENT_KEYS)}; "
             f"elif [ -s {_sh(_KEY_BACKUP)} ]; then "
             f"cp {_sh(_KEY_BACKUP)} {_sh(_CLIENT_KEYS)}; "
+            f"elif [ -s {_sh(_LEGACY_KEY_BACKUP)} ]; then "
+            f"cp {_sh(_LEGACY_KEY_BACKUP)} {_sh(_CLIENT_KEYS)}; "
             f"fi; "
             f"if [ -s {_sh(_CLIENT_KEYS)} ]; then "
             f"chmod 640 {_sh(_CLIENT_KEYS)} && chown root:wazuh {_sh(_CLIENT_KEYS)} && echo KEY_RESTORED; "
@@ -356,7 +362,7 @@ def restore_client_key_if_needed():
         logger.info("[WAZUH] Skipping key restore — enrolled under different email, reinstall required")
         return False
 
-    if not os.path.exists(_KEY_BACKUP):
+    if not os.path.exists(_KEY_BACKUP) and not os.path.exists(_LEGACY_KEY_BACKUP):
         logger.info("No client.keys backup found, nothing to restore")
         return True
 
@@ -366,10 +372,15 @@ def restore_client_key_if_needed():
     script = (
         f"if [ ! -s {_sh(_CLIENT_KEYS)} ]; then "
         f"  KC=$(security find-generic-password -k {_sh(_KEYCHAIN)} -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} -w 2>/dev/null); "
+        f"  if [ -z \"$KC\" ]; then "
+        f"    KC=$(security find-generic-password -k {_sh(_KEYCHAIN)} -s {_sh(_LEGACY_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} -w 2>/dev/null); "
+        f"  fi; "
         f"  if [ -n \"$KC\" ]; then "
         f"    echo \"$KC\" > {_sh(_CLIENT_KEYS)}; "
         f"  elif [ -s {_sh(_KEY_BACKUP)} ]; then "
         f"    cp {_sh(_KEY_BACKUP)} {_sh(_CLIENT_KEYS)}; "
+        f"  elif [ -s {_sh(_LEGACY_KEY_BACKUP)} ]; then "
+        f"    cp {_sh(_LEGACY_KEY_BACKUP)} {_sh(_CLIENT_KEYS)}; "
         f"  fi; "
         f"  if [ -s {_sh(_CLIENT_KEYS)} ]; then "
         f"    chmod 640 {_sh(_CLIENT_KEYS)} && chown root:wazuh {_sh(_CLIENT_KEYS)} && "
@@ -453,14 +464,22 @@ def stop_agent():
     return stopped
 
 
-_KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
+_KEY_BACKUP = "/Library/Application Support/Phoenix/wazuh_client.keys"
+# Pre-rename location. Read-only: an agent enrolled before the Phoenix rename
+# keeps its key here, and losing it would force a re-enrollment that leaves a
+# duplicate agent registered on the manager. Never written to, only read as a
+# last-resort fallback and removed on uninstall.
+_LEGACY_KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
 _CLIENT_KEYS = f"{WAZUH_INSTALL_DIR}/etc/client.keys"
 
 # macOS System Keychain — primary secure storage for the agent key.
 # The file backup (_KEY_BACKUP) is kept as a fallback and as an unprivileged
 # sentinel so Python can cheaply decide whether to attempt a privileged restore.
 _KEYCHAIN = "/Library/Keychains/System.keychain"
-_KC_SERVICE = "com.resistine.wazuh.agent"
+_KC_SERVICE = "exposed.phoenix.wazuh.agent"
+# Pre-rename keychain service, read as a fallback for the same reason as
+# _LEGACY_KEY_BACKUP above.
+_LEGACY_KC_SERVICE = "com.resistine.wazuh.agent"
 _KC_ACCOUNT = "client_key"
 
 # `security -i` command that stores the agent key in the System Keychain.
@@ -486,7 +505,7 @@ def remove_agent(wipe_keys: bool = False):
 
     Returns True on success.
     """
-    if not is_agent_installed() and not _is_service_loaded() and not (wipe_keys and (os.path.exists(_KEY_BACKUP) or _has_keychain_entry())):
+    if not is_agent_installed() and not _is_service_loaded() and not (wipe_keys and (os.path.exists(_KEY_BACKUP) or os.path.exists(_LEGACY_KEY_BACKUP) or _has_keychain_entry())):
         logger.info("Wazuh agent not installed and no key material to wipe")
         return True
 
@@ -494,10 +513,15 @@ def remove_agent(wipe_keys: bool = False):
     if wipe_keys:
         # Tear everything down and wipe identity: no key backup written, and
         # any existing backup file + Keychain entry are deleted.
+        # Both the current and the pre-rename copies must go: the restore
+        # path falls back to the legacy ones, so leaving them behind would
+        # let a deliberately wiped identity come straight back.
         key_phase = (
-            f"rm -f {_sh(_KEY_BACKUP)}; "
+            f"rm -f {_sh(_KEY_BACKUP)} {_sh(_LEGACY_KEY_BACKUP)}; "
             f"security delete-generic-password "
             f"-s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} {_sh(_KEYCHAIN)} 2>/dev/null; "
+            f"security delete-generic-password "
+            f"-s {_sh(_LEGACY_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} {_sh(_KEYCHAIN)} 2>/dev/null; "
         )
     else:
         # Preserve the key in two places so reinstall can reconnect without
@@ -572,8 +596,10 @@ def reenroll_agent():
         f"{_sh(_WAZUH_CONTROL)} stop 2>/dev/null; "
         f"pkill -9 -f '/Library/Phoenix/bin/wazuh-' 2>/dev/null; "
         # Purge the dead identity everywhere so nothing can restore it.
-        f"rm -f {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)}; "
+        f"rm -f {_sh(_CLIENT_KEYS)} {_sh(_KEY_BACKUP)} {_sh(_LEGACY_KEY_BACKUP)}; "
         f"security delete-generic-password -s {_sh(_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
+        f"{_sh(_KEYCHAIN)} 2>/dev/null; "
+        f"security delete-generic-password -s {_sh(_LEGACY_KC_SERVICE)} -a {_sh(_KC_ACCOUNT)} "
         f"{_sh(_KEYCHAIN)} 2>/dev/null; "
         f"{register}; "
         # Enrollment must have produced a key — otherwise starting is pointless.
@@ -602,17 +628,25 @@ def reenroll_agent():
 
 
 def _has_keychain_entry() -> bool:
-    """Return True if the agent's client.keys is present in the System Keychain."""
-    try:
-        result = subprocess.run(
-            ["security", "find-generic-password",
-             "-s", _KC_SERVICE, "-a", _KC_ACCOUNT, _KEYCHAIN],
-            capture_output=True,
-            timeout=5,
-        )
-        return result.returncode == 0
-    except Exception:
-        return False
+    """Return True if the agent's client.keys is present in the System Keychain.
+
+    Both the current and the pre-rename service names count: an agent enrolled
+    before the Phoenix rename still has a usable key under the old name, and
+    the restore path knows how to read it.
+    """
+    for service in (_KC_SERVICE, _LEGACY_KC_SERVICE):
+        try:
+            result = subprocess.run(
+                ["security", "find-generic-password",
+                 "-s", service, "-a", _KC_ACCOUNT, _KEYCHAIN],
+                capture_output=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _get_script_path():
@@ -675,8 +709,8 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
     import uuid
 
     unique_id = uuid.uuid4().hex[:12]
-    status_file = f"/tmp/resistine-wazuh-install-{unique_id}.status"
-    log_file = f"/tmp/resistine-wazuh-install-{unique_id}.log"
+    status_file = f"/tmp/phoenix-wazuh-install-{unique_id}.status"
+    log_file = f"/tmp/phoenix-wazuh-install-{unique_id}.log"
     script_path = _get_script_path()
 
     # Build the argument list for the script

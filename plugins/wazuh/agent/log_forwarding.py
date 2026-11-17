@@ -31,7 +31,7 @@ _FLAG = "clamav_forwarding_enabled"
 
 # Per-platform ClamAV log locations; the agent dir comes from _agent_dir().
 if _PLATFORM == "Darwin":
-    _CLAMAV_LOG = "/Library/Application Support/Resistine/clamav/log/clamd.log"
+    _CLAMAV_LOG = "/Library/Application Support/Phoenix/clamav/log/clamd.log"
 elif _PLATFORM == "Linux":
     # Distro ClamAV logs here by default; harmless if the path differs — the
     # agent simply finds nothing to tail until the file exists.

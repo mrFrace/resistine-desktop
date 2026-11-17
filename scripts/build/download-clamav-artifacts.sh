@@ -1,22 +1,27 @@
 #!/bin/bash
 set -e
 
-# Download pre-built ClamAV artifacts from GitHub Actions
-# Requires: GitHub CLI (gh) authenticated with access to Resistine/ClamAV-Mac
+# Download pre-built ClamAV artifacts for macOS.
+#
+# Source of truth is a GitHub *release* on Phoenix's own ClamAV repo, not an
+# Actions artifact: Actions artifacts expire after 90 days, and the ones this
+# project used to consume already have. A release asset does not expire.
+#
+# Requires: GitHub CLI (gh) authenticated with access to the repo below.
 #
 # Usage:
-#   ./download-clamav-artifacts.sh                  # download latest from main
-#   ./download-clamav-artifacts.sh <run-id>         # download from specific run
-#   ./download-clamav-artifacts.sh --check          # exit 0 if up-to-date, 1 if stale
+#   ./download-clamav-artifacts.sh              # latest release
+#   ./download-clamav-artifacts.sh <tag>        # a specific release tag
+#   ./download-clamav-artifacts.sh --check      # exit 0 if up-to-date, 1 if stale
 #
-# Called automatically by build-distribution.sh when artifacts are missing or stale.
+# Called automatically by build-distribution.sh when artifacts are missing.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACTS_DIR="$SCRIPT_DIR/clamav-artifacts"
-REPO="Resistine/ClamAV-Mac"
+REPO="${CLAMAV_ARTIFACTS_REPO:-DatOneOPGuy/phoenix-clamav-mac}"
+ASSET="${CLAMAV_ARTIFACTS_ASSET:-clamav-macos-artifacts.tar.gz}"
 VERSION_FILE="$ARTIFACTS_DIR/.clamav-version"
 
-# Check for gh CLI
 if ! command -v gh &> /dev/null; then
     echo "Error: GitHub CLI (gh) is required but not installed."
     echo "  Install: brew install gh"
@@ -24,122 +29,104 @@ if ! command -v gh &> /dev/null; then
     exit 1
 fi
 
-# Query the latest artifact's commit SHA and name from CI (single API call)
-# Sets LATEST_SHA and LATEST_ARTIFACT_NAME globals
-fetch_latest_artifact_info() {
-    local info
-    info=$(gh api "repos/$REPO/actions/artifacts?per_page=1" \
-        --jq '.artifacts[0] | "\(.workflow_run.head_sha) \(.name)"' 2>/dev/null || echo "")
-    LATEST_SHA="${info%% *}"
-    LATEST_ARTIFACT_NAME="${info#* }"
-}
-
-get_remote_sha() {
-    # Only trust output that looks like a commit SHA — on HTTP errors gh can
-    # emit JSON error text on stdout, which must not masquerade as a version.
-    if [ -z "${LATEST_SHA+x}" ]; then
-        fetch_latest_artifact_info
-    fi
-    sha="$LATEST_SHA"
-    case "$sha" in
-        *[!0-9a-f]*|"") echo "" ;;
-        *) [ ${#sha} -eq 40 ] && echo "$sha" || echo "" ;;
+# Latest release tag, or "" when the repo/network is unreachable. Only a
+# plausible tag is returned -- on an HTTP error gh can print JSON onto stdout,
+# which must never be mistaken for a version.
+get_remote_tag() {
+    local tag
+    tag=$(gh release view --repo "$REPO" --json tagName -q .tagName 2>/dev/null || echo "")
+    case "$tag" in
+        ""|*[!A-Za-z0-9._-]*) echo "" ;;
+        *) echo "$tag" ;;
     esac
 }
 
-get_artifact_name() {
-    if [ -z "${LATEST_ARTIFACT_NAME+x}" ]; then
-        fetch_latest_artifact_info
-    fi
-    echo "$LATEST_ARTIFACT_NAME"
+get_local_tag() {
+    [ -f "$VERSION_FILE" ] && cat "$VERSION_FILE" || echo ""
 }
 
-# Read local version
-get_local_sha() {
-    if [ -f "$VERSION_FILE" ]; then
-        cat "$VERSION_FILE"
-    else
-        echo ""
-    fi
+have_usable_artifacts() {
+    [ -f "$ARTIFACTS_DIR/binaries/clamonacc" ] && [ -f "$ARTIFACTS_DIR/binaries/clamd" ]
 }
 
-# --check mode: just report if up-to-date
 if [ "$1" = "--check" ]; then
-    LOCAL_SHA=$(get_local_sha)
-    if [ -z "$LOCAL_SHA" ]; then
+    LOCAL_TAG=$(get_local_tag)
+    if [ -z "$LOCAL_TAG" ] || ! have_usable_artifacts; then
         echo "No local ClamAV artifacts"
         exit 1
     fi
-    REMOTE_SHA=$(get_remote_sha)
-    if [ -z "$REMOTE_SHA" ]; then
-        echo "Could not query remote version (offline or no access)"
-        exit 0  # don't block builds when offline
+    REMOTE_TAG=$(get_remote_tag)
+    if [ -z "$REMOTE_TAG" ]; then
+        echo "Could not query $REPO (offline or no access)"
+        exit 0  # never block a build just because we cannot check
     fi
-    if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-        echo "ClamAV artifacts up-to-date ($LOCAL_SHA)"
+    if [ "$LOCAL_TAG" = "$REMOTE_TAG" ]; then
+        echo "ClamAV artifacts up-to-date ($LOCAL_TAG)"
         exit 0
-    else
-        echo "ClamAV artifacts stale (local: ${LOCAL_SHA:0:12}, remote: ${REMOTE_SHA:0:12})"
-        exit 1
     fi
+    echo "ClamAV artifacts stale (local: $LOCAL_TAG, remote: $REMOTE_TAG)"
+    exit 1
 fi
 
-# Determine what to download
+# Decide which release to fetch
 if [ -n "$1" ]; then
-    echo "Downloading ClamAV artifacts from run $1..."
-    DOWNLOAD_SHA=""
+    TAG="$1"
+    echo "Downloading ClamAV artifacts from release $TAG..."
 else
-    # Check if we even need to download
-    REMOTE_SHA=$(get_remote_sha)
-    LOCAL_SHA=$(get_local_sha)
+    TAG=$(get_remote_tag)
+    LOCAL_TAG=$(get_local_tag)
 
-    if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ] \
-       && [ -f "$ARTIFACTS_DIR/binaries/clamonacc" ] \
-       && [ -f "$ARTIFACTS_DIR/binaries/clamd" ]; then
-        echo "ClamAV artifacts already up-to-date (${REMOTE_SHA:0:12})"
+    if [ -n "$TAG" ] && [ "$LOCAL_TAG" = "$TAG" ] && have_usable_artifacts; then
+        echo "ClamAV artifacts already up-to-date ($TAG)"
         exit 0
     fi
 
-    ARTIFACT_NAME=$(get_artifact_name)
-
-    if [ -n "$REMOTE_SHA" ]; then
-        echo "Downloading ClamAV artifacts (${REMOTE_SHA:0:12})..."
-    else
-        # CI unreachable (artifact repo is mid-migration to Phoenix infra).
-        # Never wipe a working local copy just because we can't check it.
-        if [ -f "$ARTIFACTS_DIR/binaries/clamonacc" ] \
-           && [ -f "$ARTIFACTS_DIR/binaries/clamd" ]; then
-            echo "CI unreachable — using existing local ClamAV artifacts."
+    if [ -z "$TAG" ]; then
+        # Never wipe a working local copy just because the release cannot be
+        # queried -- that would leave the build with no ClamAV at all.
+        if have_usable_artifacts; then
+            echo "$REPO unreachable -- using existing local ClamAV artifacts ($(get_local_tag))."
             exit 0
         fi
-        echo "Downloading latest ClamAV artifacts from main..."
-    fi
-    DOWNLOAD_SHA="$REMOTE_SHA"
-fi
-
-# Clean previous artifacts
-rm -rf "$ARTIFACTS_DIR"
-mkdir -p "$ARTIFACTS_DIR"
-
-if [ -n "$1" ]; then
-    gh run download "$1" --repo "$REPO" --dir "$ARTIFACTS_DIR"
-else
-    if [ -z "$ARTIFACT_NAME" ]; then
-        echo "Error: Could not determine artifact name from CI"
+        echo "Error: cannot reach $REPO and no local ClamAV artifacts are present."
+        echo "  Check 'gh auth status', or set CLAMAV_ARTIFACTS_REPO."
         exit 1
     fi
-    gh run download --repo "$REPO" --name "$ARTIFACT_NAME" --dir "$ARTIFACTS_DIR"
+    echo "Downloading ClamAV artifacts ($TAG)..."
 fi
 
-# gh run download nests files inside a subdirectory named after the artifact.
-# Flatten so files are directly in ARTIFACTS_DIR.
-NESTED=$(find "$ARTIFACTS_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)
-if [ -n "$NESTED" ] && [ ! -d "$ARTIFACTS_DIR/binaries" ]; then
-    echo "  Flattening nested directory: $(basename "$NESTED")"
-    mv "$NESTED"/* "$ARTIFACTS_DIR/" 2>/dev/null || true
-    find "$NESTED" -mindepth 1 -maxdepth 1 -type d -exec mv {} "$ARTIFACTS_DIR/" \; 2>/dev/null || true
-    rmdir "$NESTED" 2>/dev/null || true
+# Download into a staging dir first: the existing artifacts are the fallback
+# if anything here fails, so they are only replaced once the new set is known
+# to be complete.
+STAGE="$(mktemp -d)"
+cleanup_stage() { rm -rf "$STAGE"; }
+trap cleanup_stage EXIT
+
+if ! gh release download "$TAG" --repo "$REPO" --pattern "$ASSET" --dir "$STAGE" 2>&1; then
+    echo "Error: could not download $ASSET from $REPO release $TAG"
+    exit 1
 fi
+
+if [ ! -s "$STAGE/$ASSET" ]; then
+    echo "Error: downloaded asset is empty: $ASSET"
+    exit 1
+fi
+
+# The tarball carries a top-level clamav-artifacts/ directory, so it unpacks
+# straight over ARTIFACTS_DIR's parent.
+if ! tar -xzf "$STAGE/$ASSET" -C "$STAGE"; then
+    echo "Error: could not extract $ASSET"
+    exit 1
+fi
+
+if [ ! -d "$STAGE/clamav-artifacts/binaries" ]; then
+    echo "Error: $ASSET does not contain clamav-artifacts/binaries/"
+    exit 1
+fi
+
+rm -rf "$ARTIFACTS_DIR"
+mv "$STAGE/clamav-artifacts" "$ARTIFACTS_DIR"
+echo "$TAG" > "$VERSION_FILE"
 
 # Verify expected files
 if [ ! -f "$ARTIFACTS_DIR/binaries/clamonacc" ]; then
@@ -176,9 +163,9 @@ fi
 # ── Bundle CVD signature-verification certs ──
 # freshclam needs clamav.crt to verify downloaded CVD signatures. The CI build
 # bakes a hardcoded certs path that won't exist on end-user machines.
-# Search order: CI artifact → local ClamAV-Mac source tree → GitHub repo.
+# Search order: release artifact → local ClamAV source tree → the repo.
 if [ ! -f "$ARTIFACTS_DIR/certs/clamav.crt" ]; then
-    CLAMAV_SRC="${CLAMAV_SRC_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)/../ClamAV-Mac}"
+    CLAMAV_SRC="${CLAMAV_SRC_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)/../phoenix-clamav-mac}"
     CERT_CANDIDATES=(
         "$CLAMAV_SRC/install/etc/certs/clamav.crt"
         "$CLAMAV_SRC/certs/clamav.crt"
@@ -193,9 +180,9 @@ if [ ! -f "$ARTIFACTS_DIR/certs/clamav.crt" ]; then
     if [ -n "$FOUND_CERT" ]; then
         mkdir -p "$ARTIFACTS_DIR/certs"
         cp "$FOUND_CERT" "$ARTIFACTS_DIR/certs/clamav.crt"
-        echo "  Bundled CVD verification cert from ClamAV-Mac source"
+        echo "  Bundled CVD verification cert from local ClamAV source"
     else
-        # Fetch from the ClamAV-Mac repo via gh (already authenticated).
+        # Fetch from the Phoenix ClamAV repo via gh (already authenticated).
         echo "  Fetching clamav.crt from $REPO..."
         mkdir -p "$ARTIFACTS_DIR/certs"
         for remote_path in certs/clamav.crt etc/certs/clamav.crt install/etc/certs/clamav.crt; do

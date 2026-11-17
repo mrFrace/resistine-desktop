@@ -28,7 +28,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.resistine.desktop.freshclam</string>
+    <string>exposed.phoenix.desktop.freshclam</string>
 
     <!-- Paths assume /Applications/Phoenix.app install location -->
     <key>ProgramArguments</key>
@@ -72,9 +72,9 @@
 
     <!-- Logging -->
     <key>StandardOutPath</key>
-    <string>/Library/Application Support/Resistine/clamav/log/freshclam-daemon.stdout.log</string>
+    <string>/Library/Application Support/Phoenix/clamav/log/freshclam-daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Library/Application Support/Resistine/clamav/log/freshclam-daemon.stderr.log</string>
+    <string>/Library/Application Support/Phoenix/clamav/log/freshclam-daemon.stderr.log</string>
 
     <key>ThrottleInterval</key>
     <integer>30</integer>

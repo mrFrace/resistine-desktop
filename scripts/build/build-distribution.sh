@@ -195,7 +195,7 @@ fi
 # ============================================================
 # Step 2b: Obtain ClamAV Components
 # ============================================================
-# Artifacts are auto-downloaded from Resistine/ClamAV-Mac CI.
+# Artifacts are auto-downloaded from the Phoenix ClamAV release.
 # The script detects stale artifacts and re-downloads when a newer
 # build is available. Set CLAMAV_ARTIFACTS_DIR to override the path.
 # ============================================================
@@ -424,11 +424,11 @@ if [ -d "$CLAMAV_ARTIFACTS_DIR/binaries" ]; then
     CLAMAV_LIB_DIR="$CLAMAV_ARTIFACTS_DIR/lib"
 
     # clamonacc → nested app bundle (ESF entitlements need a bundle)
-    CLAMAV_APP="$PYTHON_APP/Contents/Helpers/ResistineClamAV.app"
+    CLAMAV_APP="$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app"
     mkdir -p "$CLAMAV_APP/Contents/MacOS"
 
     cp "$CLAMAV_BINARIES_DIR/clamonacc" "$CLAMAV_APP/Contents/MacOS/clamonacc"
-    echo "  - Placed clamonacc in ResistineClamAV.app"
+    echo "  - Placed clamonacc in PhoenixClamAV.app"
 
     cat > "$CLAMAV_APP/Contents/Info.plist" << 'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -463,7 +463,7 @@ PLISTEOF
     done
 
     # First-party freshclam auto-update wrapper → Contents/Helpers/
-    # Run by the root LaunchDaemon com.resistine.desktop.freshclam.
+    # Run by the root LaunchDaemon exposed.phoenix.desktop.freshclam.
     if [ -f "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" ]; then
         cp "$PYTHON_UI_PATH/scripts/clamav/freshclam-update.sh" \
             "$PYTHON_APP/Contents/Helpers/freshclam-update.sh"
@@ -571,24 +571,25 @@ PLISTEOF
         cp "$LAUNCHD_SRC/"*.plist "$DAEMONS_DIR/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
 
-        # Normalize legacy plist names to the com.resistine.desktop.* convention
+        # Normalize plist names to the exposed.phoenix.desktop.* convention
         # that clamav-postinstall-darwin.sh (load_daemons step) and the runtime
-        # SMAppService registration both expect. The ClamAV-Mac CI artifact still
-        # ships the pre-migration names (com.resistine.clamd / com.resistine.clamonacc);
-        # only freshclam was migrated. Without this rename the postinstall fails
-        # with "plist not found: com.resistine.desktop.clamd.plist" and antivirus
-        # setup never completes. Renames the file AND rewrites the internal Label
-        # so SMAppService registers under the matching identifier. Idempotent: a
-        # no-op once the upstream artifact ships the .desktop. names.
+        # SMAppService registration both expect. The upstream artifact still
+        # ships the original names (com.resistine.clamd / com.resistine.clamonacc,
+        # and in newer builds com.resistine.desktop.*). Without this rename the
+        # postinstall fails with "plist not found" and antivirus setup never
+        # completes. Renames the file AND rewrites the internal Label so
+        # SMAppService registers under the matching identifier. Idempotent.
         for base in clamd clamonacc; do
-            old="$DAEMONS_DIR/com.resistine.$base.plist"
-            new="$DAEMONS_DIR/com.resistine.desktop.$base.plist"
-            if [ -f "$old" ]; then
+            new="$DAEMONS_DIR/exposed.phoenix.desktop.$base.plist"
+            for old_label in "com.resistine.desktop.$base" "com.resistine.$base"; do
+                old="$DAEMONS_DIR/$old_label.plist"
+                [ -f "$old" ] || continue
                 /usr/bin/sed -i '' \
-                    "s/com\.resistine\.$base/com.resistine.desktop.$base/g" "$old"
+                    "s/$(printf '%s' "$old_label" | sed 's/\./\\./g')/exposed.phoenix.desktop.$base/g" "$old"
                 mv "$old" "$new"
-                echo "  - Normalized com.resistine.$base.plist -> com.resistine.desktop.$base.plist"
-            fi
+                echo "  - Normalized $old_label.plist -> exposed.phoenix.desktop.$base.plist"
+                break
+            done
         done
 
         # The CI artifact plists hardcode /Applications/Resistine.app in
@@ -597,14 +598,24 @@ PLISTEOF
         # EX_CONFIG loop) and clamonacc registration dies with "Operation not
         # permitted" — the shipped bundle must point at its own install path.
         for base in clamd clamonacc; do
-            p="$DAEMONS_DIR/com.resistine.desktop.$base.plist"
+            p="$DAEMONS_DIR/exposed.phoenix.desktop.$base.plist"
             if [ -f "$p" ]; then
+                # The support dir moved to .../Phoenix/clamav (see
+                # clamav-postinstall-darwin.sh). A plist left pointing at the
+                # old path starts a daemon with no config at all.
                 /usr/bin/sed -i '' \
-                    "s|/Applications/Resistine\.app|/Applications/${APP_NAME}.app|g" "$p"
+                    -e "s|/Applications/Resistine\.app|/Applications/${APP_NAME}.app|g" \
+                    -e "s|ResistineClamAV\.app|PhoenixClamAV.app|g" \
+                    -e "s|Application Support/Resistine/|Application Support/Phoenix/|g" \
+                    -e "s|Resistine Desktop installer|Phoenix Desktop installer|g" \
+                    -e "s|Resistine\.app bundle|Phoenix.app bundle|g" "$p"
             fi
         done
-        if grep -q "/Applications/Resistine\.app" "$DAEMONS_DIR"/*.plist 2>/dev/null; then
-            echo "  ERROR: a LaunchDaemon plist still references Resistine.app"
+        if grep -qE "/Applications/Resistine\.app|ResistineClamAV\.app|Application Support/Resistine/" \
+                "$DAEMONS_DIR"/*.plist 2>/dev/null; then
+            echo "  ERROR: a LaunchDaemon plist still references a Resistine path"
+            grep -lE "/Applications/Resistine\.app|ResistineClamAV\.app|Application Support/Resistine/" \
+                "$DAEMONS_DIR"/*.plist 2>/dev/null
             exit 1
         fi
         echo "  - Rewrote daemon program paths to ${APP_NAME}.app"
@@ -615,10 +626,10 @@ PLISTEOF
     # First-party freshclam auto-update daemon plist (tracked in git, NOT a
     # downloaded artifact — so it survives the artifacts-dir wipe and needs no
     # ClamAV-Mac changes). Pairs with Contents/Helpers/freshclam-update.sh.
-    FRESHCLAM_PLIST_SRC="$PYTHON_UI_PATH/scripts/clamav/com.resistine.desktop.freshclam.plist"
+    FRESHCLAM_PLIST_SRC="$PYTHON_UI_PATH/scripts/clamav/exposed.phoenix.desktop.freshclam.plist"
     if [ -f "$FRESHCLAM_PLIST_SRC" ]; then
         cp "$FRESHCLAM_PLIST_SRC" \
-            "$PYTHON_APP/Contents/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist"
+            "$PYTHON_APP/Contents/Library/LaunchDaemons/exposed.phoenix.desktop.freshclam.plist"
         echo "  - Placed freshclam auto-update daemon plist"
     fi
 
@@ -689,11 +700,11 @@ cp "$MAIN_PROFILE" "$PYTHON_APP/Contents/embedded.provisionprofile"
 echo "  - Embedding XPC profile into CLI bundle..."
 cp "$XPC_PROFILE" "$CLI_APP/Contents/embedded.provisionprofile"
 
-# Embed ESF provisioning profile into ResistineClamAV.app (clamonacc)
-if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" ]; then
+# Embed ESF provisioning profile into PhoenixClamAV.app (clamonacc)
+if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" ]; then
     if [ -f "$CLAMONACC_PROFILE" ]; then
-        echo "  - Embedding ESF profile into ResistineClamAV.app..."
-        cp "$CLAMONACC_PROFILE" "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app/Contents/embedded.provisionprofile"
+        echo "  - Embedding ESF profile into PhoenixClamAV.app..."
+        cp "$CLAMONACC_PROFILE" "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app/Contents/embedded.provisionprofile"
     else
         echo "  - Warning: ClamOnAcc provisioning profile not found at $CLAMONACC_PROFILE"
         echo "    clamonacc will not be able to register as an ESF client"
@@ -928,18 +939,18 @@ ESFPY
         codesign --force --sign "$SIGN_IDENTITY" \
             --options runtime --timestamp \
             --entitlements "$CLAMAV_ENTITLEMENTS" \
-            "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app/Contents/MacOS/clamonacc" || {
+            "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app/Contents/MacOS/clamonacc" || {
             echo "    clamonacc signing failed"
             exit 1
         }
     fi
 
-    # Sign ResistineClamAV.app bundle (preserve ESF entitlements for clamonacc)
+    # Sign PhoenixClamAV.app bundle (preserve ESF entitlements for clamonacc)
     codesign --force --sign "$SIGN_IDENTITY" \
         --options runtime --timestamp \
         ${CLAMAV_ENTITLEMENTS:+--entitlements "$CLAMAV_ENTITLEMENTS"} \
-        "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" || {
-        echo "    ResistineClamAV.app signing failed"
+        "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" || {
+        echo "    PhoenixClamAV.app signing failed"
         exit 1
     }
 
@@ -1110,9 +1121,9 @@ if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
         echo "    Sparkle.framework: valid" || { echo "    Sparkle.framework: INVALID"; VERIFY_FAILED=true; }
 fi
 
-if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" ]; then
-    codesign --verify --verbose "$PYTHON_APP/Contents/Helpers/ResistineClamAV.app" 2>&1 && \
-        echo "    ResistineClamAV.app: valid" || { echo "    ResistineClamAV.app: INVALID"; VERIFY_FAILED=true; }
+if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" ]; then
+    codesign --verify --verbose "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" 2>&1 && \
+        echo "    PhoenixClamAV.app: valid" || { echo "    PhoenixClamAV.app: INVALID"; VERIFY_FAILED=true; }
 fi
 
 codesign --verify --verbose=2 "$PYTHON_APP" 2>&1 && \

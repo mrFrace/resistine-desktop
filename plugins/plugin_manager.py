@@ -24,8 +24,20 @@ class PluginManager:
     A class to manage the loading and downloading of plugins.
     """
 
-    # URLs for optional plugins metadata (could be used to display available plugins in the UI)
-    OPTIONAL_PLUGINS_URL = "https://raw.githubusercontent.com/Resistine/Resistine-Desktop-Plugins/main/plugins/optional_plugins.json"
+    # Catalog of optional plugins shown in the Store.
+    #
+    # This URL decides where the app downloads EXECUTABLE plugin archives from:
+    # the catalog supplies each plugin's download URL. It must therefore point
+    # at Phoenix-owned infrastructure only. It previously pointed at the old
+    # company's repo, which left them able to choose what code this app ran.
+    #
+    # Until the Phoenix catalog is published, the fetch fails and the Store
+    # shows nothing -- which is the correct direction to fail for executable
+    # content. Override with PHOENIX_PLUGINS_URL for local testing.
+    OPTIONAL_PLUGINS_URL = os.environ.get(
+        "PHOENIX_PLUGINS_URL",
+        "https://raw.githubusercontent.com/DatOneOPGuy/phoenix-desktop-plugins/main/plugins/optional_plugins.json",
+    )
 
     # Network timeouts (seconds)
     METADATA_TIMEOUT = 15

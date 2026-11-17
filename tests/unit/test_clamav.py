@@ -1603,11 +1603,11 @@ class TestFreshclamDaemon:
         # The freshclam plist must be registered (and last, after clamd
         # and clamonacc) so ensure_daemons_registered/deactivate cover it.
         assert (
-            "com.resistine.desktop.freshclam.plist"
+            "exposed.phoenix.desktop.freshclam.plist"
             in clamav_platform_darwin._DAEMON_PLISTS
         )
         assert clamav_platform_darwin._DAEMON_PLISTS[-1] == (
-            "com.resistine.desktop.freshclam.plist"
+            "exposed.phoenix.desktop.freshclam.plist"
         )
 
     def test_enable_routes_through_ensure_registered(self, monkeypatch):
@@ -1646,7 +1646,7 @@ class TestFreshclamDaemon:
         ensure.assert_not_called()
         # The osascript shell script targets exactly the freshclam label.
         script = " ".join(str(a) for a in ran.call_args[0][0])
-        assert "bootout system/com.resistine.desktop.freshclam" in script
+        assert "bootout system/exposed.phoenix.desktop.freshclam" in script
         assert "clamd" not in script
         assert "clamonacc" not in script
 

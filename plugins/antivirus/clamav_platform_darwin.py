@@ -26,7 +26,7 @@ def _applescript_quote(s: str) -> str:
 
 # ── macOS-specific paths ──────────────────────────────────
 
-_SYSTEM_CLAMAV_DIR = "/Library/Application Support/Resistine/clamav"
+_SYSTEM_CLAMAV_DIR = "/Library/Application Support/Phoenix/clamav"
 _SYSTEM_CLAMD_SOCKET = os.path.join(_SYSTEM_CLAMAV_DIR, "run", "clamd.sock")
 _SYSTEM_CLAMD_CONF = os.path.join(_SYSTEM_CLAMAV_DIR, "clamd.conf")
 _SYSTEM_FRESHCLAM_CONF = os.path.join(_SYSTEM_CLAMAV_DIR, "freshclam.conf")
@@ -38,15 +38,15 @@ _SYSTEM_RUN_DIR = os.path.join(_SYSTEM_CLAMAV_DIR, "run")
 # Order matters: clamd must be registered before clamonacc. freshclam (the
 # signature auto-updater) is independent and registered last.
 _DAEMON_PLISTS = [
-    "com.resistine.desktop.clamd.plist",
-    "com.resistine.desktop.clamonacc.plist",
-    "com.resistine.desktop.freshclam.plist",
+    "exposed.phoenix.desktop.clamd.plist",
+    "exposed.phoenix.desktop.clamonacc.plist",
+    "exposed.phoenix.desktop.freshclam.plist",
 ]
 
 # Label of the freshclam auto-update daemon, used by
 # set_freshclam_daemon_enabled() to bootout just this one daemon without
 # touching clamd/clamonacc real-time protection.
-_FRESHCLAM_DAEMON_LABEL = "com.resistine.desktop.freshclam"
+_FRESHCLAM_DAEMON_LABEL = "exposed.phoenix.desktop.freshclam"
 
 # Legacy plist paths from pre-SMAppService installs
 _LEGACY_PLIST_PATHS = [
@@ -62,6 +62,12 @@ _LEGACY_PLIST_PATHS = [
 _LEGACY_DAEMON_LABELS = [
     "com.resistine.clamd",
     "com.resistine.clamonacc",
+    # Pre-Phoenix-rename labels. Same failure mode as the pair above: they
+    # stay registered after an upgrade and fight the new labels over the
+    # same Unix socket, which shows up as a clamd crash loop.
+    "com.resistine.desktop.clamd",
+    "com.resistine.desktop.clamonacc",
+    "com.resistine.desktop.freshclam",
 ]
 
 # Paths derived from the project source tree (relative to this file).
@@ -276,7 +282,7 @@ def has_full_disk_access() -> bool:
         try:
             result = subprocess.run(
                 ["launchctl", "print",
-                 "system/com.resistine.desktop.clamonacc"],
+                 "system/exposed.phoenix.desktop.clamonacc"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode == 0:
@@ -556,8 +562,8 @@ def activate_system_daemons() -> tuple[bool, str]:
     # freshclam is auto-update, not real-time protection — only clamd and
     # clamonacc gate the "protection running" state.
     protection_labels = [
-        "com.resistine.desktop.clamd",
-        "com.resistine.desktop.clamonacc",
+        "exposed.phoenix.desktop.clamd",
+        "exposed.phoenix.desktop.clamonacc",
     ]
     # Give launchd a moment to bring the daemons up after (re)registration.
     for _ in range(10):
@@ -684,8 +690,8 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
             return False, "", 0
 
     unique_id = uuid.uuid4().hex[:12]
-    status_file = f"/tmp/resistine-clamav-install-{unique_id}.status"
-    log_file = f"/tmp/resistine-clamav-install-{unique_id}.log"
+    status_file = f"/tmp/phoenix-clamav-install-{unique_id}.status"
+    log_file = f"/tmp/phoenix-clamav-install-{unique_id}.log"
     script_path = _get_postinstall_script_path()
 
     args = [
@@ -701,7 +707,7 @@ def _launch_clamav_postinstall(db_source: str) -> tuple[bool, str]:
     # executes that copy. Only the trusted bundle path crosses the
     # trust boundary.
     shell_cmd = (
-        's="$(/usr/bin/mktemp /tmp/resistine-clamav-postinstall-XXXXXX)" && '
+        's="$(/usr/bin/mktemp /tmp/phoenix-clamav-postinstall-XXXXXX)" && '
         f'/bin/cp {shlex.quote(script_path)} "$s" && '
         '/bin/chmod 755 "$s" && '
         '{ /usr/bin/xattr -d com.apple.provenance "$s" 2>/dev/null '
@@ -887,7 +893,7 @@ def set_freshclam_daemon_enabled(enabled: bool) -> tuple[bool, str]:
     """Enable or disable the freshclam signature auto-update daemon.
 
     On macOS the "auto-update" setting controls the OS-level LaunchDaemon
-    (com.resistine.desktop.freshclam) rather than an in-process thread, so
+    (exposed.phoenix.desktop.freshclam) rather than an in-process thread, so
     updates run even while the app is closed.
 
     Enable → ``ensure_daemons_registered()`` (idempotent; re-registering an

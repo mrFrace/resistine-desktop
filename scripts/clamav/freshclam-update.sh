@@ -2,7 +2,7 @@
 #
 # freshclam-update.sh — Phoenix ClamAV signature auto-updater (macOS)
 #
-# Run by the root LaunchDaemon com.resistine.desktop.freshclam via /bin/bash.
+# Run by the root LaunchDaemon exposed.phoenix.desktop.freshclam via /bin/bash.
 # Runs freshclam exactly ONCE and exits. The cadence (every 4h) is owned by
 # launchd via the plist's StartCalendarInterval, NOT by a sleep-loop here.
 # StartCalendarInterval runs the most recent missed occurrence once on wake,
@@ -15,18 +15,18 @@
 # NEVER call a bare `freshclam` (a Homebrew ClamAV may sit in PATH with a
 # different binary and DB dir).
 #
-# Author: Resistine Team
-# Copyright (c) Resistine 2025
+# Author: Phoenix Team
+# Copyright (c) Phoenix 2026
 # Licensed under the GNU General Public License v2 or later
 
 set -u
 
 FRESHCLAM="/Applications/Phoenix.app/Contents/Helpers/freshclam"
-CONF="/Library/Application Support/Resistine/clamav/freshclam.conf"
+CONF="/Library/Application Support/Phoenix/clamav/freshclam.conf"
 # Records the epoch of the last attempt. Used to enforce ClamAV's CDN rule of
 # "no more than once per hour" — exceeding it earns an HTTP 429/403 block and
 # a multi-hour cool-down, regardless of our own cadence.
-STAMP="/Library/Application Support/Resistine/clamav/run/freshclam-last-run"
+STAMP="/Library/Application Support/Phoenix/clamav/run/freshclam-last-run"
 MIN_SPACING=3600  # seconds; ClamAV CDN hard limit is once per hour
 
 log() {
@@ -46,8 +46,8 @@ fi
 # or manual runs can stack up and trip ClamAV's 429 rate limit (observed: a
 # multi-hour CDN cool-down). launchd treats our early exit 0 as a normal
 # completion and simply waits for the next scheduled mark. Skipped in test mode
-# (RESISTINE_FRESHCLAM_INTERVAL set).
-if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ] && [ -f "$STAMP" ]; then
+# (PHOENIX_FRESHCLAM_INTERVAL set).
+if [ -z "${PHOENIX_FRESHCLAM_INTERVAL:-}" ] && [ -f "$STAMP" ]; then
     last=$(cat "$STAMP" 2>/dev/null || echo 0)
     now=$(date +%s)
     if [ "$((now - last))" -lt "$MIN_SPACING" ]; then
@@ -59,9 +59,9 @@ fi
 # Pre-update jitter (0-60s) so a fleet of machines whose intervals align don't
 # hit the mirrors at the same instant. Small because launchd now spawns us per
 # interval — we are not the long-lived process anymore. Skipped when
-# RESISTINE_FRESHCLAM_INTERVAL is set, which only happens during testing where
+# PHOENIX_FRESHCLAM_INTERVAL is set, which only happens during testing where
 # "run now" is the point.
-if [ -z "${RESISTINE_FRESHCLAM_INTERVAL:-}" ]; then
+if [ -z "${PHOENIX_FRESHCLAM_INTERVAL:-}" ]; then
     sleep $((RANDOM % 60))
 fi
 
