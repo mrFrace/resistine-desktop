@@ -6,7 +6,7 @@
   #define AppVersion "0.0.0"
 #endif
 
-; Build ID (UTC YYYYMMDDHHMM, see packaging/Resistine.spec). It goes into the
+; Build ID (UTC YYYYMMDDHHMM, see packaging/Phoenix.spec). It goes into the
 ; file name and the version Windows shows, not into AppVersion: the version
 ; checks below compare dot-separated numbers.
 #ifndef AppBuild

@@ -2,7 +2,7 @@
 Version Helper — single source of truth for the current app version.
 
 Frozen (PyInstaller) builds: reads from the bundled VERSION file in _MEIPASS.
-Source / dev mode: parses VERSION = '...' from packaging/Resistine.spec.
+Source / dev mode: parses VERSION = '...' from packaging/Phoenix.spec.
 Frozen builds also carry a BUILD file (UTC YYYYMMDDHHMM) that tells builds of
 one VERSION apart; source runs have none.
 
@@ -34,7 +34,7 @@ def get_current_version() -> str:
     """Return the current application version.
 
     Frozen builds: reads the VERSION file placed by PyInstaller.
-    Source / dev: parses VERSION = '...' from packaging/Resistine.spec.
+    Source / dev: parses VERSION = '...' from packaging/Phoenix.spec.
     Returns '0.0.0' if the version cannot be determined.
     """
     # Frozen build — read the bundled VERSION file
@@ -50,7 +50,7 @@ def get_current_version() -> str:
             logger.warning(f"[VERSION] Could not read bundled VERSION file: {e}")
 
     # Source / dev mode — parse from spec
-    spec_path = os.path.join(_PROJECT_ROOT, "packaging", "Resistine.spec")
+    spec_path = os.path.join(_PROJECT_ROOT, "packaging", "Phoenix.spec")
     try:
         with open(spec_path, "r", encoding="utf-8") as f:
             content = f.read()

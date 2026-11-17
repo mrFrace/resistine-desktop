@@ -25,16 +25,16 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/phoenix-linux.XXXXXX")"
 # The container writes the build tree as root; delete it from inside one.
 trap 'docker run --rm -v "$WORK:/w" "$IMAGE" find /w -mindepth 1 -delete >/dev/null 2>&1; rm -rf "$WORK"' EXIT
 
-VERSION=$(sed -nE "s/^VERSION\s*=\s*['\"]([^'\"]+)['\"].*/\1/p" packaging/Resistine.spec)
+VERSION=$(sed -nE "s/^VERSION\s*=\s*['\"]([^'\"]+)['\"].*/\1/p" packaging/Phoenix.spec)
 [ -n "$VERSION" ] || {
-	echo "No VERSION in packaging/Resistine.spec" >&2
+	echo "No VERSION in packaging/Phoenix.spec" >&2
 	exit 1
 }
 # RPM versions can't contain '-': 2026.07.20-rc -> 2026.07.20~rc (sorts before 2026.07.20).
 RPM_VERSION="${VERSION//-/\~}"
 # pacman versions can't contain '-' either: 2026.07.20-rc -> 2026.07.20rc (also sorts first).
 ARCH_VERSION="${VERSION//-/}"
-# Build ID (UTC minutes, see packaging/Resistine.spec): every build of one
+# Build ID (UTC minutes, see packaging/Phoenix.spec): every build of one
 # VERSION gets a package version above the last, so apt/dnf/pacman upgrade
 # instead of calling a new build "already installed".
 BUILD="${PHOENIX_BUILD:-$(date -u +%Y%m%d%H%M)}"
@@ -63,7 +63,7 @@ dnf -q -y install dpkg rpm-build binutils python3-pip \
 pip3 install -q uv
 uv venv -q --python 3.13 /venv
 VIRTUAL_ENV=/venv uv pip install -q -r scripts/requirements/requirements-linux.txt
-/venv/bin/pyinstaller --clean -y packaging/Resistine.spec
+/venv/bin/pyinstaller --clean -y packaging/Phoenix.spec
 [ -x dist/Phoenix/Phoenix ]
 /venv/bin/python scripts/build/check_bundle.py dist/Phoenix
 # The collected libgcc_s needs glibc 2.35 (RHEL 9 has 2.34); every system has its own.

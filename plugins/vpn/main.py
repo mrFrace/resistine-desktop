@@ -119,9 +119,23 @@ def _resolve_wireguard_folder() -> str:
 
 wireguard_folder = _resolve_wireguard_folder()
 
+
+def _env(name: str, default: str = "") -> str:
+    """Read PHOENIX_<name>, falling back to the pre-rename RESISTINE_<name>.
+
+    The fallback is kept so a developer who still has the old variable
+    exported does not silently get the default instead.
+    """
+    return (
+        os.environ.get(f"PHOENIX_{name}")
+        or os.environ.get(f"RESISTINE_{name}")
+        or default
+    )
+
+
 # DNS Configuration - used as the connectivity-check target and as the DNS
-# shown when a config has none. Override with RESISTINE_DNS_SERVER.
-DNS_SERVER = os.environ.get("RESISTINE_DNS_SERVER", "10.49.11.10")
+# shown when a config has none. Override with PHOENIX_DNS_SERVER.
+DNS_SERVER = _env("DNS_SERVER", "10.49.11.10")
 
 # Module-level state preserved from the original (wazuh imports is_vpn_connected).
 active_client_name = None
@@ -143,11 +157,11 @@ def is_vpn_connected():
     Dev escape hatch (macOS only): when running from source alongside an
     installed .pkg whose NetworkExtension already holds the tunnel up, this
     process's internal ``my_vpn_status`` stays "Stopped" even though traffic
-    routes through the system tunnel. RESISTINE_DEV_VPN_CONNECTED=1 forces
+    routes through the system tunnel. PHOENIX_DEV_VPN_CONNECTED=1 forces
     the gate to True so VPN-gated features work in source mode.
     """
     if (platform.system() == "Darwin"
-            and os.environ.get("RESISTINE_DEV_VPN_CONNECTED") == "1"):
+            and _env("DEV_VPN_CONNECTED") == "1"):
         return True
     return my_vpn_status == "Running"
 
@@ -343,7 +357,7 @@ class Plugin(BasePlugin):
             # Debug-mode convenience: auto-connect the VPN so VPN-gated
             # features (chat) work without a manual toggle.
             # Scheduled after extension activation has had time to settle.
-            if os.environ.get("RESISTINE_DEBUG") == "1":
+            if _env("DEBUG") == "1":
                 self.app.after(3000, self._debug_auto_connect)
 
     def _debug_auto_connect(self):

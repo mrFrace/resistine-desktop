@@ -42,7 +42,7 @@ logging.basicConfig(
     level=logging.WARNING,
     format="%(asctime)s | %(levelname)s | %(message)s",
 )
-logger = logging.getLogger("ResistineTray")
+logger = logging.getLogger("PhoenixTray")
 
 
 # ---- IPC (inline, no service_client import) ----
@@ -109,7 +109,8 @@ def _load_ipc_token() -> str:
     except OSError as e:
         logger.error(f"Failed to load IPC token: {e}")
     # Test/dev override
-    return os.environ.get("RESISTINE_IPC_TOKEN", "")
+    return os.environ.get("PHOENIX_IPC_TOKEN") or os.environ.get(
+        "RESISTINE_IPC_TOKEN", "")
 
 
 # IPC_TOKEN kept as a module attribute for backward compatibility, but
@@ -246,7 +247,7 @@ def _state_from_service(service_state: str) -> str:
 
 # ---- Tray App ----
 
-class ResistineTray:
+class PhoenixTray:
     def __init__(self):
         self._icon       = None
         self._tunnel     = None
@@ -394,7 +395,7 @@ class ResistineTray:
                 self._state = "disconnected"
 
         self._icon = pystray.Icon(
-            name="ResistineVPN",
+            name="PhoenixVPN",
             icon=_build_icon(self._state),
             title=self._title(),
             menu=pystray.Menu(lambda: self._build_menu()),
@@ -405,4 +406,4 @@ class ResistineTray:
 
 
 if __name__ == "__main__":
-    ResistineTray().run()
+    PhoenixTray().run()

@@ -5,7 +5,7 @@ Covers gui/tray.py:
 - _state_from_service: service state → tray state mapping
 - _get_active_tunnel: config file reading, fallback logic
 - _send_command: IPC socket, error handling
-- ResistineTray: state machine, connect/disconnect actions, menu building
+- PhoenixTray: state machine, connect/disconnect actions, menu building
 
 All socket, filesystem, and subprocess calls are mocked — safe to run anywhere.
 """
@@ -170,34 +170,34 @@ class TestTraySendCommand:
 # PhoenixTray state machine
 # ===========================================================================
 @pytest.mark.unit
-class TestResistineTrayState:
+class TestPhoenixTrayState:
     def test_initial_state_disconnected(self):
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         assert tray._state == "disconnected"
 
     def test_title_connected(self):
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "connected"
         assert "Connected" in tray._title()
 
     def test_title_disconnected(self):
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "disconnected"
         assert "Disconnected" in tray._title()
 
     def test_title_connecting(self):
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "connecting"
         assert "Connecting" in tray._title()
 
     def test_on_disconnect_noop_when_already_disconnected(self):
         """Disconnect action should do nothing if already disconnected."""
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "disconnected"
         tray._tunnel = "wg0"
 
@@ -207,8 +207,8 @@ class TestResistineTrayState:
 
     def test_on_connect_sets_connecting_state(self):
         """Connect action should immediately set state to 'connecting' before IPC call."""
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "disconnected"
         tray._tunnel = "wg0"
         tray._config_path = "/path/to/wg0.conf"
@@ -231,8 +231,8 @@ class TestResistineTrayState:
 
     def test_on_connect_forwards_config_path(self):
         """Connect must forward config_path to _send_command."""
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._state = "disconnected"
         tray._tunnel = "wg0"
         tray._config_path = r"C:\Users\Test\AppData\Roaming\Resistine\wireguard\wg0.conf"
@@ -248,8 +248,8 @@ class TestResistineTrayState:
         assert tray._config_path in connect_calls[0][0]
 
     def test_on_connect_noop_when_no_tunnel(self):
-        from gui.tray import ResistineTray
-        tray = ResistineTray()
+        from gui.tray import PhoenixTray
+        tray = PhoenixTray()
         tray._tunnel = None
 
         with patch("gui.tray._send_command") as mock_send:

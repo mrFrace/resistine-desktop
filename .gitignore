@@ -19,7 +19,7 @@ lib64/
 parts/
 sdist/
 *.spec
-!packaging/Resistine.spec
+!packaging/Phoenix.spec
 var/
 wheels/
 pip-wheel-metadata/
@@ -42,7 +42,7 @@ env/
 build/build/
 build/dist/
 *.manifest
-!packaging/windows/Resistine.exe.manifest
+!packaging/windows/Phoenix.exe.manifest
 
 # IDEs
 .vscode/

@@ -310,7 +310,9 @@ def _try_fetch_cvd_cert() -> str | None:
     if os.path.isfile(target_cert):
         return target_dir
 
-    repo = "Resistine/ClamAV-Mac"
+    # This cert verifies the signatures on downloaded virus databases, so it
+    # must come from Phoenix-owned infrastructure.
+    repo = os.environ.get("CLAMAV_ARTIFACTS_REPO", "DatOneOPGuy/phoenix-clamav-mac")
     remote_paths = (
         "certs/clamav.crt",
         "etc/certs/clamav.crt",

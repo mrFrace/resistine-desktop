@@ -26,11 +26,11 @@ if ! command -v pyinstaller >/dev/null 2>&1; then
 	pip install -r scripts/requirements/requirements-linux.txt
 fi
 
-# Extract version from packaging/Resistine.spec
+# Extract version from packaging/Phoenix.spec
 VERSION=$(
 	python3 - <<'EOF'
 import re
-with open('packaging/Resistine.spec', 'r') as f:
+with open('packaging/Phoenix.spec', 'r') as f:
     match = re.search(r"VERSION\s*=\s*['\"]([^'\"]+)['\"]", f.read())
     if match:
         print(match.group(1))
@@ -45,7 +45,7 @@ echo "Building Phoenix version: ${VERSION} build ${PHOENIX_BUILD} (deb ${DEB_VER
 
 # Run PyInstaller build
 echo "Running PyInstaller..."
-pyinstaller --clean -y packaging/Resistine.spec
+pyinstaller --clean -y packaging/Phoenix.spec
 
 # Verify build output
 if [ ! -d "dist/Phoenix" ]; then

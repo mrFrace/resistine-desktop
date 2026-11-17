@@ -14,10 +14,10 @@ $_rawArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } els
 $IsARM64  = $_rawArch -eq "ARM64"
 
 function Get-AppVersion {
-    $specPath = Join-Path $ProjectRoot "packaging\Resistine.spec"
+    $specPath = Join-Path $ProjectRoot "packaging\Phoenix.spec"
     $match = Select-String -Path $specPath -Pattern "VERSION\s*=\s*'([^']+)'" | Select-Object -First 1
     if (-not $match) {
-        throw "Could not find VERSION in Resistine.spec"
+        throw "Could not find VERSION in Phoenix.spec"
     }
     return $match.Matches[0].Groups[1].Value
 }
@@ -120,7 +120,7 @@ if (-not (Test-Path $venvPython)) {
     Write-Host "Using existing virtual environment: $venvPython"
 }
 
-# Build ID (UTC minutes, see packaging/Resistine.spec), shared by PyInstaller
+# Build ID (UTC minutes, see packaging/Phoenix.spec), shared by PyInstaller
 # (the app's BUILD file) and Inno Setup (installer name, displayed version).
 if (-not $env:PHOENIX_BUILD) {
     $env:PHOENIX_BUILD = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmm")
@@ -146,7 +146,7 @@ if (-not $SkipDependencyInstall) {
 
 if (-not $SkipPyInstaller) {
     Write-Host "Building Windows application bundle with PyInstaller..."
-    Invoke-VenvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Resistine.spec") --clean --noconfirm
+    Invoke-VenvPython -m PyInstaller (Join-Path $ProjectRoot "packaging\Phoenix.spec") --clean --noconfirm
 }
 
 $sourceDir = Join-Path $ProjectRoot "dist\Phoenix"
@@ -205,7 +205,7 @@ Convert-LicenseMdToTxt `
 
 $version = Get-AppVersion
 $iscc = Resolve-InnoCompiler
-$issScript = Join-Path $ProjectRoot "packaging\windows\ResistineInstaller.iss"
+$issScript = Join-Path $ProjectRoot "packaging\windows\PhoenixInstaller.iss"
 
 if (-not (Test-Path $issScript)) {
     throw "Inno Setup script not found at $issScript"

@@ -59,14 +59,14 @@ def _patch_socket(response_data: dict):
 # ===========================================================================
 @pytest.mark.unit
 class TestSendCommand:
-    """All tests set RESISTINE_IPC_TOKEN so _load_ipc_token() returns a
+    """All tests set PHOENIX_IPC_TOKEN so _load_ipc_token() returns a
     known value via its env-var fallback (the token file won't exist in CI)."""
 
     FAKE_TOKEN = "test-ipc-token-abc123"
 
     @pytest.fixture(autouse=True)
     def _set_ipc_token(self, monkeypatch):
-        monkeypatch.setenv("RESISTINE_IPC_TOKEN", self.FAKE_TOKEN)
+        monkeypatch.setenv("PHOENIX_IPC_TOKEN", self.FAKE_TOKEN)
 
     def test_payload_contains_ipc_token(self):
         """send_command must include the IPC token loaded from the shared file."""

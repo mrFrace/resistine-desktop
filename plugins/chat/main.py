@@ -95,12 +95,12 @@ def _tls_verify() -> str | bool:
     root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
     (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
     in ``resources/certs/chat-ca-bundle.pem``. Resolution order:
-    RESISTINE_CA_BUNDLE env var, a ``certs/resistine-rootCA.pem`` override in
+    PHOENIX_CA_BUNDLE env var, a ``certs/resistine-rootCA.pem`` override in
     the config dir, then the bundled CA file. If all are missing (shouldn't
     happen -- the bundle ships in resources/), fall back to standard
     verification rather than disabling it.
     """
-    ca = os.environ.get("RESISTINE_CA_BUNDLE")
+    ca = os.environ.get("PHOENIX_CA_BUNDLE") or os.environ.get("RESISTINE_CA_BUNDLE")
     if ca and os.path.isfile(ca):
         return ca
     ca = os.path.join(

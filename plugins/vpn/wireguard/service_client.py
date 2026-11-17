@@ -38,7 +38,8 @@ def _load_ipc_token() -> str:
     except OSError as e:
         logger.error(f"Failed to load IPC token: {e}")
     # Fallback: allow override via environment (useful for CI / testing)
-    return os.environ.get("RESISTINE_IPC_TOKEN", "")
+    return os.environ.get("PHOENIX_IPC_TOKEN") or os.environ.get(
+        "RESISTINE_IPC_TOKEN", "")
 
 
 def _recv_response(sock: socket.socket) -> bytes:

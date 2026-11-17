@@ -118,7 +118,7 @@ def _restrict_file_acl(path: str, extra_read_user: str | None = None) -> bool:
     if extra_read_user:
         if (not _SAFE_GRANTEE_RE.fullmatch(extra_read_user)
                 or extra_read_user.lower() in _DENY_GRANTEES):
-            logging.getLogger("ResistineVPN").error(
+            logging.getLogger("PhoenixVPN").error(
                 "Refusing ACL grant to suspicious account name")
             return False
         cmd += ["/grant", f"{extra_read_user}:R"]
@@ -177,7 +177,7 @@ def _create_ipc_token() -> str:
     instead of being silently reused), lock its ACL, then write the token.
     The token only needs to live as long as the service process.
     """
-    log = logging.getLogger("ResistineVPN")
+    log = logging.getLogger("PhoenixVPN")
 
     token = _secrets.token_hex(32)
     try:
@@ -273,7 +273,7 @@ logging.Logger.trace = _trace
 
 # Populated by _init_runtime(); module import must not touch the filesystem.
 LOG_FILE: str = ""
-logger = logging.getLogger("ResistineVPN")
+logger = logging.getLogger("PhoenixVPN")
 
 
 def _init_runtime(regenerate_token: bool = False) -> None:

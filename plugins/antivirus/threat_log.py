@@ -5,7 +5,7 @@ The Wazuh agent reads this file via a <localfile> entry in
 ossec.conf and forwards events to the SIEM dashboard.
 
 Log format (RFC 3164):
-    MMM DD HH:MM:SS hostname resistine-av: EVENT key="value" ...
+    MMM DD HH:MM:SS hostname phoenix-av: EVENT key="value" ...
 
 Author: Phoenix Team
 Copyright (c) Phoenix 2025
@@ -24,7 +24,7 @@ import time
 from utils import settings
 from utils.logger import logger
 
-_PROGRAM = "resistine-av"
+_PROGRAM = "phoenix-av"
 _write_lock = threading.Lock()
 
 

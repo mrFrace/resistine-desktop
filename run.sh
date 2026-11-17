@@ -70,7 +70,7 @@ Darwin*)
 	# downstream network calls will just fail — the obvious and expected
 	# failure mode in dev. Linux/Windows have different VPN backends, so
 	# this export is intentionally scoped to the Darwin arm only.
-	export RESISTINE_DEV_VPN_CONNECTED=1
+	export PHOENIX_DEV_VPN_CONNECTED=1
 	;;
 
 # Windows (Git Bash, Cygwin, MSYS2)

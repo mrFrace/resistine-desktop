@@ -616,10 +616,10 @@ def _prepare_config_script() -> str:
     # ExecStartPost fires before clamd finishes its initial setup.
     if _is_fedora_like():
         drop_in_dir = "/etc/systemd/system/clamd@scan.service.d"
-        drop_in_path = f"{drop_in_dir}/resistine.conf"
+        drop_in_path = f"{drop_in_dir}/phoenix.conf"
         drop_in_body = (
             "[Service]\n"
-            "# Installed by Resistine: Fedora's clamd@.service has no\n"
+            "# Installed by Phoenix: Fedora's clamd@.service has no\n"
             "# RuntimeDirectory= entry, so RuntimeDirectoryMode= is\n"
             "# ignored. clamd itself creates /run/clamd.scan with mode\n"
             "# 0710 — blocking non-clamscan users from even stat'ing\n"
@@ -628,8 +628,12 @@ def _prepare_config_script() -> str:
             "[ -d /run/clamd.scan ] && break; sleep 0.25; done; "
             "/usr/bin/chmod 0755 /run/clamd.scan'\n"
         )
+        # systemd merges every .conf in the drop-in dir, so the pre-rename
+        # file has to go or its ExecStartPost runs a second time.
+        legacy_drop_in = f"{drop_in_dir}/resistine.conf"
         cmds.append(
             f"mkdir -p {_shell_quote(drop_in_dir)} && "
+            f"rm -f {_shell_quote(legacy_drop_in)}; "
             f"printf '%s' {_shell_quote(drop_in_body)} "
             f"> {_shell_quote(drop_in_path)}",
         )

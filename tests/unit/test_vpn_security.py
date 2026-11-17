@@ -487,12 +487,12 @@ class TestVpnMainHelpers:
         import plugins.vpn.main as m
         default = "10.49.11.10"
         try:
-            monkeypatch.setenv("RESISTINE_DNS_SERVER", "198.51.100.53")
+            monkeypatch.setenv("PHOENIX_DNS_SERVER", "198.51.100.53")
             assert importlib.reload(m).DNS_SERVER == "198.51.100.53"
-            monkeypatch.delenv("RESISTINE_DNS_SERVER")
+            monkeypatch.delenv("PHOENIX_DNS_SERVER")
             assert importlib.reload(m).DNS_SERVER == default
         finally:
-            monkeypatch.delenv("RESISTINE_DNS_SERVER", raising=False)
+            monkeypatch.delenv("PHOENIX_DNS_SERVER", raising=False)
             importlib.reload(sys.modules["plugins.vpn.main"])
 
     def test_conf_path_rejects_traversal(self, vpn_main):

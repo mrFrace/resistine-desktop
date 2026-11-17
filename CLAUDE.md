@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine; the macOS bundle IDs are `exposed.phoenix.*`, but launchd labels, service names and system paths still carry the old name. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine. Bundle IDs, launchd labels (`exposed.phoenix.desktop.*`), the macOS support dir (`/Library/Application Support/Phoenix`) and the Wazuh Keychain service are all Phoenix now; the old names survive only as read-and-clean-up migration constants, which must not be deleted. Two deliberate exceptions remain, both Windows and both untestable here: the `ResistineVPN` service name and `%PROGRAMDATA%\Resistine\wireguard` (it holds WireGuard private keys). It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -124,7 +124,7 @@ The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed ma
 
 ### External Artifacts
 
-VPN CLI binary and ClamAV binaries are fetched during the build via `gh` CLI (currently from legacy artifact repos — being re-homed to Phoenix infrastructure along with signing certificates).
+VPN CLI binary and ClamAV binaries are fetched during the build via the `gh` CLI from Phoenix-owned repos: `DatOneOPGuy/phoenix-vpn-macos` and, for ClamAV, a *release* asset on `DatOneOPGuy/phoenix-clamav-mac` (Actions artifacts expire after 90 days; releases do not). Override with `CLAMAV_ARTIFACTS_REPO` / `VPN_ARTIFACTS_REPO`.
 
 ## Key Conventions
 

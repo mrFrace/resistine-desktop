@@ -127,7 +127,7 @@ jobs:
       - name: Run PyInstaller
         run: |
           source .venv/bin/activate
-          python -m PyInstaller packaging/Resistine.spec --noconfirm
+          python -m PyInstaller packaging/Phoenix.spec --noconfirm
 
       - name: Verify .app bundle exists
         run: |
@@ -187,7 +187,7 @@ jobs:
       - name: Run PyInstaller
         run: |
           .venv\Scripts\activate
-          python -m PyInstaller packaging/Resistine.spec --noconfirm
+          python -m PyInstaller packaging/Phoenix.spec --noconfirm
 
       - name: Verify build output exists
         run: |
@@ -258,7 +258,7 @@ jobs:
       - name: Run PyInstaller
         run: |
           source .venv/bin/activate
-          python -m PyInstaller packaging/Resistine.spec --noconfirm
+          python -m PyInstaller packaging/Phoenix.spec --noconfirm
 
       - name: Verify build output exists
         run: |

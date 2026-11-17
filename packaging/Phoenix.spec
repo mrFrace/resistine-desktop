@@ -260,7 +260,7 @@ if IS_MACOS:
 if IS_WINDOWS:
     exe_kwargs['icon'] = _src(os.path.join('resources', 'icons', 'icon.ico'))
 if IS_WINDOWS:
-    exe_kwargs['manifest'] = _src(os.path.join('packaging', 'windows', 'Resistine.exe.manifest'))
+    exe_kwargs['manifest'] = _src(os.path.join('packaging', 'windows', 'Phoenix.exe.manifest'))
 
 exe = EXE(
     pyz,

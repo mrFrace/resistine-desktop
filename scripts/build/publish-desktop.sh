@@ -52,8 +52,8 @@ else
 	MINISIGN=(nix shell nixpkgs#minisign -c minisign)
 fi
 
-VERSION=$(sed -nE "s/^VERSION\s*=\s*['\"]([^'\"]+)['\"].*/\1/p" packaging/Resistine.spec)
-[[ "$VERSION" =~ ^[0-9A-Za-z.+~-]+$ ]] || die "bad VERSION '$VERSION' in packaging/Resistine.spec"
+VERSION=$(sed -nE "s/^VERSION\s*=\s*['\"]([^'\"]+)['\"].*/\1/p" packaging/Phoenix.spec)
+[[ "$VERSION" =~ ^[0-9A-Za-z.+~-]+$ ]] || die "bad VERSION '$VERSION' in packaging/Phoenix.spec"
 [[ "$DAYS" =~ ^[0-9]+$ ]] || die "bad PHOENIX_EXPIRES_DAYS '$DAYS'"
 
 # Which OS each package is for, and the one build ID they share.

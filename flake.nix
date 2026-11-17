@@ -7,7 +7,7 @@
   };
 
   # Linux only: the macOS and Windows builds go through PyInstaller
-  # (packaging/Resistine.spec), and the runtime deps below (secretstorage,
+  # (packaging/Phoenix.spec), and the runtime deps below (secretstorage,
   # jeepney, wireguard-tools, libnotify) are Linux-specific.
   #
   # nixosModules.default (nix/module.nix) installs the app together with the
@@ -71,7 +71,7 @@
 
         # Runtime Python deps. Mirrors scripts/requirements/requirements-linux.txt,
         # narrowed to what is actually imported plus the hiddenimports listed in
-        # packaging/Resistine.spec. Omitted on purpose:
+        # packaging/Phoenix.spec. Omitted on purpose:
         #   pyinstaller  — build-only, the Nix build doesn't freeze the app
         #   pyuac        — Windows privilege elevation
         #   python-wireguard, tee, elevate, distro, darkdetect, html2text
@@ -115,7 +115,7 @@
         # setuid wrapper), which is why PATH is extended with --suffix below.
         runtimeBins = with pkgs; [ wireguard-tools clamav libnotify iproute2 ];
 
-        # Keep in sync with VERSION in packaging/Resistine.spec — which is also
+        # Keep in sync with VERSION in packaging/Phoenix.spec — which is also
         # what utils/updates/version.py parses when running from source.
         version = "2026.07.20-rc";
       in
@@ -191,8 +191,8 @@
 
               # utils/updates/version.py parses VERSION out of the PyInstaller
               # spec when not running frozen, so the spec has to ship too.
-              install -Dm644 packaging/Resistine.spec \
-                $out/share/phoenix/packaging/Resistine.spec
+              install -Dm644 packaging/Phoenix.spec \
+                $out/share/phoenix/packaging/Phoenix.spec
 
               install -Dm644 LICENSE.md $out/share/phoenix/LICENSE.md
               install -Dm644 LICENSE-3rd-Party.md $out/share/phoenix/LICENSE-3rd-Party.md

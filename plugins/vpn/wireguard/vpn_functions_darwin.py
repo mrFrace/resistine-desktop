@@ -67,7 +67,7 @@ def get_writable_wireguard_dir():
 # Cache to map config names to actual utun interfaces (e.g., wg0 → utun6)
 _interface_cache = {}
 
-# The packet-tunnel system extension (packaging/Resistine.spec BUNDLE_ID +
+# The packet-tunnel system extension (packaging/Phoenix.spec BUNDLE_ID +
 # ".network-extension"; build-distribution.sh checks the Swift build carries it).
 NE_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
 

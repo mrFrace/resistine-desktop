@@ -1,7 +1,7 @@
 """Fail the build if the PyInstaller bundle lacks modules the app needs.
 
 plugins/ ships as data files, so PyInstaller never traces what plugins import;
-packaging/Resistine.spec lists those packages by hand. This catches a package
+packaging/Phoenix.spec lists those packages by hand. This catches a package
 that went missing anyway (a dropped hidden import, a failed pip install), the
 way Matrix chat once shipped without matrix-nio and so without E2EE.
 

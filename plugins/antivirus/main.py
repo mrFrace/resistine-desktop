@@ -124,7 +124,7 @@ def _send_notification_windows(title: str, body: str):
 
     # Unique tag per toast so Windows doesn't suppress repeats
     _TOAST_COUNTER += 1
-    tag = f"resistine_{_TOAST_COUNTER}"
+    tag = f"phoenix_{_TOAST_COUNTER}"
 
     img_xml = ""
     if os.path.isfile(logo):
@@ -145,7 +145,7 @@ def _send_notification_windows(title: str, body: str):
     xml_path = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".xml", prefix="resistine_toast_",
+            mode="w", suffix=".xml", prefix="phoenix_toast_",
             encoding="utf-8", delete=False,
         ) as tf:
             tf.write(xml_str)

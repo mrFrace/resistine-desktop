@@ -50,8 +50,8 @@ class TestIPCTokenFlow:
         assert len(service_token) == 64
 
     def test_client_env_override(self):
-        """RESISTINE_IPC_TOKEN env var overrides file-based token."""
-        with patch.dict(os.environ, {"RESISTINE_IPC_TOKEN": "env_override_token"}):
+        """PHOENIX_IPC_TOKEN env var overrides file-based token."""
+        with patch.dict(os.environ, {"PHOENIX_IPC_TOKEN": "env_override_token"}):
             with patch("builtins.open", side_effect=FileNotFoundError()):
                 from plugins.vpn.wireguard.service_client import _load_ipc_token
                 token = _load_ipc_token()
@@ -59,7 +59,7 @@ class TestIPCTokenFlow:
 
     def test_client_returns_empty_when_no_token(self):
         """If no token file and no env var, return empty string."""
-        env = {k: v for k, v in os.environ.items() if k != "RESISTINE_IPC_TOKEN"}
+        env = {k: v for k, v in os.environ.items() if k != "PHOENIX_IPC_TOKEN"}
         with patch.dict(os.environ, env, clear=True):
             with patch("builtins.open", side_effect=FileNotFoundError()):
                 from plugins.vpn.wireguard.service_client import _load_ipc_token

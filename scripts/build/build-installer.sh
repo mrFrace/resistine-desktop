@@ -40,7 +40,7 @@ echo ""
 # Build configuration
 BUILD_DIR="$VPN_PROJECT_PATH/build"
 DIST_DIR="$PYTHON_UI_PATH/dist"
-APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Resistine.spec
+APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Phoenix.spec
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 BUNDLE_ID="exposed.phoenix.desktop"
 NE_BUNDLE_ID="$BUNDLE_ID.network-extension"
@@ -139,10 +139,10 @@ source .venv/bin/activate
 export MACOSX_DEPLOYMENT_TARGET=13.0  # Ensure compiled extensions target macOS 13+ (Ventura)
 pip install -q -r scripts/requirements/requirements-mac.txt
 
-# Check if Resistine.spec exists
-if [ ! -f "packaging/Resistine.spec" ]; then
-    echo "❌ Error: packaging/Resistine.spec not found in $PYTHON_UI_PATH"
-    echo "Please ensure Resistine.spec is in the packaging/ directory."
+# Check if Phoenix.spec exists
+if [ ! -f "packaging/Phoenix.spec" ]; then
+    echo "❌ Error: packaging/Phoenix.spec not found in $PYTHON_UI_PATH"
+    echo "Please ensure Phoenix.spec is in the packaging/ directory."
     exit 1
 fi
 
@@ -151,7 +151,7 @@ rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
 
 # Build with PyInstaller using the spec file
 echo "  - Building with PyInstaller..."
-pyinstaller packaging/Resistine.spec --noconfirm
+pyinstaller packaging/Phoenix.spec --noconfirm
 
 echo "✅ Python UI built"
 
