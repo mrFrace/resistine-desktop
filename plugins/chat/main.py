@@ -99,6 +99,17 @@ def _tls_verify() -> str | bool:
     the config dir, then the bundled CA file. If all are missing (shouldn't
     happen -- the bundle ships in resources/), fall back to standard
     verification rather than disabling it.
+
+    OPEN ITEM -- the last Resistine trust dependency in the app. The bundled
+    chat-ca-bundle.pem still contains "rootCA Resistine" (O=Resistine DE,
+    expires 2027-07-20). While it is trusted here, a certificate issued by
+    that CA is accepted for the chat endpoint, so whoever holds its key can
+    terminate this connection. It has not been removed because it is not
+    known whether dashboard.phoenix.exposed still presents a cert signed by
+    it -- the host is only reachable over the VPN, so it could not be
+    checked. Once the endpoint is confirmed to serve a Cloudflare Origin (or
+    other Phoenix-controlled) certificate, drop that root from the bundle
+    and delete resources/certs/resistine-rootCA.pem.
     """
     ca = os.environ.get("PHOENIX_CA_BUNDLE") or os.environ.get("RESISTINE_CA_BUNDLE")
     if ca and os.path.isfile(ca):

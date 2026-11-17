@@ -760,7 +760,7 @@ fi
 
 
 # Locate entitlements files
-ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
+ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Phoenix.entitlements"
 
 # Rewrite the two team-scoped values into a temp copy so they can never drift
 # from the identity we actually sign with. Everything else (sandbox, hardened

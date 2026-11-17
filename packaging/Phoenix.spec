@@ -256,7 +256,7 @@ exe_kwargs = dict(
     codesign_identity=None,
 )
 if IS_MACOS:
-    exe_kwargs['entitlements_file'] = _src(os.path.join('packaging', 'Resistine.entitlements'))
+    exe_kwargs['entitlements_file'] = _src(os.path.join('packaging', 'Phoenix.entitlements'))
 if IS_WINDOWS:
     exe_kwargs['icon'] = _src(os.path.join('resources', 'icons', 'icon.ico'))
 if IS_WINDOWS:

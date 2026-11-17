@@ -251,9 +251,9 @@ echo "Step 5: Code signing..."
 echo "  - Signing with identity: $SIGN_IDENTITY"
 
 # Check if entitlements file exists for the main app
-ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Resistine.entitlements"
+ENTITLEMENTS_FILE="$PYTHON_UI_PATH/packaging/Phoenix.entitlements"
 if [ ! -f "$ENTITLEMENTS_FILE" ]; then
-    echo "  ⚠️  Warning: Resistine.entitlements not found, signing without entitlements"
+    echo "  ⚠️  Warning: Phoenix.entitlements not found, signing without entitlements"
     ENTITLEMENTS_FLAG=""
 else
     ENTITLEMENTS_FLAG="--entitlements $ENTITLEMENTS_FILE"
