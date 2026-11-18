@@ -1,10 +1,10 @@
 #!/bin/bash
 # Wazuh Agent Post-Install Script for macOS
 # Runs as root (via osascript with administrator privileges), detached from
-# the Resistine UI process.  Survives app quit.
+# the Phoenix UI process.  Survives app quit.
 #
-# Author: Resistine Team
-# Copyright (c) Resistine 2025
+# Author: Phoenix Team
+# Copyright (c) Phoenix 2025-2026
 # Licensed under the GNU General Public License v2 or later
 
 set -euo pipefail
@@ -141,7 +141,7 @@ AGENT_AUTH_BIN="${AGENT_AUTH_BIN:-/Library/Phoenix/bin/agent-auth}"
 WAZUH_CONTROL_BIN="${WAZUH_CONTROL_BIN:-/Library/Phoenix/bin/wazuh-control}"
 OSSEC_CONF_OVERRIDE="${OSSEC_CONF_OVERRIDE:-/Library/Phoenix/etc/ossec.conf}"
 CLIENT_KEYS_OVERRIDE="${CLIENT_KEYS_OVERRIDE:-/Library/Phoenix/etc/client.keys}"
-KEY_BACKUP_OVERRIDE="${KEY_BACKUP_OVERRIDE:-/Library/Application Support/Resistine/wazuh_client.keys}"
+KEY_BACKUP_OVERRIDE="${KEY_BACKUP_OVERRIDE:-/Library/Application Support/Phoenix/wazuh_client.keys}"
 PLIST_OVERRIDE="${PLIST_OVERRIDE:-/Library/LaunchDaemons/com.wazuh.agent.plist}"
 
 CURRENT_STEP="init"
@@ -171,12 +171,12 @@ write_status '{"status":"running","step":"enrollment","pid":'"$$"'}'
 CLIENT_KEYS="$CLIENT_KEYS_OVERRIDE"
 KEY_BACKUP="$KEY_BACKUP_OVERRIDE"
 KEYCHAIN="/Library/Keychains/System.keychain"
-KC_SERVICE="com.resistine.wazuh.agent"
+KC_SERVICE="exposed.phoenix.wazuh.agent"
 KC_ACCOUNT="client_key"
 # H2: agent-auth output goes into a fresh private directory created by this
 # script (mktemp -d: 0700, unpredictable name), never a predictable bare-/tmp
 # path another local user could have pre-planted.
-WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/resistine-wazuh-postinstall.XXXXXX")"
+WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phoenix-wazuh-postinstall.XXXXXX")"
 AGENT_AUTH_LOG="$WORK_DIR/agent-auth.log"
 
 # Never restore a stale client.keys: either the Phoenix API enrolled the agent
@@ -350,7 +350,7 @@ chmod o+r /Library/Phoenix/logs/ossec.log 2>/dev/null || true
 write_status "{\"status\":\"success\",\"step\":\"done\",\"enrollment\":\"${ENROLLMENT_RESULT}\",\"agent_name\":\"${AGENT_NAME}\"}"
 
 # --- Self-cleanup: remove our one-shot LaunchDaemon plist ---
-INSTALLER_PLIST="${INSTALLER_PLIST_OVERRIDE:-/Library/LaunchDaemons/com.resistine.wazuh-installer.plist}"
+INSTALLER_PLIST="${INSTALLER_PLIST_OVERRIDE:-/Library/LaunchDaemons/exposed.phoenix.wazuh-installer.plist}"
 if [ -f "$INSTALLER_PLIST" ]; then
     "$LAUNCHCTL_BIN" bootout system "$INSTALLER_PLIST" 2>/dev/null || true
     rm -f "$INSTALLER_PLIST"

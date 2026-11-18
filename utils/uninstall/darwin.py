@@ -158,7 +158,7 @@ def _instrument_cmds(cmds):
     """Wrap each command with a step-log line so a post-mortem reveals
     exactly which command died when the shell exits with a signal.
 
-    The log file at ``/tmp/resistine-uninstall.log`` is overwritten at the
+    The log file at ``/tmp/phoenix-uninstall.log`` is overwritten at the
     start of every uninstall and gets a `STEP N/TOTAL: <command>` line
     BEFORE each command, plus a final `DONE` sentinel. When the shell is
     SIGKILL'd mid-run the file contains every step that started — the
@@ -208,7 +208,7 @@ def _run_privileged(cmds):
     rest — every command also has its own `|| true` fallback inside
     sub-helpers so transient state (e.g. plist already gone) doesn't
     short-circuit the cleanup. Every command is preceded by a STEP marker
-    that gets appended to ``/tmp/resistine-uninstall.log`` so when the
+    that gets appended to ``/tmp/phoenix-uninstall.log`` so when the
     privileged shell is SIGKILL'd by some external actor (corporate EDR
     hooking the AuthorizationExecuteWithPrivileges trampoline; macOS
     EndpointSecurity teardown of Wazuh's ES subscription during bootout;
@@ -270,7 +270,7 @@ def _run_privileged(cmds):
         else:
             detail += (
                 " — privileged shell died with no output; "
-                "log file missing too. See /tmp/resistine-uninstall.log "
+                "log file missing too. See /tmp/phoenix-uninstall.log "
                 "if it exists."
             )
     raise OSError(detail)
@@ -283,10 +283,18 @@ def _run_privileged(cmds):
 
 def _remove_clamav_daemons(admin_cmds):
     """Unregister ClamAV daemons and collect admin commands for cleanup."""
-    _SYSTEM_CLAMAV_DIR = "/Library/Application Support/Resistine/clamav"
+    # Current location first, then the pre-rename one an old install may
+    # still have if its postinstall migration never ran.
+    _SYSTEM_CLAMAV_DIRS = (
+        "/Library/Application Support/Phoenix/clamav",
+        "/Library/Application Support/Resistine/clamav",
+    )
 
     # 1. SMAppService unregistration (no admin needed)
     _smappservice_plist_names = [
+        "exposed.phoenix.desktop.freshclam.plist",
+        "exposed.phoenix.desktop.clamonacc.plist",
+        "exposed.phoenix.desktop.clamd.plist",
         "com.resistine.desktop.freshclam.plist",
         "com.resistine.desktop.clamonacc.plist",
         "com.resistine.desktop.clamd.plist",
@@ -348,6 +356,9 @@ def _remove_clamav_daemons(admin_cmds):
 
     # Collect admin commands for legacy plist cleanup
     legacy_plists = [
+        "/Library/LaunchDaemons/exposed.phoenix.desktop.clamonacc.plist",
+        "/Library/LaunchDaemons/exposed.phoenix.desktop.clamd.plist",
+        "/Library/LaunchDaemons/exposed.phoenix.desktop.freshclam.plist",
         "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
         "/Library/LaunchDaemons/com.resistine.clamd.plist",
         "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
@@ -361,6 +372,9 @@ def _remove_clamav_daemons(admin_cmds):
 
     # Bootout by label in case plists are gone but daemons still loaded
     for label in (
+        "exposed.phoenix.desktop.freshclam",
+        "exposed.phoenix.desktop.clamd",
+        "exposed.phoenix.desktop.clamonacc",
         "com.resistine.desktop.freshclam",
         "com.resistine.desktop.clamd",
         "com.resistine.desktop.clamonacc",
@@ -372,8 +386,9 @@ def _remove_clamav_daemons(admin_cmds):
         )
 
     # Remove system-level ClamAV data (signatures, configs, logs)
-    if os.path.exists(_SYSTEM_CLAMAV_DIR):
-        admin_cmds.append(f"rm -rf '{_SYSTEM_CLAMAV_DIR}'")
+    for clamav_dir in _SYSTEM_CLAMAV_DIRS:
+        if os.path.exists(clamav_dir):
+            admin_cmds.append(f"rm -rf '{clamav_dir}'")
 
 
 def _collect_wazuh_admin_cmds(admin_cmds):
@@ -394,6 +409,7 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     try:
         from plugins.wazuh.agent.wazuh_functions_darwin import (
             _KEY_BACKUP, _KC_ACCOUNT, _KC_SERVICE, _KEYCHAIN,
+            _LEGACY_KEY_BACKUP, _LEGACY_KC_SERVICE,
             _WAZUH_CONTROL, is_agent_installed, _is_service_loaded,
             _has_keychain_entry,
         )
@@ -411,14 +427,19 @@ def _collect_wazuh_admin_cmds(admin_cmds):
         _WAZUH_CONTROL = "/Library/Phoenix/bin/wazuh-control"
         WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
         WAZUH_INSTALL_DIR = "/Library/Phoenix"
-        _KEY_BACKUP = "/Library/Application Support/Resistine/wazuh_client.keys"
-        _KC_SERVICE = "com.resistine.wazuh.client.keys"
+        _KEY_BACKUP = "/Library/Application Support/Phoenix/wazuh_client.keys"
+        _KC_SERVICE = "exposed.phoenix.wazuh.agent"
+        _LEGACY_KEY_BACKUP = (
+            "/Library/Application Support/Resistine/wazuh_client.keys"
+        )
+        _LEGACY_KC_SERVICE = "com.resistine.wazuh.agent"
         _KC_ACCOUNT = "wazuh-agent"
         _KEYCHAIN = "/Library/Keychains/System.keychain"
         agent_present = (
             os.path.exists(WAZUH_INSTALL_DIR)
             or os.path.exists(WAZUH_LAUNCHD_PLIST)
             or os.path.exists(_KEY_BACKUP)
+            or os.path.exists(_LEGACY_KEY_BACKUP)
         )
 
     if not agent_present:
@@ -478,10 +499,14 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     admin_cmds.append(
         f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
     # Identity wipe — same semantics as remove_agent(wipe_keys=True).
-    admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
-    admin_cmds.append(
-        f"security delete-generic-password -s '{_sq(_KC_SERVICE)}' "
-        f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
+    # Both the current and the pre-rename copies: a key left under the old
+    # name would be restored by the next install.
+    for key_file in (_KEY_BACKUP, _LEGACY_KEY_BACKUP):
+        admin_cmds.append(f"rm -f '{_sq(key_file)}'")
+    for kc_service in (_KC_SERVICE, _LEGACY_KC_SERVICE):
+        admin_cmds.append(
+            f"security delete-generic-password -s '{_sq(kc_service)}' "
+            f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
     admin_cmds.append(f"rm -rf '{_sq(WAZUH_INSTALL_DIR)}'")
     admin_cmds.append(f"rm -f '{_sq(WAZUH_LAUNCHD_PLIST)}'")
 
@@ -726,7 +751,7 @@ def _remove_app_config(admin_cmds):
     # Stale log files — the network extension wrote these as root; old entries
     # persist across builds and cause diagnostic confusion.  Must use admin
     # because the files are root-owned.
-    for log_name in ("resistine.log", "resistine-error.log"):
+    for log_name in ("resistine.log", "resistine-error.log"):  # pre-rename
         log_path = os.path.join(home, "Library", "Logs", log_name)
         if os.path.exists(log_path):
             escaped = log_path.replace("'", "'\\''")
@@ -748,9 +773,12 @@ def _remove_app_config(admin_cmds):
                     )
 
     # System-level directory — batch with other admin commands
-    sys_dir = "/Library/Application Support/Resistine"
-    if os.path.exists(sys_dir):
-        admin_cmds.append(f"rm -rf '{sys_dir}'")
+    for sys_dir in (
+        "/Library/Application Support/Phoenix",
+        "/Library/Application Support/Resistine",  # pre-rename installs
+    ):
+        if os.path.exists(sys_dir):
+            admin_cmds.append(f"rm -rf '{sys_dir}'")
 
 
 def _remove_keychain_items():
@@ -826,12 +854,12 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
 
 
 def _find_cli_path():
-    """Find the resistine-vpn-cli binary."""
+    """Find the phoenix-vpn-cli binary."""
     if not getattr(sys, "frozen", False):
         return None
 
     macos_dir = os.path.dirname(sys.executable)
-    cli_path = os.path.join(macos_dir, "resistine-vpn-cli")
+    cli_path = os.path.join(macos_dir, "phoenix-vpn-cli")
     if os.path.exists(cli_path):
         return cli_path
     return None

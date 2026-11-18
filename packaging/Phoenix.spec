@@ -311,14 +311,11 @@ if IS_MACOS:
             'NSNetworkClient': True,
             'NSSystemAdministrationUsageDescription': 'Phoenix needs admin access to manage VPN connections.',
 
-            # XPC Services (will be populated by build script)
-            'NSXPCServices': ['ResistineVPNXPC'],
-
             # URL schemes (if needed for OAuth, deep links, etc.)
             'CFBundleURLTypes': [
                 {
                     'CFBundleURLName': BUNDLE_ID,
-                    'CFBundleURLSchemes': ['resistine'],
+                    'CFBundleURLSchemes': ['phoenix'],
                 }
             ],
 
@@ -347,7 +344,7 @@ if IS_MACOS:
 
             # Sparkle Auto-Update — DISABLED for the Phoenix migration.
             # No SUFeedURL and no SUPublicEDKey: the old feed and signing key
-            # belong to Resistine; a Phoenix build must never consult them.
+            # belong to the previous vendor; a Phoenix build must never consult them.
             # Re-enable only with a Phoenix-owned feed + a fresh EdDSA key.
             'SUEnableAutomaticChecks': False,
         },

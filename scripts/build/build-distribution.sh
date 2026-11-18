@@ -32,7 +32,7 @@ APP_NAME="Phoenix"   # bundle file name (Phoenix.app); see packaging/Phoenix.spe
 DISPLAY_NAME="Phoenix" # what users see: installer title, DMG/pkg names
 export BUNDLE_ID="${BUNDLE_ID:-exposed.phoenix.desktop}"  # PyInstaller spec reads it
 NE_BUNDLE_ID="$BUNDLE_ID.network-extension"  # system extension; name of its .systemextension too
-CLI_BUNDLE_ID="$BUNDLE_ID.vpnxpc"             # ResistineCLI.app wrapping resistine-vpn-cli
+CLI_BUNDLE_ID="$BUNDLE_ID.vpnxpc"             # PhoenixCLI.app wrapping phoenix-vpn-cli
 # App Group shared by the app, the CLI and the network extension. App Group IDs
 # are globally unique across Apple teams, so this must be registered under
 # $EXPECTED_TEAM_ID and must match APP_GROUP_ID in
@@ -144,7 +144,7 @@ echo ""
 # ============================================================
 # Step 2: Obtain Swift Components (VPN)
 # ============================================================
-# Artifacts are auto-downloaded from Resistine/resistine-vpn-macos CI.
+# Artifacts are auto-downloaded from DatOneOPGuy/phoenix-vpn-macos CI.
 # The script detects stale artifacts and re-downloads when a newer
 # build is available. Set VPN_ARTIFACTS_DIR to override the path.
 # Fallback: build locally from vpn-apple/ if present.
@@ -166,7 +166,7 @@ if [ -f "$SCRIPT_DIR/download-vpn-artifacts.sh" ] && command -v gh &> /dev/null;
     fi
 fi
 
-if [ -f "$VPN_ARTIFACTS_DIR/resistine-vpn-cli" ] && \
+if [ -f "$VPN_ARTIFACTS_DIR/phoenix-vpn-cli" ] && \
    compgen -G "$VPN_ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
     echo "  Using pre-built VPN artifacts from $VPN_ARTIFACTS_DIR"
     USE_PREBUILT_VPN=true
@@ -321,7 +321,7 @@ echo "    Python framework OK (version $_PYVERS)"
 
 # Resolve VPN component sources (pre-built artifacts or local archive)
 if [ "$USE_PREBUILT_VPN" = true ]; then
-    CLI_SOURCE="$VPN_ARTIFACTS_DIR/resistine-vpn-cli"
+    CLI_SOURCE="$VPN_ARTIFACTS_DIR/phoenix-vpn-cli"
     # The artifact keeps the name the Swift CI gave it; it is renamed to
     # $NE_BUNDLE_ID.systemextension below.
     NE_SOURCE=$(compgen -G "$VPN_ARTIFACTS_DIR/*network-extension.systemextension" | head -1)
@@ -333,9 +333,9 @@ else
         exit 1
     fi
 
-    CLI_SOURCE=$(find "$VPN_ARCHIVE" -name "resistine-vpn-cli" -type f | grep -v "dSYM" | grep "/MacOS/" | head -1)
+    CLI_SOURCE=$(find "$VPN_ARCHIVE" -name "phoenix-vpn-cli" -type f | grep -v "dSYM" | grep "/MacOS/" | head -1)
     if [ -z "$CLI_SOURCE" ] || [ ! -f "$CLI_SOURCE" ]; then
-        echo "  Error: resistine-vpn-cli not found in archive"
+        echo "  Error: phoenix-vpn-cli not found in archive"
         exit 1
     fi
 
@@ -353,14 +353,14 @@ mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 # --- Copy CLI to Contents/MacOS/ as a Bundle ---
 # To support restricted entitlements (App Groups) in the CLI, it must have a
 # provisioning profile embedded. Standalone binaries cannot easily have embedded
-# profiles, so we wrap it in a nested bundle: ResistineCLI.app
+# profiles, so we wrap it in a nested bundle: PhoenixCLI.app
 
-echo "  - Packaging resistine-vpn-cli into nested bundle..."
-CLI_APP="$PYTHON_APP/Contents/MacOS/ResistineCLI.app"
+echo "  - Packaging phoenix-vpn-cli into nested bundle..."
+CLI_APP="$PYTHON_APP/Contents/MacOS/PhoenixCLI.app"
 mkdir -p "$CLI_APP/Contents/MacOS"
 
 echo "    Found CLI at: $CLI_SOURCE"
-cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/resistine-vpn-cli"
+cp "$CLI_SOURCE" "$CLI_APP/Contents/MacOS/phoenix-vpn-cli"
 
 # --- Copy Network Extension to Contents/Library/SystemExtensions/ ---
 # CRITICAL: System Extensions MUST use .systemextension extension, not .appex!
@@ -402,7 +402,7 @@ cat > "$CLI_APP/Contents/Info.plist" << PLISTEOF
     <key>CFBundleDisplayName</key>
     <string>Phoenix VPN</string>
     <key>CFBundleExecutable</key>
-    <string>resistine-vpn-cli</string>
+    <string>phoenix-vpn-cli</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>
@@ -712,9 +712,9 @@ if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/PhoenixC
 fi
 
 # Create symlink for compatibility
-# Python code expects resistine-vpn-cli at ../MacOS/resistine-vpn-cli
+# Python code expects phoenix-vpn-cli at ../MacOS/phoenix-vpn-cli
 echo "  - Creating symlink for CLI..."
-ln -sf "ResistineCLI.app/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli"
+ln -sf "PhoenixCLI.app/Contents/MacOS/phoenix-vpn-cli" "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli"
 
 # --- Copy Sparkle.framework for auto-updates ---
 echo "  - Copying Sparkle.framework..."
@@ -991,16 +991,16 @@ codesign --force --sign "$SIGN_IDENTITY" \
 echo "    System Extension signed"
 
 # 5b: Sign the CLI with distribution entitlements (reusing VPNXPC profile)
-echo "  - Signing resistine-vpn-cli with Developer ID..."
+echo "  - Signing phoenix-vpn-cli with Developer ID..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
     --entitlements "$CLI_DIST_ENTITLEMENTS" \
-    "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" || {
-    echo "  resistine-vpn-cli signing failed"
+    "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" || {
+    echo "  phoenix-vpn-cli signing failed"
     exit 1
 }
-echo "    resistine-vpn-cli signed"
+echo "    phoenix-vpn-cli signed"
 
 # 5d: Sign all PyInstaller frameworks/libraries
 # NOTE: python.org Python bundles bare Tcl/Tk binaries (no file extension).
@@ -1113,8 +1113,8 @@ VERIFY_FAILED=false
 codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" 2>&1 && \
     echo "    network-extension.systemextension: valid" || { echo "    network-extension.systemextension: INVALID"; VERIFY_FAILED=true; }
 
-codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
-    echo "    resistine-vpn-cli: valid" || { echo "    resistine-vpn-cli: INVALID"; VERIFY_FAILED=true; }
+codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" 2>&1 && \
+    echo "    phoenix-vpn-cli: valid" || { echo "    phoenix-vpn-cli: INVALID"; VERIFY_FAILED=true; }
 
 if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
     codesign --verify --verbose "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" 2>&1 && \

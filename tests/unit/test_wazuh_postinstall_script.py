@@ -59,7 +59,7 @@ def harness(tmp_path, allow_subprocess):  # noqa: ARG001 — opts out of the sub
     key_backup = tmp_path / "key_backup" / "wazuh_client.keys"
     plist = tmp_path / "com.wazuh.agent.plist"
     plist.write_text("<plist/>")
-    installer_plist = tmp_path / "com.resistine.wazuh-installer.plist"
+    installer_plist = tmp_path / "exposed.phoenix.wazuh-installer.plist"
 
     status_file = tmp_path / "install.status"
     log_file = tmp_path / "install.log"

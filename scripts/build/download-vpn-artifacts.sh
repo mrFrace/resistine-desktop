@@ -13,10 +13,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ARTIFACTS_DIR="$SCRIPT_DIR/vpn-artifacts"
-# Phoenix's own fork. The old Resistine/resistine-vpn-macos stops being
-# reachable the day org access is revoked, and its artifacts still carry the
-# pre-migration com.resistine.* bundle IDs, which build-distribution.sh now
-# rejects. Override with VPN_ARTIFACTS_REPO if you need a different fork.
+# Phoenix's own repo. Override with VPN_ARTIFACTS_REPO to build from a fork.
 REPO="${VPN_ARTIFACTS_REPO:-DatOneOPGuy/phoenix-vpn-macos}"
 VERSION_FILE="$ARTIFACTS_DIR/.vpn-version"
 
@@ -79,7 +76,7 @@ else
     LOCAL_SHA=$(get_local_sha)
 
     if [ -n "$REMOTE_SHA" ] && [ "$LOCAL_SHA" = "$REMOTE_SHA" ] \
-       && [ -f "$ARTIFACTS_DIR/resistine-vpn-cli" ] \
+       && [ -f "$ARTIFACTS_DIR/phoenix-vpn-cli" ] \
        && compgen -G "$ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
         echo "VPN artifacts already up-to-date (${REMOTE_SHA:0:12})"
         exit 0
@@ -90,7 +87,7 @@ else
     else
         # CI unreachable (artifact repo is mid-migration to Phoenix infra).
         # Never wipe a working local copy just because we can't check it.
-        if [ -f "$ARTIFACTS_DIR/resistine-vpn-cli" ] \
+        if [ -f "$ARTIFACTS_DIR/phoenix-vpn-cli" ] \
            && compgen -G "$ARTIFACTS_DIR/*network-extension.systemextension" >/dev/null; then
             echo "CI unreachable — using existing local VPN artifacts."
             exit 0
@@ -113,7 +110,7 @@ fi
 # gh run download nests files inside a subdirectory named after the artifact.
 # Flatten so files are directly in ARTIFACTS_DIR.
 NESTED=$(find "$ARTIFACTS_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)
-if [ -n "$NESTED" ] && [ ! -f "$ARTIFACTS_DIR/resistine-vpn-cli" ]; then
+if [ -n "$NESTED" ] && [ ! -f "$ARTIFACTS_DIR/phoenix-vpn-cli" ]; then
     echo "  Flattening nested directory: $(basename "$NESTED")"
     mv "$NESTED"/* "$ARTIFACTS_DIR/" 2>/dev/null || true
     find "$NESTED" -mindepth 1 -maxdepth 1 -type d -exec mv {} "$ARTIFACTS_DIR/" \; 2>/dev/null || true
@@ -121,8 +118,8 @@ if [ -n "$NESTED" ] && [ ! -f "$ARTIFACTS_DIR/resistine-vpn-cli" ]; then
 fi
 
 # Verify expected files
-if [ ! -f "$ARTIFACTS_DIR/resistine-vpn-cli" ]; then
-    echo "Error: resistine-vpn-cli not found in downloaded artifacts"
+if [ ! -f "$ARTIFACTS_DIR/phoenix-vpn-cli" ]; then
+    echo "Error: phoenix-vpn-cli not found in downloaded artifacts"
     exit 1
 fi
 

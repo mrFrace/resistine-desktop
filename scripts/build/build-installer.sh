@@ -21,7 +21,7 @@ if [ ! -d "$PYTHON_UI_PATH" ]; then
     echo ""
     echo "Expected structure:"
     echo "  parent-directory/"
-    echo "  ├── Resistine-Desktop/"
+    echo "  ├── phoenix-desktop/"
     echo "  └── wireguard-apple/"
     echo ""
     echo "Please ensure both directories exist in the same parent directory."
@@ -191,12 +191,12 @@ mkdir -p "$PYTHON_APP/Contents/Library/SystemExtensions"
 # launchd associates a process with its parent app bundle by checking if the
 # binary is in Contents/MacOS/. Binaries in Contents/Helpers/ are NOT associated
 # with the app bundle, so launchd can't find the XPC service for them.
-echo "  - Copying resistine-vpn-cli to Contents/MacOS/..."
-if [ ! -f "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" ]; then
-    echo "❌ Error: resistine-vpn-cli not found in archive"
+echo "  - Copying phoenix-vpn-cli to Contents/MacOS/..."
+if [ ! -f "$VPN_ARCHIVE/Contents/MacOS/phoenix-vpn-cli" ]; then
+    echo "❌ Error: phoenix-vpn-cli not found in archive"
     exit 1
 fi
-cp "$VPN_ARCHIVE/Contents/MacOS/resistine-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
+cp "$VPN_ARCHIVE/Contents/MacOS/phoenix-vpn-cli" "$PYTHON_APP/Contents/MacOS/"
 
 # --- Copy Network Extension as System Extension ---
 echo "  - Copying network-extension to Contents/Library/SystemExtensions/..."
@@ -213,7 +213,7 @@ fi
 
 # Verify placement
 echo "  - Verifying bundle structure..."
-if [ ! -f "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
+if [ ! -f "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" ]; then
     echo "❌ Error: CLI not in Contents/MacOS/"
     exit 1
 fi
@@ -223,7 +223,7 @@ if [ ! -d "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemext
 fi
 
 echo "✅ VPN components placed in Apple-standard locations"
-echo "   - CLI: Contents/MacOS/resistine-vpn-cli"
+echo "   - CLI: Contents/MacOS/phoenix-vpn-cli"
 echo "   - System Extension: Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension"
 
 # Step 4: Verify permissions
@@ -233,8 +233,8 @@ echo "Step 4: Verifying permissions..."
 # The binaries were already built and signed by Xcode with correct permissions.
 # Do NOT chmod after signing — it invalidates the code signature.
 
-if [ ! -x "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" ]; then
-    echo "  ⚠️  resistine-vpn-cli is not executable — this may indicate a build issue"
+if [ ! -x "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" ]; then
+    echo "  ⚠️  phoenix-vpn-cli is not executable — this may indicate a build issue"
 fi
 
 if [ ! -x "$SYSEX_PATH/Contents/MacOS/network-extension" ]; then
@@ -263,10 +263,10 @@ fi
 # during archive with provisioning profiles and restricted entitlements.
 # DO NOT re-sign it — re-signing strips provisioning profiles.
 #
-# The CLI (resistine-vpn-cli) must be re-signed with Developer ID for distribution,
+# The CLI (phoenix-vpn-cli) must be re-signed with Developer ID for distribution,
 # but we MUST preserve its entitlements (sandbox + application-groups).
 # Without these entitlements, the CLI cannot connect to the Network Extension.
-CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/resistine-vpn-cli/entitlements.plist"
+CLI_ENTITLEMENTS="$VPN_PROJECT_PATH/phoenix-vpn-cli/entitlements.plist"
 if [ ! -f "$CLI_ENTITLEMENTS" ]; then
     echo "  ⚠️  Warning: CLI entitlements file not found at $CLI_ENTITLEMENTS"
     echo "     CLI will be signed without entitlements (XPC communication may fail)"
@@ -275,21 +275,21 @@ else
     CLI_ENTITLEMENTS_FLAG="--entitlements $CLI_ENTITLEMENTS"
 fi
 
-echo "  - Re-signing resistine-vpn-cli (with entitlements for XPC access)..."
+echo "  - Re-signing phoenix-vpn-cli (with entitlements for XPC access)..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
     --timestamp \
     $CLI_ENTITLEMENTS_FLAG \
-    "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" || {
-    echo "  ❌ resistine-vpn-cli signing failed"
+    "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" || {
+    echo "  ❌ phoenix-vpn-cli signing failed"
     exit 1
 }
-echo "  ✅ resistine-vpn-cli signed (with entitlements)"
+echo "  ✅ phoenix-vpn-cli signed (with entitlements)"
 
 echo "  - Verifying VPN component signatures..."
-codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/resistine-vpn-cli" 2>&1 && \
-    echo "  ✅ resistine-vpn-cli signature valid" || \
-    echo "  ❌ resistine-vpn-cli signature INVALID"
+codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" 2>&1 && \
+    echo "  ✅ phoenix-vpn-cli signature valid" || \
+    echo "  ❌ phoenix-vpn-cli signature INVALID"
 
 codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_BUNDLE_ID.systemextension" 2>&1 && \
     echo "  ✅ system-extension signature valid" || \

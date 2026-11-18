@@ -36,11 +36,11 @@ def disable_cli_detection(monkeypatch):
     """Prevent HelperToolManager from scanning the real filesystem."""
     monkeypatch.setattr(
         "plugins.vpn.wireguard.vpn_functions_darwin.HelperToolManager._find_cli_path",
-        lambda self: "/fake/resistine-vpn-cli",
+        lambda self: "/fake/phoenix-vpn-cli",
     )
     # Also patch helper.is_available
     from plugins.vpn.wireguard import vpn_functions_darwin as vfd
-    vfd.helper.cli_path = "/fake/resistine-vpn-cli"
+    vfd.helper.cli_path = "/fake/phoenix-vpn-cli"
     vfd.helper.is_available = True
 
 

@@ -53,7 +53,7 @@ def get_writable_wireguard_dir():
     Path: ~/Library/Group Containers/<APP_GROUP_ID>/wireguard/
     """
     # Use App Group container instead of Application Support
-    # This allows the sandboxed resistine-vpn-cli to access the configs
+    # This allows the sandboxed phoenix-vpn-cli to access the configs
     home = os.path.expanduser("~")
     app_group_container = os.path.join(
         home, "Library", "Group Containers", APP_GROUP_ID
@@ -73,7 +73,7 @@ NE_BUNDLE_ID = "exposed.phoenix.desktop.network-extension"
 
 
 class HelperToolManager:
-    """Manages CLI communication with the resistine-vpn-cli tool"""
+    """Manages CLI communication with the phoenix-vpn-cli tool"""
 
     def __init__(self):
         self.cli_path = self._find_cli_path()
@@ -84,7 +84,7 @@ class HelperToolManager:
         )
 
     def _find_cli_path(self):
-        """Locate resistine-vpn-cli tool in the app bundle"""
+        """Locate phoenix-vpn-cli tool in the app bundle"""
         # When frozen (PyInstaller), look relative to the executable
         if getattr(sys, "frozen", False):
             # sys.executable is in Contents/MacOS/Phoenix
@@ -95,14 +95,14 @@ class HelperToolManager:
             # because NSXPCConnection(serviceName:) requires launchd to associate
             # the process with its parent app bundle, which only works for
             # binaries in Contents/MacOS/.
-            cli_path = os.path.join(contents_dir, "MacOS", "resistine-vpn-cli")
+            cli_path = os.path.join(contents_dir, "MacOS", "phoenix-vpn-cli")
             if os.path.exists(cli_path):
                 return cli_path
             
             # Fallback: old nested path for backwards compatibility
             old_cli_path = os.path.join(
                 contents_dir, "Resources", "wireguard-apple.app",
-                "Contents", "MacOS", "resistine-vpn-cli"
+                "Contents", "MacOS", "phoenix-vpn-cli"
             )
             if os.path.exists(old_cli_path):
                 logger.warning("⚠️ Using legacy CLI path - please rebuild for full VPN support")

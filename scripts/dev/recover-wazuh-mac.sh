@@ -21,8 +21,8 @@
 # Usage:
 #   sudo bash scripts/dev/recover-wazuh-mac.sh
 #
-# Author: Resistine Team
-# Copyright (c) Resistine 2025
+# Author: Phoenix Team
+# Copyright (c) Phoenix 2025-2026
 
 set -euo pipefail
 
@@ -33,11 +33,11 @@ fi
 
 WAZUH_DIR="/Library/Phoenix"
 PLIST="/Library/LaunchDaemons/com.wazuh.agent.plist"
-KEY_BACKUP="/Library/Application Support/Resistine/wazuh_client.keys"
+KEY_BACKUP="/Library/Application Support/Phoenix/wazuh_client.keys"
 KEYCHAIN="/Library/Keychains/System.keychain"
-KC_SERVICE="com.resistine.wazuh.agent"
+KC_SERVICE="exposed.phoenix.wazuh.agent"
 KC_ACCOUNT="client_key"
-RESISTINE_SETTINGS="$HOME/Library/Application Support/Phoenix/settings.json"
+PHOENIX_SETTINGS="$HOME/Library/Application Support/Phoenix/settings.json"
 
 echo "[1/5] Booting out launchd service…"
 launchctl bootout system "$PLIST" 2>/dev/null || true
@@ -65,9 +65,9 @@ security delete-generic-password \
 echo "[5/5] Resetting Phoenix install-state…"
 # Drop just the wazuh.* fields so other settings survive. python3 always
 # ships on macOS, so use it for the JSON edit.
-if [ -f "$RESISTINE_SETTINGS" ]; then
+if [ -f "$PHOENIX_SETTINGS" ]; then
     REAL_USER="${SUDO_USER:-$USER}"
-    sudo -u "$REAL_USER" python3 - "$RESISTINE_SETTINGS" <<'PY'
+    sudo -u "$REAL_USER" python3 - "$PHOENIX_SETTINGS" <<'PY'
 import json, sys
 path = sys.argv[1]
 with open(path) as f:

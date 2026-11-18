@@ -34,7 +34,7 @@ def vpn_funcs(isolated_settings, monkeypatch):
     monkeypatch.setattr("plugins.vpn.wireguard.vpn_functions_darwin.settings", isolated_settings)
     from plugins.vpn.wireguard import vpn_functions_darwin as vfd
     # Ensure CLI path is set for tests
-    vfd.helper.cli_path = "/fake/resistine-vpn-cli"
+    vfd.helper.cli_path = "/fake/phoenix-vpn-cli"
     vfd.helper.is_available = True
     return vfd
 
@@ -139,7 +139,7 @@ class TestVpnConnectDisconnect:
         status = vpn_funcs.check_service_status("wg0")
         assert status == "Stopped"
         # Restore
-        vpn_funcs.helper.cli_path = "/fake/resistine-vpn-cli"
+        vpn_funcs.helper.cli_path = "/fake/phoenix-vpn-cli"
 
 
 # ===========================================================================
