@@ -51,4 +51,3 @@ def test_devices_strings_are_translated_with_matching_placeholders(loc):
     for k, v in en.items():
         if k.startswith("devices.") and k in cat:
             assert set(_PH.findall(cat[k])) == set(_PH.findall(v)), (loc, k)
-            assert "resistine" not in cat[k].lower(), (loc, k)

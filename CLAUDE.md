@@ -137,7 +137,7 @@ VPN CLI binary and ClamAV binaries are fetched during the build via the `gh` CLI
 
 ### macOS signing identity
 
-The app is signed by Apple team `KTKS453599` with App Group `group.exposed.phoenix.wireguard` (`plugins/vpn/wireguard/vpn_functions_darwin.py:APP_GROUP_ID`). `build-distribution.sh` pins both the Application and the Installer certificate to that team (`EXPECTED_TEAM_ID`) rather than taking the first match in the keychain, and rewrites every entitlements file at build time with plistlib — never `plutil`, which reads a dotted key such as `com.apple.security.application-groups` as nesting. `BUNDLE_ID` in `packaging/Resistine.spec` is taken from the environment so the app and its bundled extension always agree.
+The app is signed by Apple team `KTKS453599` with App Group `group.exposed.phoenix.wireguard` (`plugins/vpn/wireguard/vpn_functions_darwin.py:APP_GROUP_ID`). `build-distribution.sh` pins both the Application and the Installer certificate to that team (`EXPECTED_TEAM_ID`) rather than taking the first match in the keychain, and rewrites every entitlements file at build time with plistlib — never `plutil`, which reads a dotted key such as `com.apple.security.application-groups` as nesting. `BUNDLE_ID` in `packaging/Phoenix.spec` is taken from the environment so the app and its bundled extension always agree.
 
 ## Key Conventions
 

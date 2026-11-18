@@ -4,7 +4,7 @@ This file provides guidance to Codex and other coding agents when working with c
 
 ## Project Overview
 
-Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine; the macOS bundle IDs are `exposed.phoenix.*`, but launchd labels, service names and system paths still carry the old name. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. Identifiers are shared between Python, shell, batch and installer scripts that cannot import each other, and `tests/unit/test_phoenix_naming.py` pins that they agree: macOS launchd labels `exposed.phoenix.desktop.*` and support dir `/Library/Application Support/Phoenix`; Windows service `PhoenixVPN`, data in `%PROGRAMDATA%\Phoenix`, registry key `HKLM\Software\Phoenix`, installer AppId `PhoenixDesktop`. The Windows side has not been run on a real machine since those names were introduced. There is no migration from installs made under the product's previous name; do not add one. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -61,7 +61,7 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
 ```
 
-Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from the server-install repo's `scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
 ### NixOS
 
@@ -110,7 +110,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux); a pre-rebrand `Resistine`/`resistine` dir and the `resistine-master-key` keyring entry are migrated on first start.
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux).
 
 ### Auth
 

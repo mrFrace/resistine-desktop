@@ -28,7 +28,7 @@ Record significant architectural choices and their rationale here.
 - **Context:** Drake builds macOS from his GitHub fork (`DatOneOPGuy/phoenix-desktop`), whose history diverged from `main` on 2026-10-20 and carries the same later work under different hashes; a trial merge of `hardening/deferred-nov13` produced 62 conflicts across the repo.
 - **Decision:** Take his work commit by commit with `git cherry-pick -x` (the commits above his last `merge-nov*` commit), checking first whether a fix already exists here. Of the 2026-11-13 batch only the 5 macOS signing commits were taken; the security commit `1db4158` was left out.
 - **Rationale:** The rename was wanted, the security commit touches 19 files, conflicts in 7, duplicates three fixes already made here (Sysmon pinning, SSH host key, https-only telemetry) and needs a manual port for the Matrix transport; it is tracked in the security review queue instead.
-- **Consequences:** Mac test builds go out through `mrFrace/resistine-desktop` branch `testmacbuild`, kept as a mirror of `main` (force-pushed), not as a branch of that repo's own history.
+- **Consequences:** Mac test builds go out through Francis's GitHub fork branch `testmacbuild`, kept as a mirror of `main` (force-pushed), not as a branch of that repo's own history.
 
 ### 2026-11-13 — The Devices page adapts to the backend as served, not as documented
 - **Context:** `/v1/me/inventory` went live in the Wazuh manager's native shape, `/v1/me/active-response/executions` ignores its `agent_id` filter, and the posture service names an unscanned agent "Unknown"; each of these rendered as a wrong or empty screen.
