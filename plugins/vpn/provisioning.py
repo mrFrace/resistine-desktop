@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import platform
 import socket
+import threading
 from typing import Callable, Optional, Tuple
 
 from utils.logger import logger
@@ -179,6 +180,26 @@ def ensure_vpn_config(on_status: Optional[Callable[[str], None]] = None,
     _config_manager.set_active_config(CONFIG_NAME)
     logger.info(f"[VPN-PROV] VPN config for this device saved ({cfg['Interface'].get('Address')})")
     return CONFIG_NAME, path
+
+
+def ensure_in_background() -> None:
+    """Fetch this device's VPN config after a sign-in, without connecting.
+
+    Signing out deletes every local config and removes the peer on the
+    server. The setup wizard fetches a new one on the first sign-in, but a
+    later sign-in skips the wizard, and the device then had no config at all
+    until the user happened to switch the VPN on. Best effort: a failure
+    only logs, and the switch still provisions on demand.
+    """
+    def work():
+        try:
+            ensure_vpn_config()
+        except ProvisioningError as e:
+            logger.warning(f"[VPN-PROV] no VPN config after sign-in: {e}")
+        except Exception as e:  # noqa: BLE001 - never break the sign-in
+            logger.warning(f"[VPN-PROV] VPN config after sign-in failed: {e}")
+
+    threading.Thread(target=work, name="vpn-provision", daemon=True).start()
 
 
 def release_device() -> bool:

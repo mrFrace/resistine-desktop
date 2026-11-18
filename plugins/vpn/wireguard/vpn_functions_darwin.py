@@ -46,6 +46,13 @@ APP_GROUP_ID = "group.exposed.phoenix.wireguard"
 LEGACY_APP_GROUP_IDS = ("group.Resistine.WireguardTest",)
 
 
+def group_containers_dir() -> str:
+    """~/Library/Group Containers. The one place that path is built, so the
+    test suite can redirect it: sign-out and uninstall delete every config
+    under it, and an unredirected test did exactly that to a real one."""
+    return os.path.join(os.path.expanduser("~"), "Library", "Group Containers")
+
+
 def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files
 
@@ -53,11 +60,8 @@ def get_writable_wireguard_dir():
     Path: ~/Library/Group Containers/<APP_GROUP_ID>/wireguard/
     """
     # Use App Group container instead of Application Support
-    # This allows the sandboxed resistine-vpn-cli to access the configs
-    home = os.path.expanduser("~")
-    app_group_container = os.path.join(
-        home, "Library", "Group Containers", APP_GROUP_ID
-    )
+    # This allows the sandboxed phoenix-vpn-cli to access the configs
+    app_group_container = os.path.join(group_containers_dir(), APP_GROUP_ID)
     wireguard_dir = os.path.join(app_group_container, "wireguard")
     os.makedirs(wireguard_dir, mode=0o700, exist_ok=True)
     _restrict_dir_permissions(wireguard_dir)

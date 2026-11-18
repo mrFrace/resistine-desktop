@@ -42,8 +42,11 @@ import time
 from typing import Iterator, Optional
 
 from plugins.chat import siem_alerts
-from utils import settings
+from utils import optional_deps, settings
 from utils.logger import logger
+
+# Before anything here imports nio (and through it jsonschema).
+optional_deps.block_unloadable()
 
 TURN_KEY = "net.resisti.turn"
 REQUEST_KEY = "exposed.phoenix.request"

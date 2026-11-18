@@ -689,9 +689,10 @@ def _remove_wireguard_configs():
     from plugins.vpn.wireguard.vpn_functions_darwin import (
         APP_GROUP_ID,
         LEGACY_APP_GROUP_IDS,
+        group_containers_dir,
     )
 
-    base = os.path.expanduser("~/Library/Group Containers")
+    base = group_containers_dir()
     total_removed = 0
     total_failed = []
     for group_id in (APP_GROUP_ID, *LEGACY_APP_GROUP_IDS):
