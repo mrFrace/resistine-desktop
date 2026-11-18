@@ -124,6 +124,19 @@ datas += _vodozemac_datas
 hiddenimports += _vodozemac_hidden + [
     'peewee', 'cachetools', 'atomicwrites', 'unpaddedbase64', 'jsonschema']
 
+# nio imports jsonschema, and jsonschema imports rfc3987_syntax whenever it is
+# installed. That package parses a grammar file (syntax_rfc3987.lark) at import
+# time; PyInstaller bundles the module but not the file, and jsonschema only
+# guards the import against ImportError. The FileNotFoundError that results
+# aborts `import nio`, so Matrix chat and the SIEM alerts listener fail on
+# every start of the frozen app while working fine from source. It is not in
+# our requirements, so whether a build has it depends on the build venv:
+# ship its data whenever the module is there.
+try:
+    datas += collect_data_files('rfc3987_syntax')
+except Exception:  # not installed: jsonschema skips the "iri" format check
+    pass
+
 if IS_MACOS:
     hiddenimports.extend([
         'keyring.backends.macOS',
