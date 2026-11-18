@@ -707,6 +707,33 @@ class MatrixService:
                 "Settings to trust it again."
             )
 
+    def _exclude_own_other_devices(self) -> list:
+        """Keep the assistant chat's keys away from the account's other devices.
+
+        nio refuses to send while any device in the room is neither verified
+        nor blacklisted, and the room always contains the user's own other
+        sessions (Element, an earlier install). Nothing here can vouch for
+        them: the homeserver lists them, and a homeserver operator adding a
+        device to the *user's* account is the same attack as adding one to
+        the bot's. So they get no keys. The cost is that this conversation
+        cannot be read from those sessions; the price of the alternative
+        (ignore_unverified_devices) is that anyone who can add a device can.
+
+        Returns the ids newly blacklisted.
+        """
+        client = self._client
+        excluded = []
+        for device in list(client.device_store.active_user_devices(self.user_id)):
+            if device.id == self.device_id or device.blacklisted:
+                continue
+            client.blacklist_device(device)
+            excluded.append(device.id)
+        if excluded:
+            logger.info(
+                "[CHAT-MATRIX] not sharing the assistant chat with this "
+                f"account's other device(s): {', '.join(sorted(excluded))}")
+        return excluded
+
     def clear_pinned_devices(self) -> None:
         """Forget the pinned bot devices so the next send re-pins (TOFU).
 
@@ -742,6 +769,7 @@ class MatrixService:
             # without ignore_unverified_devices nio shares keys with exactly
             # the devices we trust.
             await self._pinned_bot_devices()
+            self._exclude_own_other_devices()
             resp = await client.room_send(room_id, "m.room.message", content)
         else:
             # An alerts room: its members' devices are not pinned, and what

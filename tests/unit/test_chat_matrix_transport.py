@@ -778,3 +778,65 @@ def _record(svc, room_id, text):
     async def coro():
         return "$evt"
     return coro()
+
+
+class _PerUserStore:
+    def __init__(self, by_user):
+        self._by_user = by_user
+
+    def active_user_devices(self, user):
+        return iter(self._by_user.get(user, []))
+
+
+@pytest.mark.unit
+@pytest.mark.security
+class TestOwnOtherDevices:
+    """The assistant room also holds the user's other sessions (Element, an
+    earlier install). nio refuses to send while one of them is neither
+    verified nor blacklisted: "Device X for user @me is not verified or
+    blacklisted." They are excluded, never trusted on the server's word."""
+
+    def _wire(self, own, bot):
+        t, client = _transport([])
+        t.device_id = "THIS"
+        t.room_id = "!dm:example.org"
+        t._alert_rooms = set()
+        client.device_store = _PerUserStore({t.user_id: own, t.bot: bot})
+        return t, client
+
+    def test_other_own_devices_are_blacklisted_not_verified(self):
+        other, old = _Dev("ELEMENT", "k1"), _Dev("OLDINSTALL", "k2")
+        t, client = self._wire([_Dev("THIS", "k0"), other, old], [])
+        assert sorted(t._exclude_own_other_devices()) == ["ELEMENT", "OLDINSTALL"]
+        assert other.blacklisted and old.blacklisted
+        assert not other.verified and not old.verified
+        client.verify_device.assert_not_called()
+
+    def test_this_device_and_already_excluded_ones_are_left_alone(self):
+        this, done = _Dev("THIS", "k0"), _Dev("ELEMENT", "k1", blacklisted=True)
+        t, client = self._wire([this, done], [])
+        assert t._exclude_own_other_devices() == []
+        assert not this.blacklisted
+        client.blacklist_device.assert_not_called()
+
+    def test_prompt_is_sent_with_every_room_device_settled(self, isolated_settings):
+        """After the send path runs, no device nio would object to is left,
+        and the send still does not ignore unverified devices."""
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        own = [_Dev("ELEMENT", "k1")]
+        bot = [_Dev("BOT1", "kb")]
+        t, client = self._wire(own, bot)
+        client.rooms = {}
+
+        class _Sent:
+            event_id = "$evt"
+        client.room_send = AsyncMock(return_value=_Sent())
+        with patch("nio.RoomSendResponse", _Sent):
+            assert asyncio.run(t.send_prompt("hi", None)) == "$evt"
+
+        for d in own + bot:
+            assert d.verified or d.blacklisted, d.id
+        assert own[0].blacklisted and bot[0].verified
+        assert "ignore_unverified_devices" not in client.room_send.call_args.kwargs
