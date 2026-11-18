@@ -16,8 +16,8 @@
 # The script re-executes itself with sudo for the privileged steps (one
 # password prompt), then drops back to the real user for ~/.config + keyring.
 #
-# Author: Resistine Team
-# Copyright (c) Resistine 2025
+# Author: Phoenix Team
+# Copyright (c) Phoenix 2025-2026
 # Licensed under the GNU General Public License v2 or later
 # ============================================================
 set -u

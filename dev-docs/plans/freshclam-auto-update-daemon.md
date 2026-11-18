@@ -25,9 +25,9 @@ then was revised after real-world testing revealed two problems:
 Net cadence: **~4h** (StartInterval) with a **hard 1h floor** enforced
 independently of the trigger. Jitter shrank from 0–60min (loop spacing) to
 0–60s (pre-run fleet de-sync), since launchd now owns spacing.
-`RESISTINE_FRESHCLAM_INTERVAL` still bypasses jitter AND the rate-limit floor
+`PHOENIX_FRESHCLAM_INTERVAL` still bypasses jitter AND the rate-limit floor
 for testing ("run now"). See `scripts/clamav/freshclam-update.sh` and
-`com.resistine.desktop.freshclam.plist` for the shipped behavior.
+`exposed.phoenix.desktop.freshclam.plist` for the shipped behavior.
 
 ## Revision 2 (2026-06-15): StartInterval → StartCalendarInterval
 
@@ -58,8 +58,8 @@ comments were updated to say "scheduled mark" instead of "StartInterval."
   already ships (`scripts/build/clamav-artifacts/binaries/freshclam` → copied to `Contents/Helpers/freshclam`
   and signed at build-distribution.sh:348 & :635). We only *schedule* the existing binary; we do not rebuild
   it, change its behavior, or touch CVD certs. ClamAV-Mac's role (compiling the binaries + certs) is unaffected.
-- **Watch-out during impl:** build-distribution.sh:845 has a legacy `com.resistine.freshclam` cleanup label —
-  confirm it does not clash with the new `com.resistine.desktop.freshclam` label.
+- **Watch-out during impl:** build-distribution.sh:845 has a legacy `exposed.phoenix.freshclam` cleanup label —
+  confirm it does not clash with the new `exposed.phoenix.desktop.freshclam` label.
 
 ## Context
 
@@ -76,9 +76,9 @@ even when the app is closed, on a rolling **4h + random(0–60min)** cadence ("s
 minimum spacing always ≥4h).
 
 Verified on this machine: there is **no existing Phoenix freshclam daemon** and **no
-clamd/clamonacc daemon currently loaded** (`launchctl print system/com.resistine.desktop.*`
+clamd/clamonacc daemon currently loaded** (`launchctl print system/exposed.phoenix.desktop.*`
 returns nothing; `/Library/LaunchDaemons/` has no Phoenix plists). The system dir
-`/Library/Application Support/Resistine/clamav/` *does* exist (postinstall ran here), and its
+`/Library/Application Support/Phoenix/clamav/` *does* exist (postinstall ran here), and its
 `freshclam.conf` is the app's own. A separate **Homebrew** ClamAV exists in PATH
 (`/opt/homebrew/bin/freshclam`) — irrelevant to the app, different binary + DB dir, no service —
 but it means the daemon **must invoke freshclam by absolute bundle path**, never bare `freshclam`.
@@ -100,10 +100,10 @@ So this LaunchDaemon is genuinely new and won't collide with anything.
 
 ## Files to CREATE
 
-### `scripts/build/clamav-artifacts/launchd/com.resistine.desktop.freshclam.plist`
-Modeled on `com.resistine.desktop.clamd.plist`. Auto-bundles into `Contents/Library/LaunchDaemons/`
+### `scripts/build/clamav-artifacts/launchd/exposed.phoenix.desktop.freshclam.plist`
+Modeled on `exposed.phoenix.desktop.clamd.plist`. Auto-bundles into `Contents/Library/LaunchDaemons/`
 via the existing `*.plist` glob in `build-distribution.sh:446-448` — no build-script change for the plist.
-- `Label`: `com.resistine.desktop.freshclam`
+- `Label`: `exposed.phoenix.desktop.freshclam`
 - `ProgramArguments`: `["/bin/bash", "/Applications/Phoenix.app/Contents/Helpers/freshclam-update.sh"]`
   (explicit `/bin/bash` because the script uses `$RANDOM`, which POSIX `/bin/sh` lacks)
 - `RunAtLoad`: `true`; `KeepAlive`: `true` (bare bool — any exit of the infinite-loop script is
@@ -111,12 +111,12 @@ via the existing `*.plist` glob in `build-distribution.sh:446-448` — no build-
 - `UserName`: `root`, `GroupName`: `wheel`
 - `EnvironmentVariables`: `CVD_CERTS_DIR=/Applications/Phoenix.app/Contents/certs`,
   `SSL_CERT_FILE=/etc/ssl/cert.pem` (matches `clamav_env()` / the clamd plist)
-- `StandardOutPath` / `StandardErrorPath`: `/Library/Application Support/Resistine/clamav/log/freshclam-daemon.{stdout,stderr}.log`
+- `StandardOutPath` / `StandardErrorPath`: `/Library/Application Support/Phoenix/clamav/log/freshclam-daemon.{stdout,stderr}.log`
 
 ### `scripts/clamav/freshclam-update.sh`
 First-party wrapper (NOT a downloaded artifact, so no `checksums.txt` entry needed). Behavior:
 - `#!/bin/bash`, `set -u`. Constants: `FRESHCLAM=/Applications/Phoenix.app/Contents/Helpers/freshclam`,
-  `CONF=/Library/Application Support/Resistine/clamav/freshclam.conf`.
+  `CONF=/Library/Application Support/Phoenix/clamav/freshclam.conf`.
 - If `$FRESHCLAM` or `$CONF` missing: log + `sleep 3600; exit 0` (avoids KeepAlive hot-loop;
   retries ~hourly until postinstall has set things up).
 - Initial jitter on first iteration: `sleep $((RANDOM % 900))` (0–15min) — smooths the
@@ -124,18 +124,18 @@ First-party wrapper (NOT a downloaded artifact, so no `checksums.txt` entry need
 - Loop forever: run `"$FRESHCLAM" --config-file="$CONF"` (the conf's `NotifyClamd` reloads clamd),
   log a timestamped result line, then `sleep $((14400 + RANDOM % 3600))`. **Never exit on freshclam
   failure** (network/cert hiccups self-heal next cycle).
-- Honor optional env override `RESISTINE_FRESHCLAM_INTERVAL` for the 14400 base (testability only;
+- Honor optional env override `PHOENIX_FRESHCLAM_INTERVAL` for the 14400 base (testability only;
   production stays 14400).
 
 ## Files to MODIFY
 
 ### `plugins/antivirus/clamav_platform_darwin.py`
-- Append `"com.resistine.desktop.freshclam.plist"` to `_DAEMON_PLISTS` (lines 39–42). This alone makes
+- Append `"exposed.phoenix.desktop.freshclam.plist"` to `_DAEMON_PLISTS` (lines 39–42). This alone makes
   `ensure_daemons_registered()` (401–485) register/approve/reload it and `deactivate_system_daemons()`
   (697–727, loops `reversed(_DAEMON_PLISTS)`) bootout it — no other change to those functions.
 - Add `set_freshclam_daemon_enabled(enabled: bool)`: on enable → `ensure_daemons_registered()`
   (idempotent; re-registering loaded daemons is a cheap no-op). On disable → bootout **only**
-  `com.resistine.desktop.freshclam` via the existing osascript-admin pattern (mirror
+  `exposed.phoenix.desktop.freshclam` via the existing osascript-admin pattern (mirror
   `deactivate_system_daemons` but a single label — do NOT use `deactivate_system_daemons`, which
   would also kill clamd/clamonacc real-time protection).
 
@@ -156,7 +156,7 @@ First-party wrapper (NOT a downloaded artifact, so no `checksums.txt` entry need
   system DB dir the root daemon writes, so daemon updates surface on the next view refresh.
 
 ### `scripts/clamav-postinstall-darwin.sh`
-- Step 6 load loop (lines 189–199): add `com.resistine.desktop.freshclam.plist` to the
+- Step 6 load loop (lines 189–199): add `exposed.phoenix.desktop.freshclam.plist` to the
   `for PLIST_NAME in …` list so it is kickstarted on install. (Log dir already created in Step 1 +
   chmod 755 in Step 3, so the daemon can write its logs. freshclam.conf heredoc already correct.)
 
@@ -167,14 +167,14 @@ First-party wrapper (NOT a downloaded artifact, so no `checksums.txt` entry need
   identity (signed shell script is fine; it's inside the notarized bundle).
 
 ### `utils/uninstall/darwin.py` — `_remove_clamav_daemons` (157–225)
-- Add `"com.resistine.desktop.freshclam.plist"` to the SMAppService unregister list, the
+- Add `"exposed.phoenix.desktop.freshclam.plist"` to the SMAppService unregister list, the
   legacy/`/Library/LaunchDaemons` bootout+rm list (defensive), and the bootout-by-label list (205–214).
 - Add `pkill -f freshclam-update.sh` and `pkill -x freshclam` to the process-kill commands (217–218)
   so an in-flight update stops. Existing `rm -rf` of the system dir already clears logs/conf.
 
 ### `scripts/build/clamav-artifacts/checksums.txt` — NO change
-Current `com.resistine.desktop.*` plists are already not checksum-gated (file still lists old
-`com.resistine.clamd.plist` names); they're verified by git, not download. The wrapper under
+Current `exposed.phoenix.desktop.*` plists are already not checksum-gated (file still lists old
+`exposed.phoenix.clamd.plist` names); they're verified by git, not download. The wrapper under
 `scripts/clamav/` is first-party, also not gated. `download-clamav-artifacts.sh` unaffected.
 
 ## Sequencing
@@ -193,22 +193,22 @@ daemon that exists.)
 
 ## Verification
 - `plutil -lint` the new plist; `bash -n` (+ `shellcheck`) the wrapper.
-- Run wrapper with `RESISTINE_FRESHCLAM_INTERVAL=60` to watch two runs ~60–63s apart (jitter range OK)
+- Run wrapper with `PHOENIX_FRESHCLAM_INTERVAL=60` to watch two runs ~60–63s apart (jitter range OK)
   without waiting 4h.
 - Hand-run `…/Helpers/freshclam --config-file=/Library/.../freshclam.conf` to confirm env+conf → real
   update + NotifyClamd. (Use the **bundle** freshclam, not Homebrew's.)
 - Daemon load (launchctl works in dev): copy plist to scratch, `sudo launchctl bootstrap system <plist>`,
-  `sudo launchctl print system/com.resistine.desktop.freshclam` (loaded, env, program path),
+  `sudo launchctl print system/exposed.phoenix.desktop.freshclam` (loaded, env, program path),
   `kickstart -k` (forces run → check `freshclam-daemon.stdout.log` + `freshclam.log`),
   `bootout` (clean teardown).
 - Toggle: call `set_freshclam_daemon_enabled(False/True)` in dev, verify via `launchctl print`.
-- Uninstall: run `_remove_clamav_daemons` path, confirm `launchctl print system/com.resistine.desktop.freshclam`
+- Uninstall: run `_remove_clamav_daemons` path, confirm `launchctl print system/exposed.phoenix.desktop.freshclam`
   → "Could not find service".
 
 ## Tests (`tests/`)
 - `tests/unit/test_clamav.py`: assert `_DAEMON_PLISTS` includes the freshclam plist; test
   `set_freshclam_daemon_enabled` (monkeypatch subprocess/osascript — disable builds
-  `launchctl bootout system/com.resistine.desktop.freshclam`; enable routes through `ensure_daemons_registered`).
+  `launchctl bootout system/exposed.phoenix.desktop.freshclam`; enable routes through `ensure_daemons_registered`).
 - `tests/unit/test_antivirus_plugin.py`: on Darwin, `_start_auto_update_scheduler` NOT started in
   `__init__`/toggle (thread stays None) and toggle calls the daemon helper; on non-Darwin the scheduler
   still starts. Mock `platform.system` + the helper.

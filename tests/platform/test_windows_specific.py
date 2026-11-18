@@ -64,15 +64,15 @@ class TestWindowsVPNPaths:
         # defined, otherwise you'll get a test that technically passes
         # while still exercising the wrong code path. - Austin
         with patch("plugins.vpn.wireguard.vpn_functions_windows.get_config_dir",
-                   return_value=r"C:\Users\Test\AppData\Roaming\Resistine"):
+                   return_value=r"C:\Users\Test\AppData\Roaming\Phoenix"):
             with patch("os.makedirs"):
                 from plugins.vpn.wireguard.vpn_functions_windows import get_writable_wireguard_dir
                 wg_dir = get_writable_wireguard_dir()
-        assert wg_dir == r"C:\Users\Test\AppData\Roaming\Resistine\wireguard"
+        assert wg_dir == r"C:\Users\Test\AppData\Roaming\Phoenix\wireguard"
 
     def test_config_path_includes_tunnel_name(self):
         with patch("plugins.vpn.wireguard.vpn_functions_windows.get_config_dir",
-                   return_value=r"C:\Users\Test\AppData\Roaming\Resistine"):
+                   return_value=r"C:\Users\Test\AppData\Roaming\Phoenix"):
             with patch("os.makedirs"):
                 from plugins.vpn.wireguard.vpn_functions_windows import get_config_path
                 path = get_config_path("my_tunnel")

@@ -30,7 +30,7 @@ def suppress_child_console_windows() -> None:
 
     import subprocess
 
-    if getattr(subprocess.Popen, "_resistine_no_window", False):
+    if getattr(subprocess.Popen, "_phoenix_no_window", False):
         return
 
     _orig_init = subprocess.Popen.__init__
@@ -46,4 +46,4 @@ def suppress_child_console_windows() -> None:
         _orig_init(self, *args, **kwargs)
 
     subprocess.Popen.__init__ = _init
-    subprocess.Popen._resistine_no_window = True
+    subprocess.Popen._phoenix_no_window = True

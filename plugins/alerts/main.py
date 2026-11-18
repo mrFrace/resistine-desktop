@@ -8,8 +8,8 @@ only reads that store (plugins/dashboard/alerts.py turns each message into a
 title, severity and findings). It also sends the desktop notification for a
 new high or critical alert, whose click opens that alert here.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 

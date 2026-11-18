@@ -13,7 +13,7 @@ def create_test_vpn_config():
     
     # Get the config directory
     config_dir = get_writable_wireguard_dir()  
-    config_path = os.path.join(config_dir, "resistine.conf")
+    config_path = os.path.join(config_dir, "phoenix.conf")
     
     # Create a basic WireGuard configuration for testing
     # Note: These are example values - replace with real ones from your VPN provider

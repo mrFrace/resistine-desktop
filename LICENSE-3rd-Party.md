@@ -283,7 +283,7 @@ Generated from `sbom.cdx.json` (CycloneDX 1.6).
 | pyuac | 0.0.3 | MIT | [link](https://github.com/Preston-Landers/pyuac) |
 | referencing | 0.37.0 | MIT | [link](https://github.com/python-jsonschema/referencing) |
 | requests | 2.34.2 | Apache-2.0 / License :: OSI Approved :: Apache Software License | — |
-| resistine-vpn-cli | 0.1 | GPL-2.0-or-later | [link](https://github.com/Resistine/resistine-vpn-macos) |
+| phoenix-vpn-cli | 0.1 | GPL-2.0-or-later | [link](https://github.com/DatOneOPGuy/phoenix-vpn-macos) |
 | rfc3339-validator | 0.1.4 | MIT | [link](https://github.com/naimetti/rfc3339-validator) |
 | rfc3986-validator | 0.1.1 | MIT | [link](https://github.com/naimetti/rfc3986-validator) |
 | rfc3987-syntax | 1.1.0 | MIT | [link](https://github.com/willynilly/rfc3987-syntax) |

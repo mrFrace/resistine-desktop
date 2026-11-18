@@ -91,7 +91,7 @@ def _inject_script() -> str:
         "print('INJECTED')\n"
     )
     # Write the python to a temp file the root shell will run, then restart.
-    fd, py_path = tempfile.mkstemp(suffix=".py", prefix="resistine-clamav-fwd-")
+    fd, py_path = tempfile.mkstemp(suffix=".py", prefix="phoenix-clamav-fwd-")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(py)
     return (

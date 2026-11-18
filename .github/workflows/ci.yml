@@ -143,15 +143,15 @@ jobs:
           # Wait for the process to start
           sleep 5
 
-          # Check if the Resistine process is running
+          # Check if the Phoenix process is running
           if pgrep -f "Phoenix" > /dev/null; then
-            echo "Smoke test passed: Resistine is running"
+            echo "Smoke test passed: Phoenix is running"
             # Clean up — quit gracefully, then force-kill if needed
             pkill -f "Phoenix" || true
             sleep 2
             pkill -9 -f "Phoenix" 2>/dev/null || true
           else
-            echo "Smoke test FAILED: Resistine did not stay running"
+            echo "Smoke test FAILED: Phoenix did not stay running"
             # Check if it crashed — look for crash logs
             ls -la ~/Library/Logs/DiagnosticReports/ 2>/dev/null || true
             exit 1
@@ -215,10 +215,10 @@ jobs:
 
           # Check if still running
           if (!$proc.HasExited) {
-            Write-Output "Smoke test passed: Resistine is running (PID $($proc.Id))"
+            Write-Output "Smoke test passed: Phoenix is running (PID $($proc.Id))"
             Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
           } else {
-            Write-Error "Smoke test FAILED: Resistine exited with code $($proc.ExitCode)"
+            Write-Error "Smoke test FAILED: Phoenix exited with code $($proc.ExitCode)"
             exit 1
           }
 
@@ -290,11 +290,11 @@ jobs:
 
           # Check if still running
           if kill -0 $APP_PID 2>/dev/null; then
-            echo "Smoke test passed: Resistine is running (PID $APP_PID)"
+            echo "Smoke test passed: Phoenix is running (PID $APP_PID)"
             kill $APP_PID || true
             sleep 2
             kill -9 $APP_PID 2>/dev/null || true
           else
-            echo "Smoke test FAILED: Resistine did not stay running"
+            echo "Smoke test FAILED: Phoenix did not stay running"
             exit 1
           fi

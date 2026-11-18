@@ -21,7 +21,7 @@ from unittest.mock import patch
 class TestWindowsServiceInputValidation:
     def _request(self, **over):
         from plugins.vpn.wireguard import windows_vpn_service as svc
-        req = {"token": svc.IPC_TOKEN, "command": "status", "tunnel": "resistine"}
+        req = {"token": svc.IPC_TOKEN, "command": "status", "tunnel": "phoenix"}
         req.update(over)
         return req
 
@@ -55,33 +55,33 @@ class TestWindowsServiceInputValidation:
         from plugins.vpn.wireguard import windows_vpn_service as svc
         other = tmp_path / "unrelated.conf"
         other.write_text("[Interface]\n")
-        assert svc._validated_config_path("resistine", str(other)) is None
+        assert svc._validated_config_path("phoenix", str(other)) is None
 
     def test_config_path_accepts_matching_conf(self, tmp_path, monkeypatch):
         from plugins.vpn.wireguard import windows_vpn_service as svc
         # Paths are now confined to known config directories (UNC/arbitrary
         # locations rejected) — stand the test dir in for CONFIG_BASE.
         monkeypatch.setattr(svc, "CONFIG_BASE", str(tmp_path))
-        conf = tmp_path / "resistine.conf"
+        conf = tmp_path / "phoenix.conf"
         conf.write_text("[Interface]\n")
-        assert svc._validated_config_path("resistine", str(conf)) == str(conf)
+        assert svc._validated_config_path("phoenix", str(conf)) == str(conf)
 
     def test_config_path_rejects_unconfined_location(self, tmp_path):
         from plugins.vpn.wireguard import windows_vpn_service as svc
-        conf = tmp_path / "resistine.conf"
+        conf = tmp_path / "phoenix.conf"
         conf.write_text("[Interface]\n")
         # tmp_path is not a known config dir — must be rejected.
-        assert svc._validated_config_path("resistine", str(conf)) is None
+        assert svc._validated_config_path("phoenix", str(conf)) is None
 
     def test_config_path_rejects_unc(self):
         from plugins.vpn.wireguard import windows_vpn_service as svc
         assert svc._validated_config_path(
-            "resistine", r"\\attacker\share\resistine.conf") is None
+            "phoenix", r"\\attacker\share\phoenix.conf") is None
 
     def test_config_path_rejects_non_file(self, tmp_path):
         from plugins.vpn.wireguard import windows_vpn_service as svc
-        assert svc._validated_config_path("resistine", str(tmp_path)) is None
-        assert svc._validated_config_path("resistine", None) is None
+        assert svc._validated_config_path("phoenix", str(tmp_path)) is None
+        assert svc._validated_config_path("phoenix", None) is None
 
     def test_acl_refuses_group_grantees(self):
         from plugins.vpn.wireguard import windows_vpn_service as svc

@@ -13,7 +13,7 @@ character set to prevent path traversal.
 
 This module is platform-neutral and has no side effects.
 
-Copyright (c) Resistine 2025
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 

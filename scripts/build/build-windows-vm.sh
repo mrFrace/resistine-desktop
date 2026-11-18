@@ -5,8 +5,8 @@
 #
 # Usage: scripts/build/build-windows-vm.sh
 #
-# Same method as Resistine-Server-install/build_agent_windows.sh, and the same
-# golden image (Resistine-Server-install/scripts/windows/make_golden.sh: Windows
+# Same method as server-install/build_agent_windows.sh, and the same
+# golden image (server-install/scripts/windows/make_golden.sh: Windows
 # Server 2025 evaluation with OpenSSH, booted with dockur/windows):
 #
 #   1. Archive this checkout (HEAD plus uncommitted changes to tracked files).
@@ -44,7 +44,7 @@ VM_NAME="phoenix-desktop-win-build-${CI_JOB_ID:-$$}"
 VM_DIR="${VM_DIR:-$STAGE_DIR/vm}"
 
 [ -c /dev/kvm ] || die "/dev/kvm missing: this host cannot run the Windows VM"
-[ -f "$GOLDEN_DIR/data.img" ] || die "no golden image in $GOLDEN_DIR (run Resistine-Server-install/scripts/windows/make_golden.sh)"
+[ -f "$GOLDEN_DIR/data.img" ] || die "no golden image in $GOLDEN_DIR (run server-install/scripts/windows/make_golden.sh)"
 [ -f "$KEY" ] || die "builder key $KEY not found"
 mkdir -p "$STAGE_DIR" "$OUTPUT_DIR"
 

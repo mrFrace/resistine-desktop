@@ -134,7 +134,7 @@ class TestValidators:
         with pytest.raises(ValueError):
             cv.validate_dns_list(dns)
 
-    @pytest.mark.parametrize("name", ["resistine", "my_vpn-2", "A1"])
+    @pytest.mark.parametrize("name", ["phoenix", "my_vpn-2", "A1"])
     def test_config_name_valid(self, name):
         assert cv.validate_config_name(name) == name
 
@@ -190,15 +190,15 @@ def posix_backend(request, tmp_path, monkeypatch):
 class TestPosixConfigWriting:
     def test_valid_config_written_unchanged(self, posix_backend):
         mod, wg_dir = posix_backend
-        path = mod.parse_and_create_vpn_config(json.dumps(_server_config()), "resistine")
-        assert path == str(wg_dir / "resistine.conf")
+        path = mod.parse_and_create_vpn_config(json.dumps(_server_config()), "phoenix")
+        assert path == str(wg_dir / "phoenix.conf")
         with open(path) as f:
             assert f.read() == EXPECTED_POSIX_CONF
 
     def test_comma_separated_allowed_ips_string_accepted(self, posix_backend):
         mod, _ = posix_backend
         cfg = _server_config(**{"Peer.AllowedIPs": "198.51.100.0/17, 198.51.100.128/25"})
-        path = mod.parse_and_create_vpn_config(cfg, "resistine")
+        path = mod.parse_and_create_vpn_config(cfg, "phoenix")
         assert path is not None
         with open(path) as f:
             assert "AllowedIPs = 198.51.100.0/17, 198.51.100.128/25\n" in f.read()
@@ -206,7 +206,7 @@ class TestPosixConfigWriting:
     @pytest.mark.parametrize("field,value", INJECTIONS)
     def test_malicious_values_rejected(self, posix_backend, field, value):
         mod, wg_dir = posix_backend
-        path = mod.parse_and_create_vpn_config(_server_config(**{field: value}), "resistine")
+        path = mod.parse_and_create_vpn_config(_server_config(**{field: value}), "phoenix")
         assert path is None
         assert list(wg_dir.iterdir()) == []
 
@@ -239,8 +239,8 @@ class TestWindowsConfigWriting:
         cfg = _server_config()
         cfg["Interface"]["MTU"] = 1420
         cfg["Peer"]["PersistentKeepalive"] = 25
-        path = mod.parse_and_create_vpn_config(json.dumps(cfg), "resistine")
-        assert path == str(wg_dir / "resistine.conf")
+        path = mod.parse_and_create_vpn_config(json.dumps(cfg), "phoenix")
+        assert path == str(wg_dir / "phoenix.conf")
         with open(path) as f:
             content = f.read()
         assert content == (
@@ -260,7 +260,7 @@ class TestWindowsConfigWriting:
     @pytest.mark.parametrize("field,value", INJECTIONS)
     def test_malicious_values_rejected(self, win_backend, field, value):
         mod, wg_dir = win_backend
-        assert mod.parse_and_create_vpn_config(_server_config(**{field: value}), "resistine") is None
+        assert mod.parse_and_create_vpn_config(_server_config(**{field: value}), "phoenix") is None
         assert list(wg_dir.iterdir()) == []
 
     @pytest.mark.parametrize("section,key", [
@@ -270,20 +270,20 @@ class TestWindowsConfigWriting:
         mod, wg_dir = win_backend
         cfg = _server_config()
         cfg[section][key] = "powershell -c evil"
-        assert mod.parse_and_create_vpn_config(cfg, "resistine") is None
+        assert mod.parse_and_create_vpn_config(cfg, "phoenix") is None
         assert list(wg_dir.iterdir()) == []
 
     def test_injected_key_name_rejected(self, win_backend):
         mod, wg_dir = win_backend
         cfg = _server_config()
         cfg["Interface"]["MTU\nPostUp"] = "id"
-        assert mod.parse_and_create_vpn_config(cfg, "resistine") is None
+        assert mod.parse_and_create_vpn_config(cfg, "phoenix") is None
 
     def test_unknown_key_skipped(self, win_backend):
         mod, _ = win_backend
         cfg = _server_config()
         cfg["Interface"]["SomethingNew"] = "x"
-        path = mod.parse_and_create_vpn_config(cfg, "resistine")
+        path = mod.parse_and_create_vpn_config(cfg, "phoenix")
         with open(path) as f:
             assert "SomethingNew" not in f.read()
 
@@ -340,7 +340,7 @@ class TestConfigManagerTraversal:
 
     def test_unsafe_filenames_not_listed(self, mgr, wireguard_dir, write_conf):
         write_conf("good")
-        (wireguard_dir / ".resistine.compat.conf").write_text("x")
+        (wireguard_dir / ".phoenix.compat.conf").write_text("x")
         (wireguard_dir / "bad name';id;'.conf").write_text("x")
         assert [c["name"] for c in mgr.list_configs()] == ["good"]
 
@@ -391,7 +391,7 @@ class TestLinuxShellSafety:
         from plugins.vpn.wireguard import vpn_functions_linux as l
         weird_dir = tmp_path / "o'brien"
         weird_dir.mkdir()
-        conf = weird_dir / "resistine.conf"
+        conf = weird_dir / "phoenix.conf"
         conf.write_text("[Interface]\n")
         ok = MagicMock(returncode=0)
         with patch.object(l, "run_privileged_command", return_value=ok) as rpc, \
@@ -399,7 +399,7 @@ class TestLinuxShellSafety:
                 patch.object(l, "make_dns_compatible_config", side_effect=lambda p: p):
             assert l.start_vpn(str(conf)) is True
         script = rpc.call_args[0][0][2]
-        assert "wg-quick up resistine" in script
+        assert "wg-quick up phoenix" in script
         assert "'\"'\"'" in script  # the apostrophe is shell-escaped
 
     def test_nixos_uses_config_in_place(self, tmp_path):
@@ -408,7 +408,7 @@ class TestLinuxShellSafety:
         from plugins.vpn.wireguard import vpn_functions_linux as l
         weird_dir = tmp_path / "o'brien"
         weird_dir.mkdir()
-        conf = weird_dir / "resistine.conf"
+        conf = weird_dir / "phoenix.conf"
         conf.write_text("[Interface]\n")
         ok = MagicMock(returncode=0)
         wgq = "/nix/store/abc-wireguard-tools/bin/wg-quick"
@@ -424,7 +424,7 @@ class TestLinuxShellSafety:
             # absolute path: pkexec's PATH has no wg-quick on NixOS
             assert script.startswith(f"{wgq} {verb} ")
             # the full path is passed, quoted (apostrophe escaped)
-            assert "'\"'\"'" in script and script.endswith("resistine.conf'")
+            assert "'\"'\"'" in script and script.endswith("phoenix.conf'")
 
     def test_is_nixos_reads_os_release(self, tmp_path):
         from plugins.vpn.wireguard import vpn_functions_linux as l
@@ -458,9 +458,9 @@ class TestVpnMainHelpers:
         return importlib.import_module("plugins.vpn.main")
 
     def test_list_wg_interfaces_uses_subprocess_run(self, vpn_main):
-        res = MagicMock(returncode=0, stdout="wg0 resistine\n", stderr="")
+        res = MagicMock(returncode=0, stdout="wg0 phoenix\n", stderr="")
         with patch("subprocess.run", return_value=res) as run:
-            assert vpn_main._list_wg_interfaces() == ["wg0", "resistine"]
+            assert vpn_main._list_wg_interfaces() == ["wg0", "phoenix"]
         args, kwargs = run.call_args
         assert args[0] == ["wg", "show", "interfaces"]
         assert kwargs["capture_output"] is True and kwargs["text"] is True

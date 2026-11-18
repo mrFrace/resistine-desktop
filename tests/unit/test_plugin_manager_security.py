@@ -173,7 +173,7 @@ class TestRequestHardening:
         (ok, _), get = _download(
             mgr,
             [_redirect(asset), _ok(data)],
-            url="https://github.com/Resistine/Resistine-Desktop-Plugins/releases/download/v/calc.zip",
+            url="https://github.com/DatOneOPGuy/phoenix-desktop-plugins/releases/download/v/calc.zip",
             plugin_id="calc",
             expected_sha256=_sha(data),
         )

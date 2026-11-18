@@ -1,6 +1,6 @@
 # SBOM Tooling
 
-This folder generates Resistine's Software Bill of Materials (SBOM) and the
+This folder generates Phoenix's Software Bill of Materials (SBOM) and the
 human-readable license attribution document derived from it.
 
 ## Outputs (committed at the repo root)
@@ -41,7 +41,7 @@ subsequent runs so repeat regenerations take a few seconds.
 |---|---|---|
 | `run.sh` | One-command wrapper. Manages the clean prod venv. | No |
 | `generate_sbom.py` | Python orchestrator. Runs cyclonedx-py, merges bundled components, enforces license policy, renders Markdown. | No (unless changing the generator itself) |
-| `sbom-bundled.json` | Hand-maintained CycloneDX components for non-Python software (ClamAV, WireGuard, Wazuh Agent, `resistine-vpn-cli`). | **Yes** — when a bundled binary's version, source, or license changes |
+| `sbom-bundled.json` | Hand-maintained CycloneDX components for non-Python software (ClamAV, WireGuard, Wazuh Agent, `phoenix-vpn-cli`). | **Yes** — when a bundled binary's version, source, or license changes |
 | `license-3rd-party-header.md` | Intro text prepended to `LICENSE-3rd-Party.md`. | **Yes** — for wording changes |
 
 ## Why this design

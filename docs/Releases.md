@@ -28,8 +28,8 @@ Complete release history for Phoenix Desktop across all platforms.
 - Linux: Ctrl+A support, scrollbar fixes, and VPN page padding
 
 ### Platform Downloads
-- **macOS**: [phoenix-desktop-Mac-2026.03.19.dmg](https://resistine.github.io/releases/mac/phoenix-desktop-Mac-2026.03.19.dmg) (41.2 MB)
-- **Windows**: [Phoenix-Setup-2026.03.19.exe](https://resistine.github.io/releases/windows/Phoenix-Setup-2026.03.19.exe)
+- **macOS**: phoenix-desktop-Mac-2026.03.19.dmg (41.2 MB)
+- **Windows**: Phoenix-Setup-2026.03.19.exe
 - **Linux**: Available via package managers
 
 ---
@@ -50,7 +50,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - Fixed Wazuh agent signup bug on macOS
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer-1.0.5.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.5.dmg) (42.5 MB)
+- **macOS**: Phoenix-Installer-1.0.5.dmg (42.5 MB)
 - **Windows**: Available from previous releases
 - **Linux**: Available via package managers
 
@@ -65,7 +65,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - Performance improvements
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer-1.0.4.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.4.dmg) (36.9 MB)
+- **macOS**: Phoenix-Installer-1.0.4.dmg (36.9 MB)
 
 ---
 
@@ -77,7 +77,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - New macOS release with stability improvements
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer-1.0.3.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.3.dmg) (36.8 MB)
+- **macOS**: Phoenix-Installer-1.0.3.dmg (36.8 MB)
 
 ---
 
@@ -93,7 +93,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - Replaced icons with Phosphor icon set
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer-1.0.2.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.2.dmg) (42.3 MB)
+- **macOS**: Phoenix-Installer-1.0.2.dmg (42.3 MB)
 
 ---
 
@@ -106,7 +106,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - Added in-app uninstall option
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer-1.0.1.dmg](https://resistine.github.io/releases/mac/Phoenix-Installer-1.0.1.dmg) (36.9 MB)
+- **macOS**: Phoenix-Installer-1.0.1.dmg (36.9 MB)
 
 ---
 
@@ -120,7 +120,7 @@ Complete release history for Phoenix Desktop across all platforms.
 - Auto-update support via Sparkle
 
 ### Platform Downloads
-- **macOS**: [Phoenix-Installer.dmg](https://github.com/Resistine/Resistine-Desktop/releases/download/v1.0.0/Phoenix-Installer.dmg) (36.8 MB)
+- **macOS**: Phoenix-Installer.dmg (36.8 MB)
 
 ---
 
@@ -182,7 +182,7 @@ sudo pacman -Su phoenix
 
 Found a bug? Have a feature request?
 
-- **GitHub Issues**: [Report on GitHub](https://github.com/Resistine/Resistine-Desktop/issues)
+- **GitHub Issues**: [Report on GitHub](https://github.com/DatOneOPGuy/phoenix-desktop/issues)
 - **Email**: support@phoenix.dev
 - **Community**: Join our community forum
 

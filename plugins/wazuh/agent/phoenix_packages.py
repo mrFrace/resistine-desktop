@@ -5,7 +5,7 @@ The same store also carries Phoenix Desktop's own releases (platform
 manifest per build listing every OS's package, signed with a separate desktop
 key, so neither key can stand in for the other.
 
-The agent packages are built by Resistine-Server-install CI and served at
+The agent packages are built by the Phoenix server-install CI and served at
 https://auth.phoenix.exposed/packages/<platform>/current/ to anyone holding a
 MAS access token (matrix repo, modules/services/phoenix-packages.nix):
 
@@ -36,7 +36,7 @@ from utils.logger import logger
 
 PACKAGES_URL = "https://auth.phoenix.exposed/packages"
 
-# Resistine-Server-install certs/phoenix-packages-minisign.pub (key id
+# server-install certs/phoenix-packages-minisign.pub (key id
 # 0EB5393A52A7533F). Its secret half is the protected MINISIGN_KEY CI variable.
 MINISIGN_PUBLIC_KEY = "RWQ/U6dSOjm1DsQR44jVW5YMhrPoSvAdCYphPZJWrKqrGwMFbP2d3aPc"
 

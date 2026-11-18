@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine. Bundle IDs, launchd labels (`exposed.phoenix.desktop.*`), the macOS support dir (`/Library/Application Support/Phoenix`) and the Wazuh Keychain service are all Phoenix now; the old names survive only as read-and-clean-up migration constants, which must not be deleted. Two deliberate exceptions remain, both Windows and both untestable here: the `ResistineVPN` service name and `%PROGRAMDATA%\Resistine\wireguard` (it holds WireGuard private keys). It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine. Bundle IDs, launchd labels (`exposed.phoenix.desktop.*`), the macOS support dir (`/Library/Application Support/Phoenix`) and the Wazuh Keychain service are all Phoenix now; the old names survive only as read-and-clean-up migration constants, which must not be deleted. On Windows the service is `PhoenixVPN`, its data is in `%PROGRAMDATA%\Phoenix`, the registry key is `HKLM\Software\Phoenix` and the installer AppId is `PhoenixDesktop`; the service migrates `%PROGRAMDATA%\Resistine` at start (`_migrate_legacy_programdata`, which runs as SYSTEM in a user-writable directory: keep its ownership and link checks, and never make it recursive) and the installer retires the old AppId, service and registry key. None of the Windows rename has been run on a real machine yet. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -61,7 +61,7 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
 ```
 
-Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from the server-install repo's `scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
 ### NixOS
 
@@ -89,7 +89,7 @@ Core (non-uninstallable) plugins: Dashboard, Store, Help, Settings. Optional: Lo
 
 ### Platform-Specific Code
 
-Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py` files within each plugin. macOS VPN uses a Swift CLI bridge (`resistine-vpn-cli`) talking to a NetworkExtension via XPC. Windows VPN uses a SYSTEM service (`plugins/vpn/wireguard/windows_vpn_service.py`) reached over token-authenticated localhost IPC — every value received over that IPC is attacker-controllable and must be validated (`config_validation.is_valid_config_name`, path confinement).
+Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py` files within each plugin. macOS VPN uses a Swift CLI bridge (`phoenix-vpn-cli`) talking to a NetworkExtension via XPC. Windows VPN uses a SYSTEM service (`plugins/vpn/wireguard/windows_vpn_service.py`) reached over token-authenticated localhost IPC — every value received over that IPC is attacker-controllable and must be validated (`config_validation.is_valid_config_name`, path confinement).
 
 ### Security conventions (do not regress)
 

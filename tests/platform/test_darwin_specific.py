@@ -149,7 +149,7 @@ class TestIsExtensionEnabledDarwin:
         assert "systemextensionsctl" in cmd
 
     @patch("plugins.vpn.wireguard.vpn_functions_darwin.subprocess.run")
-    def test_checks_resistine_extension_id(self, mock_run):
+    def test_checks_phoenix_extension_id(self, mock_run):
         from plugins.vpn.wireguard import vpn_functions_darwin as vfd
         vfd._extension_cache["timestamp"] = 0
         output = "2 exposed.phoenix.desktop.network-extension [activated enabled]"

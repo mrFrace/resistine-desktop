@@ -5,8 +5,8 @@ checkable ``QAbstractButton`` painted as a sliding pill. Exposes the same
 on/off semantics the original toggle relied on (``get()`` returns 1/0,
 ``select()``/``deselect()`` force a state without firing the callback).
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 

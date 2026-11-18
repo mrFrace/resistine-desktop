@@ -163,7 +163,7 @@ class TestIPCToken:
 class TestWgServiceName:
     def test_format(self):
         from plugins.vpn.wireguard.windows_vpn_service import wg_service_name
-        assert wg_service_name("resistine_default") == "WireGuardTunnel$resistine_default"
+        assert wg_service_name("phoenix_default") == "WireGuardTunnel$phoenix_default"
         assert wg_service_name("wg0") == "WireGuardTunnel$wg0"
 
 

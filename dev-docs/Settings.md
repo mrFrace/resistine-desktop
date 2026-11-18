@@ -15,9 +15,9 @@ The system uses a **hybrid storage strategy** to balance security and usability:
 
 Configuration files are stored in platform-specific directories:
 
-- **macOS**: `~/Library/Application Support/Resistine/`
-- **Linux**: `~/.config/resistine/`
-- **Windows**: `%APPDATA%\Resistine\`
+- **macOS**: `~/Library/Application Support/Phoenix/`
+- **Linux**: `~/.config/phoenix/`
+- **Windows**: `%APPDATA%\Phoenix\`
 
 ## API Reference
 

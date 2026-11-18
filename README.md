@@ -162,7 +162,7 @@ services it drives (ClamAV, the Phoenix SIEM agent, what the VPN needs):
 
 ```nix
 # flake.nix
-inputs.phoenix.url = "git+https://gitlab.phoenix.exposed/francis/Resistine-Desktop?ref=feat/phoenix-rebrand";
+inputs.phoenix.url = "github:DatOneOPGuy/phoenix-desktop";
 
 # in your nixosSystem modules
 imports = [ inputs.phoenix.nixosModules.default ];

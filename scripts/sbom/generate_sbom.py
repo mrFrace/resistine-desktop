@@ -18,7 +18,7 @@ How it works
     version, PURL, license, hashes, dependency edges).
 2.  Merge in ``scripts/sbom/sbom-bundled.json`` — hand-maintained
     CycloneDX components for non-Python things we ship or install
-    (ClamAV, WireGuard, Wazuh, ``resistine-vpn-cli``).
+    (ClamAV, WireGuard, Wazuh, ``phoenix-vpn-cli``).
 3.  Enforce the license deny-list (AGPL / SSPL / BUSL / Commons Clause)
     against every component, including bundled ones. Fail-loud if any
     match, so the build can't ship a license incompatible with our

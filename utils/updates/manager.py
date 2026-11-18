@@ -116,7 +116,7 @@ _scheduler = _UpdateScheduler()
 # ---------------------------------------------------------------------------
 # UPDATES DISABLED — Phoenix migration.
 #
-# The old feed (resistine.github.io) belongs to Resistine and must never be
+# The old feed belongs to the previous vendor and must never be
 # consulted by a Phoenix build: an update from that channel would be code we
 # no longer control. Every public entry point below is a hard no-op until
 # Phoenix-owned update infrastructure (new feed host + fresh signing keys)

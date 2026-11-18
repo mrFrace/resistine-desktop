@@ -115,10 +115,10 @@ class TestFindBinary:
     def test_finds_frozen_binary(self, monkeypatch, tmp_path):
         """When frozen, checks Helpers dir relative to the .app bundle."""
         monkeypatch.setattr("sys.frozen", True, raising=False)
-        app_dir = tmp_path / "Resistine.app" / "Contents"
+        app_dir = tmp_path / "Phoenix.app" / "Contents"
         macos_dir = app_dir / "MacOS"
         macos_dir.mkdir(parents=True)
-        monkeypatch.setattr("sys.executable", str(macos_dir / "Resistine"))
+        monkeypatch.setattr("sys.executable", str(macos_dir / "Phoenix"))
 
         helpers = app_dir / "Helpers"
         helpers.mkdir()
@@ -570,7 +570,7 @@ class TestIsAppBundle:
     def test_is_bundle_via_executable(self, monkeypatch):
         monkeypatch.setattr(
             "sys.executable",
-            "/Applications/Resistine.app/Contents/MacOS/Resistine",
+            "/Applications/Phoenix.app/Contents/MacOS/Phoenix",
         )
         assert clamav_platform_darwin.is_app_bundle() is True
 
@@ -578,7 +578,7 @@ class TestIsAppBundle:
         monkeypatch.setattr("sys.executable", "/usr/bin/python3")
         monkeypatch.setattr(
             "sys.argv",
-            ["/Applications/Resistine.app/Contents/MacOS/main"],
+            ["/Applications/Phoenix.app/Contents/MacOS/main"],
         )
         assert clamav_platform_darwin.is_app_bundle() is True
 
@@ -1771,7 +1771,7 @@ class TestInstallerSelfHeal:
     when the system-level ClamAV install has been wiped from disk.
 
     Regression: a macOS uninstall removes /Library/Application Support/
-    Resistine/clamav but leaves the user-level setup_state=completed, so a
+    Phoenix/clamav but leaves the user-level setup_state=completed, so a
     later reinstall showed "Start Protection" for daemons that crash-loop
     with no config. The plugin must self-heal by re-running setup.
     """

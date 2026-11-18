@@ -219,7 +219,7 @@
 
             meta = {
               description = "Phoenix security desktop: VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh) and AI chat";
-              homepage = "https://github.com/Resistine/Resistine-Desktop";
+              homepage = "https://github.com/DatOneOPGuy/phoenix-desktop";
               license = lib.licenses.gpl2Plus;
               platforms = lib.platforms.linux;
               mainProgram = "phoenix";

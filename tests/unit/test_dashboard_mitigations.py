@@ -342,7 +342,7 @@ class TestDetailText:
     @pytest.mark.parametrize("this_machine", [True, False])
     def test_another_machine_is_never_my_machine(self, this_machine):
         """The AI server reads "this/my machine" as the requester's own agent
-        and only "agent NNN" as naming one (Resistine-LLMAgent-api
+        and only "agent NNN" as naming one (the LLM agent API
         _wants_this_machine, _agent_after_keyword)."""
         for item in (PKG_ITEM, CIS_ITEM, dict(PKG_ITEM, kind="agent_connection")):
             q = mit.question(mit.items_of(card(item))[0], "briareosai", this_machine, "006").lower()

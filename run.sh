@@ -4,8 +4,8 @@
 # If the .venv folder does not exist, it will run the install.sh script first.
 # Usage: ./run.sh
 
-# Author: P3 and the Resistine Team
-# Copyright (c) Resistine 2025
+# Author: P3 and the Phoenix Team
+# Copyright (c) Phoenix 2025-2026
 # Licensed under the GNU General Public License v2 or later
 
 # Print commands and their arguments as they are executed

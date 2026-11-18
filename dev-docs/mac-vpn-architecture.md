@@ -11,10 +11,10 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
 └──────────┬───────────┘
            │
            │ subprocess.run()
-           │ ["resistine-vpn-cli", "start|stop|status", ...]
+           │ ["phoenix-vpn-cli", "start|stop|status", ...]
            ▼
 ┌──────────────────────┐
-│ resistine-vpn-cli    │
+│ phoenix-vpn-cli    │
 │    (Swift CLI)       │
 └──────────┬───────────┘
            │
@@ -41,14 +41,14 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
 - **Location**: `plugins/vpn/`
 - **Files**: `main.py`, `wireguard/vpn_functions_darwin.py`
 - **Purpose**: User interface and VPN management logic
-- **Communication**: Subprocess calls to resistine-vpn-cli using `subprocess.run()`
+- **Communication**: Subprocess calls to phoenix-vpn-cli using `subprocess.run()`
 - **Commands Used**:
-  - `resistine-vpn-cli start <config_path>` - Start VPN with given config
-  - `resistine-vpn-cli stop` - Stop active VPN connection
-  - `resistine-vpn-cli status` - Check VPN connection status
+  - `phoenix-vpn-cli start <config_path>` - Start VPN with given config
+  - `phoenix-vpn-cli stop` - Stop active VPN connection
+  - `phoenix-vpn-cli status` - Check VPN connection status
 
-### 2. resistine-vpn-cli (Swift CLI Tool)
-- **Location**: `wireguard-apple/resistine-vpn-cli/`
+### 2. phoenix-vpn-cli (Swift CLI Tool)
+- **Location**: `wireguard-apple/phoenix-vpn-cli/`
 - **Source File**: `main.swift`
 - **Entitlements**: `entitlements.plist`
 - **Purpose**: Thin wrapper interface to NetworkExtension framework
@@ -90,7 +90,7 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
 
 ### Swift Compilation
 1. Xcode project (`wireguard-apple.xcodeproj`) builds two main targets:
-   - `resistine-vpn-cli` - Swift CLI tool
+   - `phoenix-vpn-cli` - Swift CLI tool
    - `network-extension` - App extension (.appex bundle)
 
 2. CLI is built with embedded entitlements for NetworkExtension access
@@ -100,18 +100,18 @@ The Phoenix VPN uses a clean **CLI-only architecture** for communication between
    ```
    Phoenix.app/Contents/
    ├── MacOS/
-   │   └── resistine-vpn-cli          ← CLI tool
+   │   └── phoenix-vpn-cli          ← CLI tool
    └── PlugIns/
        └── network-extension.appex    ← App extension
    ```
 
 2. Python discovers CLI at runtime:
-   - Frozen app (PyInstaller): `sys.executable` → find Contents/MacOS/resistine-vpn-cli
+   - Frozen app (PyInstaller): `sys.executable` → find Contents/MacOS/phoenix-vpn-cli
    - Development: Not available (run `build-installer.sh` first)
 
 ### Code Signing
-- CLI signed with `-i com.resistine.resistine-vpn-cli` identifier
-- Network Extension has bundle ID: `com.resistine.wireguard-apple.network-extension`
+- CLI signed with `-i exposed.phoenix.phoenix-vpn-cli` identifier
+- Network Extension has bundle ID: `exposed.phoenix.wireguard-apple.network-extension`
 - Both have NetworkExtension and App Sandbox entitlements
 
 ## Communication Flow Examples
@@ -130,7 +130,7 @@ VPNHelper.start_vpn(config_path)
   ↓
 subprocess.run([cli_path, "start", "/path/to/config.conf"])
   ↓
-resistine-vpn-cli start /path/to/config.conf
+phoenix-vpn-cli start /path/to/config.conf
   ↓
 Initialize NetworkExtension tunnel with config
   ↓
@@ -149,7 +149,7 @@ VPNHelper.check_status()
   ↓
 subprocess.run([cli_path, "status"])
   ↓
-resistine-vpn-cli status
+phoenix-vpn-cli status
   ↓
 Query NetworkExtension for tunnel status
   ↓
@@ -163,16 +163,16 @@ Return status: "Connected" / "Disconnected"
 cd /Applications/Phoenix.app/Contents/MacOS
 
 # Check if CLI is available
-./resistine-vpn-cli --help
+./phoenix-vpn-cli --help
 
 # Check VPN status
-./resistine-vpn-cli status
+./phoenix-vpn-cli status
 
 # Start VPN (requires valid config file)
-./resistine-vpn-cli start /path/to/wireguard.conf
+./phoenix-vpn-cli start /path/to/wireguard.conf
 
 # Stop VPN
-./resistine-vpn-cli stop
+./phoenix-vpn-cli stop
 ```
 
 ### Test from Python
@@ -198,7 +198,7 @@ print(f"Stop: {success}, {output}")
 log stream --predicate 'process == "Phoenix"' --level debug
 
 # Look for CLI command execution
-# Expected: "[CLI] Executing: /path/to/resistine-vpn-cli start|stop|status"
+# Expected: "[CLI] Executing: /path/to/phoenix-vpn-cli start|stop|status"
 # Expected: "[CLI] Result: returncode=0, output='...'"
 
 # Should NOT see:
@@ -214,12 +214,12 @@ log stream --predicate 'process == "Phoenix"' --level debug
 - `plugins/vpn/wireguard/vpn_functions_darwin.py` - CLI interface wrapper
 
 ### Swift Code
-- `wireguard-apple/resistine-vpn-cli/main.swift` - CLI implementation
+- `wireguard-apple/phoenix-vpn-cli/main.swift` - CLI implementation
 - `wireguard-apple/network-extension/PacketTunnelProvider.swift` - Extension provider
 
 ### Configuration
 - `Phoenix.entitlements` - App sandbox and NetworkExtension permissions
-- `resistine-vpn-cli/entitlements.plist` - CLI-specific permissions
+- `phoenix-vpn-cli/entitlements.plist` - CLI-specific permissions
 - `network-extension/Info.plist` - Extension configuration
 - `build-installer.sh` - Bundle assembly script
 
@@ -256,10 +256,10 @@ log stream --predicate 'process == "Phoenix"' --level debug
 ## Troubleshooting
 
 ### VPN not starting
-1. Check if `resistine-vpn-cli` exists: `ls -la /Applications/Phoenix.app/Contents/MacOS/resistine-vpn-cli`
+1. Check if `phoenix-vpn-cli` exists: `ls -la /Applications/Phoenix.app/Contents/MacOS/phoenix-vpn-cli`
 2. Check WireGuard installation: `which wg wg-quick`
 3. Check logs: `log stream --predicate 'process == "Phoenix"'`
-4. Test CLI directly: `/Applications/Phoenix.app/Contents/MacOS/resistine-vpn-cli status`
+4. Test CLI directly: `/Applications/Phoenix.app/Contents/MacOS/phoenix-vpn-cli status`
 
 ### CLI not found at runtime
 - Build app with: `./build-installer.sh`

@@ -207,7 +207,7 @@ class TestGetAppVersion:
         monkeypatch.setattr("sys.frozen", True, raising=False)
         macos_dir = tmp_path / "Contents" / "MacOS"
         macos_dir.mkdir(parents=True)
-        monkeypatch.setattr("sys.executable", str(macos_dir / "Resistine"))
+        monkeypatch.setattr("sys.executable", str(macos_dir / "Phoenix"))
 
         import plistlib
         plist_path = tmp_path / "Contents" / "Info.plist"
@@ -478,7 +478,7 @@ class TestCheckForUpdates:
 class TestDisconnectVpn:
     def test_darwin(self, settings_plugin):
         mock_mgr = MagicMock()
-        mock_mgr.get_active_config_path.return_value = "/tmp/resistine.conf"
+        mock_mgr.get_active_config_path.return_value = "/tmp/phoenix.conf"
         with patch("platform.system", return_value="Darwin"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_darwin.stop_vpn",
@@ -494,7 +494,7 @@ class TestDisconnectVpn:
                  return_value=mock_mgr,
              ):
             settings_plugin._disconnect_vpn()
-            mock_stop.assert_called_once_with("/tmp/resistine.conf")
+            mock_stop.assert_called_once_with("/tmp/phoenix.conf")
 
     def test_darwin_no_active_config_still_stops(self, settings_plugin):
         """If no config is registered, still call stop_vpn with a sentinel
@@ -529,7 +529,7 @@ class TestDisconnectVpn:
 
     def test_linux(self, settings_plugin):
         mock_mgr = MagicMock()
-        mock_mgr.get_active_config_path.return_value = "/tmp/resistine.conf"
+        mock_mgr.get_active_config_path.return_value = "/tmp/phoenix.conf"
         with patch("platform.system", return_value="Linux"), \
              patch(
                  "plugins.vpn.wireguard.vpn_functions_linux.stop_vpn",
@@ -545,7 +545,7 @@ class TestDisconnectVpn:
                  return_value=mock_mgr,
              ):
             settings_plugin._disconnect_vpn()
-            mock_stop.assert_called_once_with("/tmp/resistine.conf")
+            mock_stop.assert_called_once_with("/tmp/phoenix.conf")
 
     def test_failure_logs_warning(self, settings_plugin):
         with patch("platform.system", side_effect=RuntimeError("boom")):
@@ -657,7 +657,7 @@ class TestClearUserData:
         assert isolated_settings.get("vpn", "public_key") is None
 
     def test_clears_vpn_namespace(self, settings_plugin, isolated_settings):
-        isolated_settings.set("vpn", "active_config", "resistine")
+        isolated_settings.set("vpn", "active_config", "phoenix")
         isolated_settings.set("vpn", "onboarding_complete", True)
 
         with patch("platform.system", return_value="Darwin"), \
@@ -674,7 +674,7 @@ class TestClearUserData:
     def test_removes_conf_files(self, settings_plugin, isolated_settings, tmp_path):
         wg_dir = tmp_path / "wireguard"
         wg_dir.mkdir()
-        (wg_dir / "resistine.conf").write_text("[Interface]")
+        (wg_dir / "phoenix.conf").write_text("[Interface]")
         (wg_dir / "custom.conf").write_text("[Interface]")
         (wg_dir / "keepme.txt").write_text("not a conf")
 
@@ -686,7 +686,7 @@ class TestClearUserData:
              ):
             settings_plugin._clear_user_data()
 
-        assert not (wg_dir / "resistine.conf").exists()
+        assert not (wg_dir / "phoenix.conf").exists()
         assert not (wg_dir / "custom.conf").exists()
         assert (wg_dir / "keepme.txt").exists()
 

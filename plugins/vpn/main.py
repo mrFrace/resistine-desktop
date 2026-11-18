@@ -121,16 +121,8 @@ wireguard_folder = _resolve_wireguard_folder()
 
 
 def _env(name: str, default: str = "") -> str:
-    """Read PHOENIX_<name>, falling back to the pre-rename RESISTINE_<name>.
-
-    The fallback is kept so a developer who still has the old variable
-    exported does not silently get the default instead.
-    """
-    return (
-        os.environ.get(f"PHOENIX_{name}")
-        or os.environ.get(f"RESISTINE_{name}")
-        or default
-    )
+    """Read the PHOENIX_<name> environment variable."""
+    return os.environ.get(f"PHOENIX_{name}") or default
 
 
 # DNS Configuration - used as the connectivity-check target and as the DNS

@@ -63,11 +63,11 @@ Core (non-uninstallable) plugins: Dashboard, Store, Help, Settings. Optional: Lo
 
 ### Platform-Specific Code
 
-Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py` files within each plugin. The VPN plugin (`plugins/vpn/`) has three separate platform modules. macOS VPN uses a Swift CLI bridge (`resistine-vpn-cli`) that communicates with a NetworkExtension via XPC.
+Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py` files within each plugin. The VPN plugin (`plugins/vpn/`) has three separate platform modules. macOS VPN uses a Swift CLI bridge (`phoenix-vpn-cli`) that communicates with a NetworkExtension via XPC.
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Resistine` (macOS), `%APPDATA%/Resistine` (Windows), `~/.config/resistine` (Linux).
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux).
 
 ### GUI
 
@@ -84,7 +84,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### External Artifacts
 
-VPN CLI binary downloaded from `Phoenix/resistine-vpn-macos` CI. ClamAV binaries from `Resistine/ClamAV-Mac` CI. Both are fetched during the build process via `gh` CLI.
+VPN CLI binary downloaded from `DatOneOPGuy/phoenix-vpn-macos` CI. ClamAV binaries from `DatOneOPGuy/phoenix-clamav-mac` CI. Both are fetched during the build process via `gh` CLI.
 
 ## Key Conventions
 

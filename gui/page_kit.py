@@ -14,8 +14,8 @@ No nested cards. A screen is a left-aligned column with even margins:
 Icons are Lucide line icons in ``resources/icons/ui`` (:func:`line_icon`).
 The QSS for the object names used here lives in ``gui/theme.py``.
 
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 

@@ -12,7 +12,7 @@ Phoenix is a cross-platform security application with a **Python/CustomTkinter U
 │  Contents/                                                      │
 │  ├── MacOS/                                                     │
 │  │   ├── Phoenix             ← Python executable              │
-│  │   └── resistine-vpn-cli     ← Swift VPN Controller           │
+│  │   └── phoenix-vpn-cli     ← Swift VPN Controller           │
 │  ├── Frameworks/               ← Python framework + deps        │
 │  ├── Resources/                                                 │
 │  │   └── plugins/              ← Python plugin modules          │
@@ -28,7 +28,7 @@ The Python UI communicates with privileged Swift components via **subprocess cal
 ```
 Python Plugin (UI)
        │
-       │ subprocess.run(["resistine-vpn-cli", "start|stop|status"])
+       │ subprocess.run(["phoenix-vpn-cli", "start|stop|status"])
        ▼
 Swift CLI Tool (Phoenix.app/Contents/MacOS/)
        │
@@ -57,7 +57,7 @@ macOS requires strict code signing for privileged components. Here's the signing
 
 ```
 Phoenix.app (signed with Developer ID Application)
-├── resistine-vpn-cli (signed with Developer ID + provisioning profile)
+├── phoenix-vpn-cli (signed with Developer ID + provisioning profile)
 └── network-extension.appex (signed with Developer ID + provisioning profile)
 ```
 
@@ -103,7 +103,7 @@ exposed.phoenix.desktop.vpnxpc                     ← CLI Tool (reusing ID)
 exposed.phoenix.desktop.clamonacc                  ← ClamAV on-access helper
 ```
 
-Until 2026-11-12 these were `com.resistine.desktop.*`. The Swift VPN build
+The Swift VPN build
 must use the same IDs: `build-distribution.sh` refuses a network extension
 whose `CFBundleIdentifier` is not `exposed.phoenix.desktop.network-extension`.
 
@@ -113,7 +113,7 @@ whose `CFBundleIdentifier` is not `exposed.phoenix.desktop.network-extension`.
 
 2. **Create App ID** for your new component:
    - Click "+" → "App IDs" → "App"
-   - Enter Bundle ID: `com.resistine.wireguard-apple.your-new-extension`
+   - Enter Bundle ID: `exposed.phoenix.wireguard-apple.your-new-extension`
    - Enable required capabilities (e.g., "System Extension", "Network Extension", etc.)
 
 3. **Enable specific capability types** if required:
@@ -155,7 +155,7 @@ Create an entitlements file for your new component:
     <!-- App Groups for IPC between components -->
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>$(TeamIdentifierPrefix)com.resistine.shared</string>
+        <string>$(TeamIdentifierPrefix)exposed.phoenix.shared</string>
     </array>
     
     <!-- Your specific capability -->
@@ -313,7 +313,7 @@ security cms -D -i /path/to/embedded.provisionprofile | grep -A1 "Name"
 | Python UI | `phoenix-desktop/` | `Phoenix.app/Contents/MacOS/` |
 | Python plugins | `plugins/` | `Phoenix.app/Contents/Resources/plugins/` |
 | Swift project | `vpn-apple/` | — |
-| CLI tool | `resistine-vpn-cli/` | `Phoenix.app/Contents/MacOS/` |
+| CLI tool | `phoenix-vpn-cli/` | `Phoenix.app/Contents/MacOS/` |
 | Network Extension | `network-extension/` | `Phoenix.app/Contents/PlugIns/` |
 
 ---

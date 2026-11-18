@@ -2,8 +2,8 @@
 # @file plugins/login/main.py
 # @namespace plugins.login.main
 # Description: Login plugin (PyQt6) — Phoenix (Matrix / MAS) account sign-in.
-# Author: Sherwin and the Resistine Team
-# Copyright: Resistine (c) 2025
+# Author: Sherwin and the Phoenix Team
+# Copyright: Phoenix (c) 2025-2026
 # Licensed under the GNU General Public License v2 or later
 
 import os

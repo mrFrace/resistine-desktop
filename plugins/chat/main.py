@@ -103,7 +103,7 @@ def _tls_verify() -> str | bool:
     2026-11-17, verified against the live endpoint. Do not reintroduce it:
     while it was trusted, any certificate it issued was accepted here.
     """
-    ca = os.environ.get("PHOENIX_CA_BUNDLE") or os.environ.get("RESISTINE_CA_BUNDLE")
+    ca = os.environ.get("PHOENIX_CA_BUNDLE")
     if ca and os.path.isfile(ca):
         return ca
     ca = os.path.join(
@@ -615,7 +615,7 @@ class _ChatInput(QTextEdit):
 # ---------------------------------------------------------------------------
 
 # The AI server recognises this opening and answers from the pasted alert
-# without looking anything up (Resistine-LLMAgent-api, alert_explain.py).
+# without looking anything up (the LLM agent API's alert_explain.py).
 ALERT_QUESTION = ("Explain this Phoenix SIEM alert in plain words: what happened, "
                   "how serious it is, and what I should do now.")
 

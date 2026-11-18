@@ -20,6 +20,6 @@ Record significant architectural choices and their rationale here.
 
 ### 2026-03-30 — macOS VPN via Swift CLI bridge + NetworkExtension
 - **Context:** macOS requires NetworkExtension for system VPN tunnels
-- **Decision:** Swift CLI (`resistine-vpn-cli`) communicates with NetworkExtension via XPC
+- **Decision:** Swift CLI (`phoenix-vpn-cli`) communicates with NetworkExtension via XPC
 - **Rationale:** Python can't directly use NetworkExtension; CLI bridge keeps Python side simple
 - **Consequences:** Extra build artifact, 5s polling gap for status sync

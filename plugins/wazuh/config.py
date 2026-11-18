@@ -3,8 +3,8 @@ Wazuh Agent Plugin — Centralized Configuration
 All changeable values (manager address, install paths) live here. The agent
 packages themselves are the Phoenix builds from auth.phoenix.exposed, see
 plugins/wazuh/agent/phoenix_packages.py.
-Author: Resistine Team
-Copyright (c) Resistine 2025
+Author: Phoenix Team
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -23,7 +23,7 @@ WAZUH_PROTOCOL = "tcp"
 WAZUH_MANAGER_ENDPOINT = f"{WAZUH_MANAGER}:{WAZUH_MANAGER_PORT}"
 
 # --- Paths ---
-# The Phoenix macOS agent (Resistine-Server-install build_agent_macos.sh) moves
+# The Phoenix macOS agent (server-install build_agent_macos.sh) moves
 # upstream's /Library/Ossec here; its pkg id and launchd label stay com.wazuh.*.
 WAZUH_INSTALL_DIR = "/Library/Phoenix"
 WAZUH_LAUNCHD_PLIST = "/Library/LaunchDaemons/com.wazuh.agent.plist"
@@ -56,7 +56,7 @@ def get_wazuh_env_file():
     if WAZUH_ENV_FILE:
         return WAZUH_ENV_FILE
     if _private_env_file is None or not os.path.isdir(os.path.dirname(_private_env_file)):
-        private_dir = tempfile.mkdtemp(prefix="resistine-wazuh-")
+        private_dir = tempfile.mkdtemp(prefix="phoenix-wazuh-")
         _private_env_file = os.path.join(private_dir, "wazuh_envs")
     return _private_env_file
 

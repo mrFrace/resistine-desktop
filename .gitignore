@@ -106,8 +106,6 @@ logs/
 *.bak
 *.backup
 installer_temp/
-Resistine AI-*.dmg
-Resistine AI-*.pkg
 
 # Downloaded CI artifacts (built by separate repos)
 scripts/build/clamav-artifacts/
@@ -137,7 +135,7 @@ libraries/*/  # Exclude all library directories
 htmlcov/
 .pytest_cache/
 
-# VPN Apple project (built via CI artifacts from resistine-vpn-macos)
+# VPN Apple project (built via CI artifacts from phoenix-vpn-macos)
 vpn-apple/
 
 # Apple Signing & Provisioning (Secrets)
@@ -150,8 +148,6 @@ provisioning-profiles/
 # Claude Code
 .claude/
 
-# GitHub Pages submodule / site
-resistine.github.io/
 
 # Inno Setup output
 dist/installer/
