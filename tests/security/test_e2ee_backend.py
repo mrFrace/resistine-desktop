@@ -28,3 +28,49 @@ def test_libolm_is_not_installed():
         "run on vodozemac; remove python-olm from the environment and from any "
         "frozen build."
     )
+
+
+class TestChatCaBundleHasNoResistineRoot:
+    """The chat TLS bundle must not trust the old company's internal root.
+
+    That bundle is what plugins/chat/main.py hands httpx as ``verify``. While
+    "rootCA Resistine" was pinned in it, any certificate issued by that CA was
+    accepted for dashboard.phoenix.exposed, so whoever held its key could
+    terminate the chat connection. It was removed on 2026-11-17 after the live
+    endpoint was confirmed to present a Cloudflare Origin certificate.
+    """
+
+    def _subjects(self):
+        """Subjects of the certs actually trusted by the bundle.
+
+        Parsed, not grepped: the file's own comments name the removed root,
+        and a comment trusts nothing. Parsed in-process rather than through
+        openssl because conftest stubs subprocess for the whole suite.
+        """
+        import os
+        from cryptography import x509
+        from utils.functions import get_resource_path
+        path = get_resource_path(os.path.join("resources", "certs", "chat-ca-bundle.pem"))
+        with open(path, "rb") as fh:
+            pem = fh.read()
+        return [c.subject.rfc4514_string() for c in x509.load_pem_x509_certificates(pem)]
+
+    def test_resistine_root_absent(self):
+        subjects = self._subjects()
+        assert subjects, "bundle parsed to zero certificates"
+        for subject in subjects:
+            assert "Resistine" not in subject, (
+                f"the old internal root is trusted again: {subject}"
+            )
+
+    def test_cloudflare_origin_roots_still_present(self):
+        """Removing the wrong cert would break chat instead of securing it."""
+        subjects = self._subjects()
+        assert len(subjects) == 2, subjects
+        assert all("CloudFlare" in s for s in subjects), subjects
+
+    def test_no_resistine_ca_file_ships(self):
+        import os
+        from utils.functions import get_resource_path
+        stale = get_resource_path(os.path.join("resources", "certs", "resistine-rootCA.pem"))
+        assert not os.path.exists(stale), stale

@@ -78,7 +78,6 @@ utils/email-settings.txt
 *.pem
 # Public CA certificates (no private keys) — bundled so the chat plugin can
 # verify the dashboard cert. Exempted from the *.pem secret guard.
-!resources/certs/resistine-rootCA.pem
 !resources/certs/chat-ca-bundle.pem
 *.p12
 *.env

@@ -91,35 +91,27 @@ _ARRIVE_MS = 200
 def _tls_verify() -> str | bool:
     """httpx ``verify`` value for the HTTPS chat endpoint.
 
-    The dashboard's certificate is signed either by the internal Resistine
-    root CA (leaf-only, no intermediate) or by the Cloudflare Origin CA
-    (*.phoenix.exposed). Neither is in certifi, so the app ships both roots
+    The dashboard's certificate is signed by the Cloudflare Origin CA
+    (*.phoenix.exposed), which is not in certifi, so the app ships that root
     in ``resources/certs/chat-ca-bundle.pem``. Resolution order:
-    PHOENIX_CA_BUNDLE env var, a ``certs/resistine-rootCA.pem`` override in
-    the config dir, then the bundled CA file. If all are missing (shouldn't
+    PHOENIX_CA_BUNDLE env var, a ``certs/chat-ca-bundle.pem`` override in the
+    config dir, then the bundled CA file. If all are missing (shouldn't
     happen -- the bundle ships in resources/), fall back to standard
     verification rather than disabling it.
 
-    OPEN ITEM -- the last Resistine trust dependency in the app. The bundled
-    chat-ca-bundle.pem still contains "rootCA Resistine" (O=Resistine DE,
-    expires 2027-07-20). While it is trusted here, a certificate issued by
-    that CA is accepted for the chat endpoint, so whoever holds its key can
-    terminate this connection. It has not been removed because it is not
-    known whether dashboard.phoenix.exposed still presents a cert signed by
-    it -- the host is only reachable over the VPN, so it could not be
-    checked. Once the endpoint is confirmed to serve a Cloudflare Origin (or
-    other Phoenix-controlled) certificate, drop that root from the bundle
-    and delete resources/certs/resistine-rootCA.pem.
+    The old company's internal root was removed from the bundle on
+    2026-11-17, verified against the live endpoint. Do not reintroduce it:
+    while it was trusted, any certificate it issued was accepted here.
     """
     ca = os.environ.get("PHOENIX_CA_BUNDLE") or os.environ.get("RESISTINE_CA_BUNDLE")
     if ca and os.path.isfile(ca):
         return ca
     ca = os.path.join(
-        settings.get_config_dir(), "certs", "resistine-rootCA.pem")
+        settings.get_config_dir(), "certs", "chat-ca-bundle.pem")
     if os.path.isfile(ca):
         return ca
     from utils.functions import get_resource_path
-    for name in ("chat-ca-bundle.pem", "resistine-rootCA.pem"):
+    for name in ("chat-ca-bundle.pem",):
         ca = get_resource_path(os.path.join("resources", "certs", name))
         if os.path.isfile(ca):
             return ca
