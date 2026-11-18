@@ -1175,7 +1175,6 @@ class Plugin(BasePlugin):
                     "write_configs": "Writing configuration files...",
                     "set_permissions": "Setting permissions...",
                     "seed_db": "Copying signature database...",
-                    "cleanup_legacy": "Cleaning up legacy daemons...",
                     "load_daemons": "Loading daemons...",
                 }
                 label = step_labels.get(step, f"Running: {step}...")

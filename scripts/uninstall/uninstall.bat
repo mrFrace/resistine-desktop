@@ -9,9 +9,6 @@ set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
 set SERVICE_NAME=PhoenixVPN
-:: Names used before the rename, so an old install is removed as well.
-set LEGACY_SERVICE_NAME=ResistineVPN
-set LEGACY_PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
 
 :: Project root is always two levels up from scripts\uninstall\.
 for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
@@ -23,12 +20,9 @@ if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wi
 set VENV_DIR=%PROJECT_ROOT%\.venv
 set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set APPDATA_DIR=%APPDATA%\Phoenix
-set LEGACY_APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
 set PROGRAMDATA_DIR=%PROGRAMDATA%\Phoenix
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
-set SHORTCUT=%USERPROFILE%\Desktop\Resistine VPN.lnk
-set SHORTCUT2=%USERPROFILE%\Desktop\Resistine.lnk
 set SHORTCUT3=%USERPROFILE%\Desktop\Phoenix VPN.lnk
 set SHORTCUT4=%USERPROFILE%\Desktop\Phoenix.lnk
 set WG_EXE=%PROGRAMFILES%\WireGuard\wireguard.exe
@@ -48,23 +42,17 @@ echo.
 
 :: ---- Kill all Phoenix processes ----
 echo [1/6] Stopping Phoenix processes...
-powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' -or $_.CommandLine -like '*main.py*' -or $_.CommandLine -like '*Resistine*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" | Where-Object { $_.CommandLine -like '*tray.py*' -or $_.CommandLine -like '*main.py*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>&1
 taskkill /F /IM "Phoenix.exe" >nul 2>&1
-taskkill /F /IM "Resistine.exe" >nul 2>&1
 echo       OK
 
 :: ---- Remove startup registry entries (HKCU) ----
 echo [2/6] Removing user startup entries...
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
 echo       OK
 
 :: ---- Remove desktop shortcuts ----
 echo [3/6] Removing desktop shortcuts...
-if exist "%SHORTCUT%" del "%SHORTCUT%" >nul 2>&1
-if exist "%SHORTCUT2%" del "%SHORTCUT2%" >nul 2>&1
 if exist "%SHORTCUT3%" del "%SHORTCUT3%" >nul 2>&1
 if exist "%SHORTCUT4%" del "%SHORTCUT4%" >nul 2>&1
 echo       OK
@@ -77,7 +65,6 @@ if exist "%APPDATA_DIR%" (
 ) else (
     echo       Not found: %APPDATA_DIR%
 )
-if exist "%LEGACY_APPDATA_DIR%" rmdir /s /q "%LEGACY_APPDATA_DIR%"
 echo       OK
 
 :: ---- Remove venv ----
@@ -201,13 +188,6 @@ if exist "%WG_EXE%" (
 echo       OK
 
 :: ---- Stop and remove the VPN service ----
-sc query %LEGACY_SERVICE_NAME% >nul 2>&1
-if not errorlevel 1 (
-    echo Removing pre-rename service %LEGACY_SERVICE_NAME%...
-    sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
-    timeout /t 3 /nobreak >nul
-    sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
-)
 echo Removing %SERVICE_NAME% service...
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% neq 0 goto :vpn_service_not_present
@@ -279,7 +259,6 @@ sc stop Sysmon64 >nul 2>&1
 timeout /t 3 /nobreak >nul
 :: Use Sysmon's own uninstall if available
 set "SYSMON_EXE=%PROGRAMFILES%\Phoenix Sysmon\Sysmon64.exe"
-if not exist "%SYSMON_EXE%" set "SYSMON_EXE=%PROGRAMFILES%\Resistine\Sysmon\Sysmon64.exe"
 if exist "%SYSMON_EXE%" (
     "%SYSMON_EXE%" -u force >nul 2>&1
 ) else (
@@ -295,27 +274,18 @@ echo       Not found, skipping
 echo Removing stored credentials...
 if defined SYS_PYTHON (
     "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('phoenix-master-key', 'master-key')" >nul 2>&1
-    "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-master-key', 'master-key')" >nul 2>&1
-    "%SYS_PYTHON%" -c "import keyring; keyring.delete_password('resistine-updates', 'resistine-updates')" >nul 2>&1
 )
 cmdkey /delete:phoenix-master-key >nul 2>&1
-cmdkey /delete:resistine-master-key >nul 2>&1
-cmdkey /delete:resistine-updates >nul 2>&1
 echo       OK
 
 :: ---- Remove startup registry entries (HKLM, requires admin) ----
 echo Removing system startup and registry entries...
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Phoenix" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
 
-:: Remove the app's registry keys (and the pre-rename ones)
+:: Remove the app's registry keys
 reg delete "HKLM\Software\Phoenix" /f >nul 2>&1
 reg delete "HKCU\Software\Phoenix" /f >nul 2>&1
-reg delete "HKLM\Software\Resistine" /f >nul 2>&1
-reg delete "HKCU\Software\Resistine" /f >nul 2>&1
 echo       OK
 
 :: ---- Remove ProgramData ----
@@ -326,23 +296,12 @@ if exist "%PROGRAMDATA_DIR%" (
 ) else (
     echo       Not found: %PROGRAMDATA_DIR%
 )
-if exist "%LEGACY_PROGRAMDATA_DIR%" (
-    rmdir /s /q "%LEGACY_PROGRAMDATA_DIR%"
-    echo       Removed: %LEGACY_PROGRAMDATA_DIR%
-)
 
 :: Remove Sysmon directory
 set "SYSMON_DIR=%PROGRAMFILES%\Phoenix Sysmon"
 if exist "%SYSMON_DIR%" (
     rmdir /s /q "%SYSMON_DIR%"
     echo       Removed: %SYSMON_DIR%
-)
-
-:: Same for the location a pre-rename install used
-set "LEGACY_PF_DIR=%PROGRAMFILES%\Resistine"
-if exist "%LEGACY_PF_DIR%\Sysmon" rmdir /s /q "%LEGACY_PF_DIR%\Sysmon"
-if exist "%LEGACY_PF_DIR%" (
-    rmdir "%LEGACY_PF_DIR%" >nul 2>&1
 )
 echo       OK
 

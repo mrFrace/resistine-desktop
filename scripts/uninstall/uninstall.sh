@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Phoenix (formerly Resistine) — Full Uninstaller (Linux)
+# Phoenix — Full Uninstaller (Linux)
 # Removes the SIEM agent, VPN tunnels/configs, antivirus daemons,
 # privileged helpers, stored secrets, and all user data.
 #
@@ -49,9 +49,8 @@ USER_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 # Honor XDG_CONFIG_HOME as the app does (utils/settings.get_config_dir). It is
 # preserved across the sudo re-exec via `sudo -E`; otherwise fall back to the
 # resolved home's .config (correct for the vast majority of setups).
-# Both the Phoenix dir and the pre-rebrand resistine one.
 CONFIG_BASE="${XDG_CONFIG_HOME:-$USER_HOME/.config}"
-CONFIG_DIRS="$CONFIG_BASE/phoenix $CONFIG_BASE/resistine"
+CONFIG_DIRS="$CONFIG_BASE/phoenix"
 
 # Project root: two levels up from scripts/uninstall/.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -59,7 +58,6 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # The upstream 4.x agent the app used to install, and the Phoenix 5.0 package.
 WAZUH_DIRS="/var/ossec /opt/phoenix-agent"
-HELPER_DIR="/usr/local/lib/resistine"
 
 info()  { printf '  \033[0;36m%s\033[0m\n' "$*"; }
 ok()    { printf '  \033[0;32m%s\033[0m\n' "$*"; }
@@ -94,12 +92,12 @@ fi
 # ============================================================
 
 # ---- 1. Stop the running app ----
-step "[1/7] Stopping Phoenix app processes..."
+step "[1/6] Stopping Phoenix app processes..."
 pkill -TERM -u "$REAL_USER" -f "[m]ain.py" 2>/dev/null && ok "Signalled app to stop" || info "No running app found"
 sleep 1
 
 # ---- 2. VPN / WireGuard teardown ----
-step "[2/7] Removing VPN tunnels and configs..."
+step "[2/6] Removing VPN tunnels and configs..."
 for CONFIG_DIR in $CONFIG_DIRS; do
     WG_DIR="$CONFIG_DIR/wireguard"
     [ -d "$WG_DIR" ] || continue
@@ -110,13 +108,13 @@ for CONFIG_DIR in $CONFIG_DIRS; do
         rm -f "/etc/wireguard/${iface}.conf"
     done
 done
-# Bring down a stray 'resistine' interface in case no config remained.
-wg-quick down resistine 2>/dev/null || true
-rm -f /etc/wireguard/resistine.conf
+# Bring down a stray 'phoenix' interface in case no config remained.
+wg-quick down phoenix 2>/dev/null || true
+rm -f /etc/wireguard/phoenix.conf
 ok "VPN teardown done"
 
 # ---- 3. Wazuh SIEM agent removal ----
-step "[3/7] Removing SIEM (Wazuh) agent..."
+step "[3/6] Removing SIEM (Wazuh) agent..."
 wazuh_present=""
 for d in $WAZUH_DIRS; do [ -d "$d" ] && wazuh_present=1; done
 if [ -n "$wazuh_present" ] || systemctl list-unit-files 2>/dev/null | grep -q '^wazuh-agent' \
@@ -160,24 +158,15 @@ else
 fi
 
 # ---- 4. ClamAV antivirus daemons ----
-step "[4/7] Deactivating antivirus (ClamAV) daemons..."
+step "[4/6] Deactivating antivirus (ClamAV) daemons..."
 for svc in clamd@scan clamav-daemon clamav-freshclam clamav-clamonacc; do
     systemctl disable --now "$svc" 2>/dev/null || true
 done
 ok "ClamAV services deactivated (packages left installed)"
 
-# ---- 5. Privileged helpers + polkit policies ----
-step "[5/7] Removing privileged helpers..."
-rm -f "$HELPER_DIR/resistine-vpn-helper" \
-      "$HELPER_DIR/resistine-wazuh-helper" \
-      /usr/share/polkit-1/actions/com.resistine.vpn.control.policy \
-      /usr/share/polkit-1/actions/com.resistine.wazuh.control.policy
-rmdir "$HELPER_DIR" 2>/dev/null || true
-ok "Helpers and polkit policies removed"
-
 # ---- 6. Desktop integration ----
-step "[6/7] Removing desktop entries..."
-for id in phoenix resistine; do
+step "[5/6] Removing desktop entries..."
+for id in phoenix; do
     rm -f "$USER_HOME/.local/share/applications/$id.desktop" \
           "$USER_HOME/.config/autostart/$id.desktop" \
           "/usr/share/applications/$id.desktop"
@@ -185,17 +174,17 @@ done
 ok "Desktop entries removed (if any)"
 
 # ---- 7. User data (secrets + config) — run as the real user ----
-step "[7/7] Removing user data and secrets..."
+step "[6/6] Removing user data and secrets..."
 run_as_user() { sudo -u "$REAL_USER" env HOME="$USER_HOME" "$@"; }
 
 # Keyring master key (best-effort; secret-tool from libsecret).
 if command -v secret-tool >/dev/null 2>&1; then
-    for svc in phoenix-master-key resistine-master-key; do
+    for svc in phoenix-master-key; do
         run_as_user secret-tool clear service "$svc" username master-key 2>/dev/null \
             && ok "Removed keyring master key $svc" || info "No keyring entry $svc (or no active keyring)"
     done
 else
-    info "secret-tool not available — skipping keyring (delete 'phoenix-master-key' / 'resistine-master-key' manually if needed)"
+    info "secret-tool not available — skipping keyring (delete 'phoenix-master-key' manually if needed)"
 fi
 
 # App config dir (settings, secrets, VPN keys, Wazuh key backup).

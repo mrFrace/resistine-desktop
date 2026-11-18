@@ -68,7 +68,6 @@ LINUX_WAZUH_DIR = "/opt/phoenix-agent"  # where the Phoenix .deb this app instal
 # agent packages.
 LINUX_WAZUH_DIR_CANDIDATES = (
     "/var/ossec",
-    "/opt/resistine",
     "/opt/phoenix-agent",
     "/opt/agent-phoenix",
 )

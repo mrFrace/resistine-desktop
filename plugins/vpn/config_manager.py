@@ -18,7 +18,7 @@ from utils.logger import logger
 
 PHOENIX_CONFIG_NAME = "phoenix"
 # Earlier names of the default config, renamed to PHOENIX_CONFIG_NAME once.
-LEGACY_CONFIG_NAMES = ("resistine", "wg0")
+LEGACY_CONFIG_NAMES = ("wg0",)
 SETTINGS_NAMESPACE = "vpn"
 
 
@@ -208,8 +208,7 @@ class VPNConfigManager:
     def migrate_legacy_config(self):
         """One-time rename of the default config to ``phoenix.conf``.
 
-        Earlier builds called it ``resistine.conf`` (and before that
-        ``wg0.conf``). The file, its registry entry and the active-config
+        Early builds called it ``wg0.conf``. The file, its registry entry and the active-config
         setting move to the new name. Returns True if something was renamed.
         """
         new_path = os.path.join(self.wireguard_folder, f"{PHOENIX_CONFIG_NAME}.conf")

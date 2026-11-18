@@ -36,9 +36,6 @@ optdepends=(
 	'gnome-keyring: Secret Service keyring for stored secrets (or kwallet / keepassxc)'
 	'libarchive: bsdtar to install the SIEM agent'
 )
-provides=('resistine')
-conflicts=('resistine')
-replaces=('resistine')
 # PyInstaller files must ship untouched.
 options=('!strip' '!debug' '!emptydirs')
 # The Phoenix repository (packaging/linux/repo): its key goes into pacman's

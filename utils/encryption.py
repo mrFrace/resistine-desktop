@@ -63,32 +63,11 @@ def is_keyring_secure():
 
 
 KEYRING_SERVICE = "phoenix"
-# Pre-rebrand service name. Read once to migrate existing installs, never written.
-LEGACY_KEYRING_SERVICE = "resistine"
 
 
 def _keyring_get(name):
-    """Read ``name`` from the Phoenix keyring service.
-
-    An entry that only exists under the pre-rebrand ``resistine`` service is
-    copied to ``phoenix``, read back to verify, and only then deleted from
-    the old service. If the copy fails, the old value is still returned.
-    """
-    value = keyring.get_password(KEYRING_SERVICE, name)
-    if value is not None:
-        return value
-    legacy = keyring.get_password(LEGACY_KEYRING_SERVICE, name)
-    if legacy is None:
-        return None
-    text = legacy.decode() if isinstance(legacy, bytes) else legacy
-    try:
-        keyring.set_password(KEYRING_SERVICE, name, text)
-        if keyring.get_password(KEYRING_SERVICE, name) == text:
-            keyring.delete_password(LEGACY_KEYRING_SERVICE, name)
-            logger.info(f"Moved keyring entry {name} from {LEGACY_KEYRING_SERVICE} to {KEYRING_SERVICE}.")
-    except Exception as e:  # noqa: BLE001 - keep working with the old entry
-        logger.warning(f"Could not move keyring entry {name} to {KEYRING_SERVICE}: {e}")
-    return legacy
+    """Read ``name`` from the Phoenix keyring service."""
+    return keyring.get_password(KEYRING_SERVICE, name)
 
 
 def get_or_create_key():

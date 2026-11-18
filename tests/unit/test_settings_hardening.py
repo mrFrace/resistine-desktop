@@ -175,11 +175,3 @@ class TestKeyringBytes:
         assert s._get_master_key() == key
         assert s._get_fernet().decrypt(Fernet(key).encrypt(b"x")) == b"x"
 
-    def test_legacy_master_key_bytes_from_keyring(self, tmp_config_dir, mock_keyring):
-        import utils.settings as s
-
-        mock_kr, store = mock_keyring
-        key = Fernet.generate_key()
-        store[(s.LEGACY_MASTER_KEY_SERVICE, s.MASTER_KEY_USERNAME)] = key
-        assert s._get_master_key() == key
-        assert store[(s.MASTER_KEY_SERVICE, s.MASTER_KEY_USERNAME)] == key.decode()

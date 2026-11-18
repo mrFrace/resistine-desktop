@@ -283,23 +283,13 @@ def _run_privileged(cmds):
 
 def _remove_clamav_daemons(admin_cmds):
     """Unregister ClamAV daemons and collect admin commands for cleanup."""
-    # Current location first, then the pre-rename one an old install may
-    # still have if its postinstall migration never ran.
-    _SYSTEM_CLAMAV_DIRS = (
-        "/Library/Application Support/Phoenix/clamav",
-        "/Library/Application Support/Resistine/clamav",
-    )
+    _SYSTEM_CLAMAV_DIRS = ("/Library/Application Support/Phoenix/clamav",)
 
     # 1. SMAppService unregistration (no admin needed)
     _smappservice_plist_names = [
         "exposed.phoenix.desktop.freshclam.plist",
         "exposed.phoenix.desktop.clamonacc.plist",
         "exposed.phoenix.desktop.clamd.plist",
-        "com.resistine.desktop.freshclam.plist",
-        "com.resistine.desktop.clamonacc.plist",
-        "com.resistine.desktop.clamd.plist",
-        "com.resistine.clamonacc.plist",
-        "com.resistine.clamd.plist",
     ]
     try:
         from ServiceManagement import SMAppService
@@ -354,16 +344,11 @@ def _remove_clamav_daemons(admin_cmds):
     # before we tear down the launchd plists they're bound to.
     admin_cmds.append("sleep 0.2")
 
-    # Collect admin commands for legacy plist cleanup
+    # Plists a pre-SMAppService install copied into /Library/LaunchDaemons
     legacy_plists = [
         "/Library/LaunchDaemons/exposed.phoenix.desktop.clamonacc.plist",
         "/Library/LaunchDaemons/exposed.phoenix.desktop.clamd.plist",
         "/Library/LaunchDaemons/exposed.phoenix.desktop.freshclam.plist",
-        "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
-        "/Library/LaunchDaemons/com.resistine.clamd.plist",
-        "/Library/LaunchDaemons/com.resistine.desktop.clamonacc.plist",
-        "/Library/LaunchDaemons/com.resistine.desktop.clamd.plist",
-        "/Library/LaunchDaemons/com.resistine.desktop.freshclam.plist",
     ]
     for plist in legacy_plists:
         if os.path.exists(plist):
@@ -375,11 +360,6 @@ def _remove_clamav_daemons(admin_cmds):
         "exposed.phoenix.desktop.freshclam",
         "exposed.phoenix.desktop.clamd",
         "exposed.phoenix.desktop.clamonacc",
-        "com.resistine.desktop.freshclam",
-        "com.resistine.desktop.clamd",
-        "com.resistine.desktop.clamonacc",
-        "com.resistine.clamd",
-        "com.resistine.clamonacc",
     ):
         admin_cmds.append(
             f"launchctl bootout system/{label} 2>/dev/null || true",
@@ -409,7 +389,6 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     try:
         from plugins.wazuh.agent.wazuh_functions_darwin import (
             _KEY_BACKUP, _KC_ACCOUNT, _KC_SERVICE, _KEYCHAIN,
-            _LEGACY_KEY_BACKUP, _LEGACY_KC_SERVICE,
             _WAZUH_CONTROL, is_agent_installed, _is_service_loaded,
             _has_keychain_entry,
         )
@@ -429,17 +408,12 @@ def _collect_wazuh_admin_cmds(admin_cmds):
         WAZUH_INSTALL_DIR = "/Library/Phoenix"
         _KEY_BACKUP = "/Library/Application Support/Phoenix/wazuh_client.keys"
         _KC_SERVICE = "exposed.phoenix.wazuh.agent"
-        _LEGACY_KEY_BACKUP = (
-            "/Library/Application Support/Resistine/wazuh_client.keys"
-        )
-        _LEGACY_KC_SERVICE = "com.resistine.wazuh.agent"
         _KC_ACCOUNT = "wazuh-agent"
         _KEYCHAIN = "/Library/Keychains/System.keychain"
         agent_present = (
             os.path.exists(WAZUH_INSTALL_DIR)
             or os.path.exists(WAZUH_LAUNCHD_PLIST)
             or os.path.exists(_KEY_BACKUP)
-            or os.path.exists(_LEGACY_KEY_BACKUP)
         )
 
     if not agent_present:
@@ -499,14 +473,10 @@ def _collect_wazuh_admin_cmds(admin_cmds):
     admin_cmds.append(
         f"launchctl bootout system '{_sq(WAZUH_LAUNCHD_PLIST)}' 2>/dev/null || true")
     # Identity wipe — same semantics as remove_agent(wipe_keys=True).
-    # Both the current and the pre-rename copies: a key left under the old
-    # name would be restored by the next install.
-    for key_file in (_KEY_BACKUP, _LEGACY_KEY_BACKUP):
-        admin_cmds.append(f"rm -f '{_sq(key_file)}'")
-    for kc_service in (_KC_SERVICE, _LEGACY_KC_SERVICE):
-        admin_cmds.append(
-            f"security delete-generic-password -s '{_sq(kc_service)}' "
-            f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
+    admin_cmds.append(f"rm -f '{_sq(_KEY_BACKUP)}'")
+    admin_cmds.append(
+        f"security delete-generic-password -s '{_sq(_KC_SERVICE)}' "
+        f"-a '{_sq(_KC_ACCOUNT)}' '{_sq(_KEYCHAIN)}' 2>/dev/null || true")
     admin_cmds.append(f"rm -rf '{_sq(WAZUH_INSTALL_DIR)}'")
     admin_cmds.append(f"rm -f '{_sq(WAZUH_LAUNCHD_PLIST)}'")
 
@@ -705,21 +675,13 @@ def _clear_group_container(wg_dir):
 
 
 def _remove_wireguard_configs():
-    """Remove WireGuard configuration files from every App Group we have used.
-
-    Builds signed by the pre-migration Apple team wrote into a different App
-    Group container, so an uninstall that only cleared the current one would
-    leave private keys behind on any machine that ran an older build.
-    """
-    from plugins.vpn.wireguard.vpn_functions_darwin import (
-        APP_GROUP_ID,
-        LEGACY_APP_GROUP_IDS,
-    )
+    """Remove WireGuard configuration files from the App Group container."""
+    from plugins.vpn.wireguard.vpn_functions_darwin import APP_GROUP_ID
 
     base = os.path.expanduser("~/Library/Group Containers")
     total_removed = 0
     total_failed = []
-    for group_id in (APP_GROUP_ID, *LEGACY_APP_GROUP_IDS):
+    for group_id in (APP_GROUP_ID,):
         removed, failed = _clear_group_container(os.path.join(base, group_id))
         total_removed += removed
         total_failed.extend(failed)
@@ -739,8 +701,8 @@ def _remove_app_config(admin_cmds):
     """Remove application configuration directories (user + system level)."""
     home = os.path.expanduser("~")
 
-    # User-level config (no admin needed); the Resistine dir is pre-rebrand
-    for app_name in ("Phoenix", "Resistine"):
+    # User-level config (no admin needed)
+    for app_name in ("Phoenix",):
         config_dir = os.path.join(home, "Library", "Application Support", app_name)
         if os.path.exists(config_dir):
             shutil.rmtree(config_dir)
@@ -748,21 +710,12 @@ def _remove_app_config(admin_cmds):
         else:
             logger.info(f"[UNINSTALL] User config dir {config_dir} not found, skipping")
 
-    # Stale log files — the network extension wrote these as root; old entries
-    # persist across builds and cause diagnostic confusion.  Must use admin
-    # because the files are root-owned.
-    for log_name in ("resistine.log", "resistine-error.log"):  # pre-rename
-        log_path = os.path.join(home, "Library", "Logs", log_name)
-        if os.path.exists(log_path):
-            escaped = log_path.replace("'", "'\\''")
-            admin_cmds.append(f"rm -f '{escaped}'")
-
     # Sandbox containers — macOS creates these for sandboxed app bundles.
     # The OS may recreate them, but clearing stale data prevents confusion.
     containers_dir = os.path.join(home, "Library", "Containers")
     if os.path.isdir(containers_dir):
         for entry in os.listdir(containers_dir):
-            if entry.startswith(("exposed.phoenix", "com.resistine")):
+            if entry.startswith("exposed.phoenix"):
                 container_path = os.path.join(containers_dir, entry)
                 try:
                     shutil.rmtree(container_path)
@@ -773,12 +726,9 @@ def _remove_app_config(admin_cmds):
                     )
 
     # System-level directory — batch with other admin commands
-    for sys_dir in (
-        "/Library/Application Support/Phoenix",
-        "/Library/Application Support/Resistine",  # pre-rename installs
-    ):
-        if os.path.exists(sys_dir):
-            admin_cmds.append(f"rm -rf '{sys_dir}'")
+    sys_dir = "/Library/Application Support/Phoenix"
+    if os.path.exists(sys_dir):
+        admin_cmds.append(f"rm -rf '{sys_dir}'")
 
 
 def _remove_keychain_items():
@@ -791,13 +741,10 @@ def _remove_keychain_items():
 
     entries = [
         ("phoenix-master-key", "master-key"),
-        ("resistine-master-key", "master-key"),  # pre-rebrand
         ("phoenix-matrix-store-key", "pickle-key"),  # chat E2EE store key
-        # utils/encryption.py (and its pre-rebrand service name)
+        # utils/encryption.py
         ("phoenix", "encryption_key"),
         ("phoenix", "encrypted_data"),
-        ("resistine", "encryption_key"),
-        ("resistine", "encrypted_data"),
     ]
 
     failed = []
@@ -849,8 +796,6 @@ def _collect_app_bundle_admin_cmd(admin_cmds):
 
     escaped = app_bundle.replace("'", "'\\''")
     admin_cmds.append(f"rm -rf '{escaped}'")
-    if os.path.isdir("/Applications/Resistine.app"):  # pre-rename bundle
-        admin_cmds.append("rm -rf '/Applications/Resistine.app'")
 
 
 def _find_cli_path():

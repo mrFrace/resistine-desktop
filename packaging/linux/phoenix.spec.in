@@ -21,8 +21,6 @@ Requires:       libwayland-client.so.0()(64bit)
 Requires:       libwayland-cursor.so.0()(64bit)
 Requires:       libwayland-egl.so.1()(64bit)
 Requires:       fontconfig
-Obsoletes:      resistine < 2026
-Provides:       resistine
 
 # Ship the PyInstaller files untouched: no stripping, debuginfo or build-id links.
 %global debug_package %{nil}

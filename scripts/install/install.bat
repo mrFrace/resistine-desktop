@@ -11,8 +11,6 @@ set PROJECT_ROOT=%SCRIPT_DIR%\..\..
 for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
 
 set SERVICE_NAME=PhoenixVPN
-:: What the service was registered as before the rename; only removed here.
-set LEGACY_SERVICE_NAME=ResistineVPN
 set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
 set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
 set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
@@ -350,16 +348,6 @@ if exist "%WG_EXE%" (
 )
 timeout /t 2 /nobreak >nul
 echo       OK
-
-:: ---- Remove the pre-rename service (it listens on the same local port) ----
-sc query %LEGACY_SERVICE_NAME% >nul 2>&1
-if not errorlevel 1 (
-    echo Removing pre-rename service %LEGACY_SERVICE_NAME%...
-    sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
-    timeout /t 3 /nobreak >nul
-    sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
-)
-reg delete "%STARTUP_KEY%" /v "%LEGACY_SERVICE_NAME%Tray" /f >nul 2>&1
 
 :: ---- Remove existing PhoenixVPN service ----
 sc query %SERVICE_NAME% >nul 2>&1

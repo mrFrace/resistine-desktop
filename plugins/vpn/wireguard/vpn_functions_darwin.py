@@ -41,10 +41,6 @@ def _restrict_dir_permissions(path):
 # Apple teams, so this changed when the app moved off the old team.
 APP_GROUP_ID = "group.exposed.phoenix.wireguard"
 
-# Pre-migration App Group, still present in containers on machines that ran a
-# build signed by the old team. Read-only: used by the uninstaller for cleanup.
-LEGACY_APP_GROUP_IDS = ("group.Resistine.WireguardTest",)
-
 
 def get_writable_wireguard_dir():
     """Get a writable directory for WireGuard configuration files

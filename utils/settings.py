@@ -26,9 +26,6 @@ from utils.logger import logger
 APP_NAME = "Phoenix"
 MASTER_KEY_SERVICE = "phoenix-master-key"
 MASTER_KEY_USERNAME = "master-key"
-# Pre-rebrand names. Read once to migrate existing installs, never written.
-LEGACY_APP_NAME = "Resistine"
-LEGACY_MASTER_KEY_SERVICE = "resistine-master-key"
 # The chat's E2EE store key (plugins/chat/matrix_transport.py) has its own
 # keyring entry: chat.json, where it used to live alone, is rewritten by
 # other code, and a value encrypted under another master key there locked
@@ -60,54 +57,6 @@ def _config_dir_for(app_name: str) -> str:
         )
 
 
-def get_legacy_config_dir() -> str:
-    """Config directory used before the Resistine -> Phoenix rebrand."""
-    return _config_dir_for(LEGACY_APP_NAME)
-
-
-_MIGRATION_MARKER = ".migrated-from-resistine"
-
-
-def migrate_legacy_config_dir() -> None:
-    """Move the pre-rebrand (Resistine) config dir into the Phoenix one, once.
-
-    Called explicitly at app startup (main.py) — never as a side effect of
-    get_config_dir(), so importing a module or running tests cannot move a
-    real user's data. Entries are moved one by one and never overwrite what is
-    already in the new dir; anything that cannot be moved stays behind, and a
-    marker file stops later attempts.
-    """
-    new_dir, old_dir = get_config_dir(), get_legacy_config_dir()
-    if os.path.exists(os.path.join(new_dir, _MIGRATION_MARKER)) or not os.path.isdir(old_dir):
-        return
-    with _lock:
-        try:
-            os.makedirs(new_dir, exist_ok=True)
-            moved, kept = 0, []
-            for name in os.listdir(old_dir):
-                src, dst = os.path.join(old_dir, name), os.path.join(new_dir, name)
-                if os.path.exists(dst):
-                    kept.append(name)
-                    continue
-                try:
-                    os.replace(src, dst)
-                    moved += 1
-                except OSError as e:
-                    kept.append(name)
-                    logger.warning(f"Config migration: could not move {src}: {e}")
-            with open(os.path.join(new_dir, _MIGRATION_MARKER), "w") as f:
-                f.write(old_dir + "\n")
-            if not kept:
-                try:
-                    os.rmdir(old_dir)
-                except OSError:
-                    pass
-            logger.info(f"Migrated {moved} entries from {old_dir} to {new_dir}"
-                        + (f" (left in place: {', '.join(kept)})" if kept else ""))
-        except OSError as e:
-            logger.error(f"Config migration from {old_dir} failed: {e}")
-
-
 def get_config_dir() -> str:
     """Get the configuration directory based on the platform."""
     return _config_dir_for(APP_NAME)
@@ -127,21 +76,6 @@ def _get_master_key() -> bytes:
         try:
             key = keyring.get_password(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
             if key:
-                return _as_key_bytes(key)
-            # Pre-rebrand install: reuse its key so existing ENC: secrets
-            # still decrypt. The legacy entry is left for rollback; the
-            # uninstaller removes both.
-            key = keyring.get_password(LEGACY_MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)
-            if key:
-                try:
-                    keyring.set_password(
-                        MASTER_KEY_SERVICE,
-                        MASTER_KEY_USERNAME,
-                        key.decode() if isinstance(key, bytes) else key,
-                    )
-                    logger.info("Master key migrated from the legacy keyring entry.")
-                except Exception as e:
-                    logger.warning(f"Could not copy legacy master key: {e}")
                 return _as_key_bytes(key)
         except Exception as e:
             logger.warning(f"Failed to retrieve master key from keyring: {e}")

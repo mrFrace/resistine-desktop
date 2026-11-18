@@ -25,8 +25,6 @@ from utils.logger import logger
 # Basename (without .desktop). Must match main.py's className and the
 # notification desktop-entry hint so GNOME ties them all to this one entry.
 DESKTOP_ID = "phoenix"
-# Entry written by pre-rebrand versions; removed so the dock shows one app.
-_LEGACY_DESKTOP_ID = "resistine"
 
 
 def _repo_root() -> str:
@@ -91,10 +89,6 @@ def ensure_desktop_entry():
         apps_dir = os.path.join(data_home, "applications")
         os.makedirs(apps_dir, exist_ok=True)
         path = os.path.join(apps_dir, f"{DESKTOP_ID}.desktop")
-        try:
-            os.remove(os.path.join(apps_dir, f"{_LEGACY_DESKTOP_ID}.desktop"))
-        except OSError:
-            pass
 
         if _system_entry():
             try:

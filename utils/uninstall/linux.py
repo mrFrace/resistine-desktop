@@ -12,7 +12,7 @@ Phases:
      (guarded so an un-configured component contributes nothing).
   2. Run them all in one pkexec/sudo prompt.
   3. Non-privileged cleanup (no prompt): keyring master key + config dir
-     (~/.config/phoenix, and the pre-rebrand ~/.config/resistine — settings, secrets, VPN keys, Wazuh key backup).
+     (~/.config/phoenix — settings, secrets, VPN keys, Wazuh key backup).
 
 Running from source (run.sh) there is no installed binary or .desktop entry to
 remove.  A packaged build should extend phase 1/3 with artifact removal.
@@ -196,17 +196,15 @@ def _remove_keyring_master_key():
         logger.info("[UNINSTALL-LINUX] keyring not available, skipping")
         return
 
-    from utils.settings import (LEGACY_MASTER_KEY_SERVICE, MASTER_KEY_SERVICE,
+    from utils.settings import (MASTER_KEY_SERVICE,
                                 MASTER_KEY_USERNAME, MATRIX_STORE_KEY_SERVICE,
                                 MATRIX_STORE_KEY_USERNAME)
 
-    from utils.encryption import KEYRING_SERVICE, LEGACY_KEYRING_SERVICE
+    from utils.encryption import KEYRING_SERVICE
 
-    entries = [(service, MASTER_KEY_USERNAME)
-               for service in (MASTER_KEY_SERVICE, LEGACY_MASTER_KEY_SERVICE)]
+    entries = [(MASTER_KEY_SERVICE, MASTER_KEY_USERNAME)]
     entries.append((MATRIX_STORE_KEY_SERVICE, MATRIX_STORE_KEY_USERNAME))
-    entries += [(service, name)
-                for service in (KEYRING_SERVICE, LEGACY_KEYRING_SERVICE)
+    entries += [(KEYRING_SERVICE, name)
                 for name in ("encryption_key", "encrypted_data")]
     for service, username in entries:
         try:
@@ -218,11 +216,11 @@ def _remove_keyring_master_key():
 
 def _remove_app_config():
     """Remove the user config directory (settings, secrets, VPN/Wazuh keys)."""
-    from utils.settings import get_config_dir, get_legacy_config_dir
+    from utils.settings import get_config_dir
 
-    for config_dir in (get_config_dir(), get_legacy_config_dir()):
-        if os.path.exists(config_dir):
-            shutil.rmtree(config_dir, ignore_errors=True)
-            logger.info(f"[UNINSTALL-LINUX] Removed {config_dir}")
-        else:
-            logger.info(f"[UNINSTALL-LINUX] Config dir {config_dir} not found, skipping")
+    config_dir = get_config_dir()
+    if os.path.exists(config_dir):
+        shutil.rmtree(config_dir, ignore_errors=True)
+        logger.info(f"[UNINSTALL-LINUX] Removed {config_dir}")
+    else:
+        logger.info(f"[UNINSTALL-LINUX] Config dir {config_dir} not found, skipping")

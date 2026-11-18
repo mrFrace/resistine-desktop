@@ -33,7 +33,7 @@ def _only_dirs(*present, app_installed=False):
 class TestInstalledAgentDir:
     def test_candidates(self):
         assert linux.LINUX_WAZUH_DIR_CANDIDATES == (
-            "/var/ossec", "/opt/resistine", "/opt/phoenix-agent", "/opt/agent-phoenix")
+            "/var/ossec", "/opt/phoenix-agent", "/opt/agent-phoenix")
 
     @pytest.mark.parametrize("path", linux.LINUX_WAZUH_DIR_CANDIDATES)
     def test_each_location_is_found(self, path):
@@ -42,8 +42,8 @@ class TestInstalledAgentDir:
             assert linux.is_agent_installed() is True
 
     def test_first_match_wins(self):
-        with _only_dirs("/opt/resistine", "/opt/agent-phoenix"):
-            assert linux.installed_agent_dir() == "/opt/resistine"
+        with _only_dirs("/var/ossec", "/opt/agent-phoenix"):
+            assert linux.installed_agent_dir() == "/var/ossec"
 
     def test_nothing_installed(self):
         with _only_dirs():
@@ -51,12 +51,12 @@ class TestInstalledAgentDir:
             assert linux.is_agent_installed() is False
 
     @pytest.mark.parametrize(
-        "path", ["/var/ossec", "/opt/resistine", "/opt/phoenix-agent", "/opt/agent-phoenix"])
+        "path", ["/var/ossec", "/opt/phoenix-agent", "/opt/agent-phoenix"])
     def test_other_installs_are_not_app_managed(self, path):
         with _only_dirs(path):
             assert linux.is_app_managed_agent() is False
 
-    @pytest.mark.parametrize("path", ["/var/ossec", "/opt/resistine", "/opt/agent-phoenix"])
+    @pytest.mark.parametrize("path", ["/var/ossec", "/opt/agent-phoenix"])
     def test_flag_alone_is_not_enough(self, path):
         with _only_dirs(path, app_installed=True):
             assert linux.is_app_managed_agent() is False
@@ -71,7 +71,7 @@ class TestRemoveScriptSparesSystemManagedAgent:
     """Logout (wipe_keys=True) must not tear down an agent the app didn't install."""
 
     @pytest.mark.parametrize(
-        "path", ["/var/ossec", "/opt/resistine", "/opt/phoenix-agent", "/opt/agent-phoenix"])
+        "path", ["/var/ossec", "/opt/phoenix-agent", "/opt/agent-phoenix"])
     def test_only_key_backup_is_removed(self, path):
         with _only_dirs(path):
             script = linux.build_remove_script(wipe_keys=True)
@@ -81,7 +81,7 @@ class TestRemoveScriptSparesSystemManagedAgent:
             assert forbidden not in script
 
     def test_without_wipe_does_nothing(self):
-        with _only_dirs("/opt/resistine"):
+        with _only_dirs("/opt/agent-phoenix"):
             assert linux.build_remove_script(wipe_keys=False).strip() == ""
 
     def test_app_install_is_still_torn_down(self):
@@ -117,7 +117,7 @@ class TestBrokenInstall:
             assert linux.is_install_broken() is False
 
     def test_nixos_module_tree_is_never_reported(self):
-        with _only_dirs("/opt/resistine"), self._units(False):
+        with _only_dirs("/opt/agent-phoenix"), self._units(False):
             assert linux.is_install_broken() is False
 
     def test_nothing_installed_is_not_broken(self):

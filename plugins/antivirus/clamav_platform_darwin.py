@@ -48,28 +48,6 @@ _DAEMON_PLISTS = [
 # touching clamd/clamonacc real-time protection.
 _FRESHCLAM_DAEMON_LABEL = "exposed.phoenix.desktop.freshclam"
 
-# Legacy plist paths from pre-SMAppService installs
-_LEGACY_PLIST_PATHS = [
-    "/Library/LaunchDaemons/com.resistine.clamd.plist",
-    "/Library/LaunchDaemons/com.resistine.clamonacc.plist",
-]
-
-# Legacy SMAppService labels from ≤4.12 — these were renamed to
-# com.resistine.desktop.* in 2026-04-14 (commit 57aa3dd). Users updating
-# from 4.12 still have the old labels registered in launchd, which fight
-# the new labels over the same Unix socket and cause clamd crash loops.
-# Bootout cleans them out regardless of plist file presence.
-_LEGACY_DAEMON_LABELS = [
-    "com.resistine.clamd",
-    "com.resistine.clamonacc",
-    # Pre-Phoenix-rename labels. Same failure mode as the pair above: they
-    # stay registered after an upgrade and fight the new labels over the
-    # same Unix socket, which shows up as a clamd crash loop.
-    "com.resistine.desktop.clamd",
-    "com.resistine.desktop.clamonacc",
-    "com.resistine.desktop.freshclam",
-]
-
 # Paths derived from the project source tree (relative to this file).
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _DEV_ARTIFACTS = os.path.join(
@@ -421,8 +399,7 @@ def _daemon_program_stale(label: str) -> bool:
     """True if the loaded job's program binary no longer exists on disk.
 
     BTM snapshots the plist (including ProgramArguments) at registration
-    time, so after the app is reinstalled under a new name (Resistine.app
-    → Phoenix.app) launchd keeps spawning the OLD path forever — "spawn
+    time, so after the app is reinstalled at a different path launchd keeps spawning the OLD path forever — "spawn
     failed" on every attempt while the job still reports as loaded. Such
     a registration must be torn down and re-made from the current bundle.
     """
@@ -862,13 +839,6 @@ def deactivate_system_daemons() -> tuple[bool, str]:
     for plist_name in reversed(_DAEMON_PLISTS):
         label = plist_name.replace(".plist", "")
         cmds.append(f"launchctl bootout system/{label} 2>/dev/null || true")
-    # Also bootout legacy labels and remove their plists in case the user
-    # is uninstalling after an incomplete migration from ≤4.12 — leaves
-    # no orphaned daemons or plist files behind.
-    for label in _LEGACY_DAEMON_LABELS:
-        cmds.append(f"launchctl bootout system/{label} 2>/dev/null || true")
-    for plist in _LEGACY_PLIST_PATHS:
-        cmds.append(f"rm -f {shlex.quote(plist)}")
 
     script = "; ".join(cmds)
     logger.info("ClamAV: deactivating system daemons")

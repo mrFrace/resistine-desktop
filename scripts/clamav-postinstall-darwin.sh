@@ -78,9 +78,7 @@ done
 
 # --- Constants ---
 SUPPORT_DIR="/Library/Application Support/Phoenix"
-LEGACY_SUPPORT_DIR="/Library/Application Support/Resistine"
 SYSTEM_DIR="$SUPPORT_DIR/clamav"
-LEGACY_SYSTEM_DIR="$LEGACY_SUPPORT_DIR/clamav"
 SYSTEM_DB_DIR="$SYSTEM_DIR/db"
 SYSTEM_LOG_DIR="$SYSTEM_DIR/log"
 SYSTEM_RUN_DIR="$SYSTEM_DIR/run"
@@ -136,11 +134,9 @@ set -x
 # --- Cleanup on Failure ---
 cleanup_failed_install() {
     # Bootout any daemons we may have loaded
-    for _lbl in exposed.phoenix.desktop com.resistine.desktop; do
-        launchctl bootout "system/$_lbl.freshclam" 2>/dev/null || true
-        launchctl bootout "system/$_lbl.clamonacc" 2>/dev/null || true
-        launchctl bootout "system/$_lbl.clamd" 2>/dev/null || true
-    done
+    launchctl bootout system/exposed.phoenix.desktop.freshclam 2>/dev/null || true
+    launchctl bootout system/exposed.phoenix.desktop.clamonacc 2>/dev/null || true
+    launchctl bootout system/exposed.phoenix.desktop.clamd 2>/dev/null || true
     # Remove config files (safe to retry)
     rm -f "$CLAMD_CONF" "$FRESHCLAM_CONF" 2>/dev/null || true
     # Do NOT remove dirs or DB — safe to leave for retry
@@ -149,34 +145,6 @@ cleanup_failed_install() {
 # --- Error Trap ---
 # write_status is best-effort; cleanup_failed_install must always run
 trap 'write_status "{\"status\":\"failed\",\"step\":\"$CURRENT_STEP\",\"error\":\"unexpected error on line $LINENO\",\"error_code\":\"SCRIPT_ERROR\",\"exit_code\":$?,\"pid\":'"$$"',\"ts\":'"$(date +%s)"'}" 2>/dev/null || true; cleanup_failed_install' ERR
-
-# --- Step 0: Migrate the pre-rename support directory ---
-# Installs before the Phoenix rename kept everything under .../Resistine.
-# Move it rather than starting fresh: the signature DB is a few hundred MB
-# and freshclam's CDN allows one refresh per hour, so a re-download would
-# leave the machine unprotected for a while. The daemons that hold the
-# socket and DB open are booted out first.
-CURRENT_STEP="migrate_legacy_dir"
-if [ -d "$LEGACY_SYSTEM_DIR" ] && [ ! -d "$SYSTEM_DIR" ]; then
-    write_status '{"status":"running","step":"migrate_legacy_dir","pid":'"$$"',"ts":'"$(date +%s)"'}'
-    for _lbl in com.resistine.desktop com.resistine; do
-        launchctl bootout "system/$_lbl.freshclam" 2>/dev/null || true
-        launchctl bootout "system/$_lbl.clamonacc" 2>/dev/null || true
-        launchctl bootout "system/$_lbl.clamd" 2>/dev/null || true
-    done
-    mkdir -p "$SUPPORT_DIR"
-    # A stale socket must not be carried over -- clamd recreates it.
-    rm -f "$LEGACY_SYSTEM_DIR/run/clamd.sock" 2>/dev/null || true
-    if mv "$LEGACY_SYSTEM_DIR" "$SYSTEM_DIR" 2>/dev/null; then
-        echo "Migrated $LEGACY_SYSTEM_DIR -> $SYSTEM_DIR"
-        # Drop the old parent only when nothing else of ours lives there.
-        rmdir "$LEGACY_SUPPORT_DIR" 2>/dev/null || true
-    else
-        # Not fatal: the steps below recreate the tree and freshclam
-        # re-downloads. Never abort the install over this.
-        echo "Could not migrate $LEGACY_SYSTEM_DIR; continuing with a fresh tree" >&2
-    fi
-fi
 
 # --- Step 1: Create Directories ---
 CURRENT_STEP="create_dirs"
@@ -270,14 +238,6 @@ else
     cleanup_failed_install
     exit 1
 fi
-
-# --- Step 5: Cleanup Legacy Daemons ---
-CURRENT_STEP="cleanup_legacy"
-write_status '{"status":"running","step":"cleanup_legacy","pid":'"$$"',"ts":'"$(date +%s)"'}'
-launchctl bootout system/com.resistine.clamd 2>/dev/null || true
-launchctl bootout system/com.resistine.clamonacc 2>/dev/null || true
-rm -f /Library/LaunchDaemons/com.resistine.clamd.plist 2>/dev/null || true
-rm -f /Library/LaunchDaemons/com.resistine.clamonacc.plist 2>/dev/null || true
 
 # --- Step 6: Load Daemons ---
 CURRENT_STEP="load_daemons"

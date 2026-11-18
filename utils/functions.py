@@ -77,38 +77,6 @@ def restore_system_library_path() -> None:
         os.environ.pop("LD_LIBRARY_PATH", None)
 
 
-LEGACY_BUNDLE = "/Applications/Resistine.app"
-# Bundle ID of Resistine.app and of Phoenix.app before the exposed.phoenix rename.
-LEGACY_BUNDLE_ID = "com.resistine.desktop"
-
-
-def remove_legacy_bundle() -> bool:
-    """Delete the pre-rename /Applications/Resistine.app once Phoenix.app runs.
-
-    A DMG install drops Phoenix.app next to the old bundle instead of
-    replacing it. Only removes a bundle with our bundle ID (current or
-    LEGACY_BUNDLE_ID), and never the one that is running. Best effort: returns True if it removed it.
-    """
-    import plistlib
-
-    src = _get_bundle_path()
-    if sys.platform != "darwin" or not src or not os.path.isdir(LEGACY_BUNDLE):
-        return False
-    if os.path.realpath(src) == os.path.realpath(LEGACY_BUNDLE):
-        return False
-    try:
-        with open(os.path.join(src, "Contents", "Info.plist"), "rb") as f:
-            ours = plistlib.load(f).get("CFBundleIdentifier")
-        with open(os.path.join(LEGACY_BUNDLE, "Contents", "Info.plist"), "rb") as f:
-            theirs = plistlib.load(f).get("CFBundleIdentifier")
-        if not ours or theirs not in (ours, LEGACY_BUNDLE_ID):
-            return False
-        shutil.rmtree(LEGACY_BUNDLE)
-        return True
-    except (OSError, ValueError, plistlib.InvalidFileException):
-        return False
-
-
 def _copy_app_bundle(src: str, dest: str) -> bool:
     """Copy .app bundle to dest, requesting admin privileges if needed."""
     # Try without elevation first

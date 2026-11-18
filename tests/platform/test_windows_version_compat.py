@@ -137,12 +137,9 @@ class TestRegistryCompat:
     def test_uninstall_registry_keys_checked(self):
         """Uninstaller must check both known registry key paths."""
         from utils.uninstall.windows import _INNO_UNINSTALL_KEYS
-        assert len(_INNO_UNINSTALL_KEYS) >= 2
+        assert len(_INNO_UNINSTALL_KEYS) >= 1
         # Must check the Inno Setup key format
         assert "PhoenixDesktop_is1" in _INNO_UNINSTALL_KEYS[0]
-        # ...and the keys an install from before the rename registered under
-        assert any("ResistineDesktop_is1" in key for key in _INNO_UNINSTALL_KEYS)
-        assert any("Resistine" in key for key in _INNO_UNINSTALL_KEYS)
 
 
 # ===========================================================================

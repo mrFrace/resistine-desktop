@@ -32,13 +32,6 @@ in
 {
   imports = [
     ./wazuh-agent.nix
-
-    # Pre-rebrand option names, so existing configs keep evaluating.
-    (lib.mkRenamedOptionModule [ "programs" "resistine-desktop" "enable" ] [ "programs" "phoenix" "enable" ])
-    (lib.mkRenamedOptionModule [ "programs" "resistine-desktop" "package" ] [ "programs" "phoenix" "package" ])
-    (lib.mkRenamedOptionModule [ "programs" "resistine-desktop" "wazuhAgent" ] [ "programs" "phoenix" "siem" "enable" ])
-    (lib.mkRenamedOptionModule [ "programs" "resistine-desktop" "clamav" ] [ "programs" "phoenix" "antivirus" "enable" ])
-    (lib.mkRenamedOptionModule [ "programs" "resistine-desktop" "clamavPackage" ] [ "programs" "phoenix" "antivirus" "package" ])
   ];
 
   options.programs.phoenix = {

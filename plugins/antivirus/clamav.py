@@ -74,7 +74,6 @@ _system = platform.system()
 if _system == "Darwin":
     from plugins.antivirus.clamav_platform_darwin import (  # noqa: F401
         _DAEMON_PLISTS,
-        _LEGACY_PLIST_PATHS,
         _SYSTEM_CLAMAV_DIR,
         _SYSTEM_CLAMD_CONF,
         _SYSTEM_CLAMD_SOCKET,

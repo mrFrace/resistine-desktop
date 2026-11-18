@@ -289,19 +289,12 @@ def main() -> int:
         a in sys.argv for a in ["-l", "--log-level"]
     ):
         log_level = "DEBUG"
-    # Before the file log sink creates the new config dir.
-    settings.migrate_legacy_config_dir()
     setup_logging(level=log_level)
     if args.trace or os.environ.get("PHOENIX_TRACE") == "1":
         from utils import http_trace
         trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))
         logger.info(f"HTTP trace enabled: {trace_file}")
     _install_excepthook()
-    if sys.platform == "darwin":
-        from utils.functions import remove_legacy_bundle
-
-        if remove_legacy_bundle():
-            logger.info("Removed the old /Applications/Resistine.app")
 
     qt_app, window = _build_app()
     if window is None:

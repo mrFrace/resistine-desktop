@@ -76,7 +76,7 @@ class TestConfigLifecycle:
         active = mgr.get_active_config_name()
         assert active != "secondary"
 
-    def test_resistine_always_in_list(self, mgr, write_conf):
+    def test_default_always_in_list(self, mgr, write_conf):
         write_conf("phoenix")
         mgr.register_config("phoenix", source="api")
         configs = mgr.list_configs()

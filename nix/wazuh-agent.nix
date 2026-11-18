@@ -178,7 +178,7 @@ in
 
     legacyInstallDirs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
-      default = [ "/opt/resistine" ];
+      default = [ ];
       description = ''
         Earlier installDir locations. If installDir does not exist yet, the
         first of these that does is moved there whole, keeping client.keys

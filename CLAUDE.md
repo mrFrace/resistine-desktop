@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. It was renamed from Resistine. Bundle IDs, launchd labels (`exposed.phoenix.desktop.*`), the macOS support dir (`/Library/Application Support/Phoenix`) and the Wazuh Keychain service are all Phoenix now; the old names survive only as read-and-clean-up migration constants, which must not be deleted. On Windows the service is `PhoenixVPN`, its data is in `%PROGRAMDATA%\Phoenix`, the registry key is `HKLM\Software\Phoenix` and the installer AppId is `PhoenixDesktop`; the service migrates `%PROGRAMDATA%\Resistine` at start (`_migrate_legacy_programdata`, which runs as SYSTEM in a user-writable directory: keep its ownership and link checks, and never make it recursive) and the installer retires the old AppId, service and registry key. None of the Windows rename has been run on a real machine yet. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
+Phoenix Desktop is a cross-platform (macOS/Linux/Windows) security desktop app built with Python and PyQt6. Identifiers are shared between Python, shell, batch and installer scripts that cannot import each other, and `tests/unit/test_phoenix_naming.py` pins that they agree: macOS launchd labels `exposed.phoenix.desktop.*` and support dir `/Library/Application Support/Phoenix`; Windows service `PhoenixVPN`, data in `%PROGRAMDATA%\Phoenix`, registry key `HKLM\Software\Phoenix`, installer AppId `PhoenixDesktop`. The Windows side has not been run on a real machine since those names were introduced. There is no migration from installs made under the product's previous name; do not add one. It provides VPN (WireGuard), antivirus (ClamAV), SIEM (Wazuh), endpoint management, and AI chat through a modular plugin system.
 
 ## Commands
 
@@ -101,7 +101,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Settings & Secrets
 
-`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux); a pre-rebrand `Resistine`/`resistine` dir and the `resistine-master-key` keyring entry are migrated on first start.
+`utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux).
 
 ### Auth
 
@@ -124,7 +124,7 @@ The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed ma
 
 ### External Artifacts
 
-VPN CLI binary and ClamAV binaries are fetched during the build via the `gh` CLI from Phoenix-owned repos: `DatOneOPGuy/phoenix-vpn-macos` and, for ClamAV, a *release* asset on `DatOneOPGuy/phoenix-clamav-mac` (Actions artifacts expire after 90 days; releases do not). Override with `CLAMAV_ARTIFACTS_REPO` / `VPN_ARTIFACTS_REPO`.
+VPN CLI binary and ClamAV binaries are fetched during the build via the `gh` CLI from Phoenix-owned repos: `DatOneOPGuy/phoenix-vpn-macos` and, for ClamAV, a *release* asset on `DatOneOPGuy/phoenix-clamav-mac`, built and published by CI on its `clamav-artifact` branch (Actions artifacts expire; releases do not). The launchd plists ship in that artifact under their final names. Override with `CLAMAV_ARTIFACTS_REPO` / `VPN_ARTIFACTS_REPO`.
 
 ## Key Conventions
 

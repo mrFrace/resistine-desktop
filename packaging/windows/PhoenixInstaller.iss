@@ -21,16 +21,9 @@
   #define OutputDir "..\..\dist\installers"
 #endif
 
-; Installs made before the rename registered as "ResistineDesktop", with a
-; ResistineVPN service, HKLM\Software\Resistine and %PROGRAMDATA%\Resistine.
-; Those names appear below only so an upgrade or uninstall can find and remove
-; what such an install left behind; nothing new is created under them.
 #define AppId "PhoenixDesktop"
-#define LegacyAppId "ResistineDesktop"
 #define VpnService "PhoenixVPN"
-#define LegacyVpnService "ResistineVPN"
 #define AppRegKey "Software\Phoenix"
-#define LegacyAppRegKey "Software\Resistine"
 
 [Setup]
 AppId={#AppId}
@@ -122,15 +115,6 @@ Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType
 ; update applies but "nothing happens" — the app just stays closed).
 Filename: "{app}\Phoenix.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
 
-[InstallDelete]
-; Shortcuts created by pre-rebrand installers (AppName was "Resistine").
-Type: files; Name: "{autoprograms}\Resistine\Resistine.lnk"
-Type: files; Name: "{autoprograms}\Resistine\Uninstall Resistine.lnk"
-Type: dirifempty; Name: "{autoprograms}\Resistine"
-Type: files; Name: "{autodesktop}\Resistine.lnk"
-; The app itself was Resistine.exe before the rename.
-Type: files; Name: "{app}\Resistine.exe"
-
 [UninstallDelete]
 ; Inno Setup only removes files recorded in its install manifest. Python
 ; generates __pycache__\*.pyc bytecode (e.g. windows_vpn_service.cpython-XX.pyc)
@@ -149,7 +133,6 @@ var
   ExistingInstallDir: string;
   ExistingInstallVersion: string;
   ExistingUninstallCmd: string;
-  RetireLegacyIdentityPending: Boolean;
   ExistingAppExecutableAvailable: Boolean;
   ExistingUninstallerAvailable: Boolean;
   MaintenancePage: TWizardPage;
@@ -248,11 +231,6 @@ begin
   Result := RegQueryStringValue(HKLM64, '{#AppRegKey}', Name, Value);
   if not Result then
     Result := RegQueryStringValue(HKLM, '{#AppRegKey}', Name, Value);
-  { An install from before the rename recorded itself under the old key. }
-  if not Result then
-    Result := RegQueryStringValue(HKLM64, '{#LegacyAppRegKey}', Name, Value);
-  if not Result then
-    Result := RegQueryStringValue(HKLM, '{#LegacyAppRegKey}', Name, Value);
 end;
 
 function GetUninstallRegistryString(const SubKey, Name: string; var Value: string): Boolean;
@@ -267,45 +245,19 @@ begin
   Result := '"' + S + '"';
 end;
 
-function GetLegacyUserDataDir: string;
-begin
-  Result := ExpandConstant('{userappdata}\Resistine');
-end;
-
-{ The app keeps per-user data in %APPDATA%\Phoenix and moves a pre-rebrand
-  %APPDATA%\Resistine there on first start. Until then the legacy dir is the
-  live one. }
 function GetPhoenixUserDataDir: string;
 begin
   Result := ExpandConstant('{userappdata}\Phoenix');
-  if (not DirExists(Result)) and DirExists(GetLegacyUserDataDir) then
-    Result := GetLegacyUserDataDir;
 end;
 
-function GetLegacyCommonDataDir: string;
-begin
-  Result := ExpandConstant('{commonappdata}\Resistine');
-end;
-
-{ The VPN service keeps its data in %PROGRAMDATA%\Phoenix and moves what a
-  pre-rename install left in %PROGRAMDATA%\Resistine there when it starts.
-  Until then the legacy dir is the live one. }
 function GetPhoenixCommonDataDir: string;
 begin
   Result := ExpandConstant('{commonappdata}\Phoenix');
-  if (not DirExists(Result)) and DirExists(GetLegacyCommonDataDir) then
-    Result := GetLegacyCommonDataDir;
 end;
 
 function GetInteropSubkey: string;
 begin
   Result := '{#AppRegKey}\InstallerInterop';
-end;
-
-{ Uninstallers shipped before the rename read their flags from here. }
-function GetLegacyInteropSubkey: string;
-begin
-  Result := '{#LegacyAppRegKey}\InstallerInterop';
 end;
 
 function RunHiddenCmd(const Params: string; var ResultCode: Integer): Boolean;
@@ -350,15 +302,12 @@ end;
 
 function IsPhoenixRunning: Boolean;
 begin
-  { Resistine.exe: what the app was called before the rename }
-  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Phoenix.exe" | find /I "Phoenix.exe" >nul') or
-            HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Resistine.exe" | find /I "Resistine.exe" >nul');
+  Result := HiddenCmdSucceeded('tasklist /FI "IMAGENAME eq Phoenix.exe" | find /I "Phoenix.exe" >nul');
 end;
 
 function IsVpnServiceInstalled: Boolean;
 begin
-  Result := HiddenCmdSucceeded('sc query "{#VpnService}" >nul 2>nul') or
-            HiddenCmdSucceeded('sc query "{#LegacyVpnService}" >nul 2>nul');
+  Result := HiddenCmdSucceeded('sc query "{#VpnService}" >nul 2>nul');
 end;
 
 function ServiceExists(const ServiceName: string): Boolean;
@@ -372,9 +321,9 @@ var
   Params: string;
 begin
   if ForceKill then
-    Params := 'taskkill /F /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul'
+    Params := 'taskkill /F /T /IM Phoenix.exe >nul 2>nul'
   else
-    Params := 'taskkill /T /IM Phoenix.exe /IM Resistine.exe >nul 2>nul';
+    Params := 'taskkill /T /IM Phoenix.exe >nul 2>nul';
 
   { taskkill returns non-zero if not running; treat "not running" as success. }
   RunHiddenCmd(Params, ResultCode);
@@ -382,7 +331,7 @@ begin
   { Also kill tray process (pythonw.exe running tray.py) }
   RunHiddenCmd(
     'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name=''python.exe'' OR Name=''pythonw.exe''\" | ' +
-    'Where-Object { $_.CommandLine -like ''*tray.py*'' -or $_.CommandLine -like ''*Phoenix*'' -or $_.CommandLine -like ''*Resistine*'' } | ' +
+    'Where-Object { $_.CommandLine -like ''*tray.py*'' -or $_.CommandLine -like ''*Phoenix*'' } | ' +
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul',
     ResultCode);
 
@@ -452,10 +401,8 @@ end;
 
 procedure DeletePhoenixUserData;
 begin
-  DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Phoenix'));
-  DeleteDirectoryIfExists(GetLegacyUserDataDir);
-  DeleteDirectoryIfExists(ExpandConstant('{commonappdata}\Phoenix'));
-  DeleteDirectoryIfExists(GetLegacyCommonDataDir);
+  DeleteDirectoryIfExists(GetPhoenixUserDataDir);
+  DeleteDirectoryIfExists(GetPhoenixCommonDataDir);
 end;
 
 function WaitForServiceAbsent(const ServiceName: string; Attempts, DelayMs: Integer): Boolean;
@@ -493,24 +440,12 @@ begin
     HiddenCmdSucceeded('sc query ' + QuotePath(ServiceName) + ' | find /I "STOPPED" >nul 2>nul');
 end;
 
-procedure RemoveLegacyStartupArtifacts;
+procedure RemoveStartupArtifacts;
 begin
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PhoenixVPNTray');
   RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PhoenixVPNTray');
   RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'PhoenixVPNTray');
-  { Entries written before the rename. }
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
-  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
-  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
-  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
-  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPNTray');
-  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'ResistineVPN');
-  RegDeleteValue(HKLM, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
   RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix');
-
-  DeleteFile(ExpandConstant('{userdesktop}\Resistine VPN.lnk'));
 end;
 
 function RunBundledServiceCleanupScript: Boolean;
@@ -603,41 +538,30 @@ end;
 
 procedure RemovePhoenixVpnServicesAndTunnels;
 begin
-  RemoveLegacyStartupArtifacts;
+  RemoveStartupArtifacts;
 
   RunBundledServiceCleanupScript;
 
   Log('Uninstall cleanup: stopping/removing the VPN Windows service');
   StopAndDeleteService('{#VpnService}');
-  StopAndDeleteService('{#LegacyVpnService}');
 
   Log('Uninstall cleanup: stopping/removing WireGuard tunnel services');
   RemoveNamedWireGuardTunnel('phoenix');
-  { Tunnel names used before the rename. }
-  RemoveNamedWireGuardTunnel('resistine');
-  RemoveNamedWireGuardTunnel('resistine_default');
-  RemoveNamedWireGuardTunnel('resistine_vpn');
 
   { Always delete WireGuard config files on uninstall, not just when user opts-in }
   Log('Uninstall cleanup: removing WireGuard configuration files');
   DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Phoenix\wireguard'));
-  DeleteDirectoryIfExists(ExpandConstant('{userappdata}\Resistine\wireguard'));
   DeleteDirectoryIfExists(ExpandConstant('{commonappdata}\Phoenix\wireguard'));
-  DeleteDirectoryIfExists(ExpandConstant('{commonappdata}\Resistine\wireguard'));
 end;
 
 function HasAnyPhoenixUserData: Boolean;
 begin
-  Result := DirectoryExistsAndNotEmpty(ExpandConstant('{userappdata}\Phoenix')) or
-            DirectoryExistsAndNotEmpty(GetLegacyUserDataDir) or
-            DirectoryExistsAndNotEmpty(ExpandConstant('{commonappdata}\Phoenix')) or
-            DirectoryExistsAndNotEmpty(GetLegacyCommonDataDir);
+  Result := DirectoryExistsAndNotEmpty(GetPhoenixUserDataDir) or
+            DirectoryExistsAndNotEmpty(GetPhoenixCommonDataDir);
 end;
 
 procedure DetectExistingInstall;
 var
-  LegacyUninstallKey: string;
-  LegacyInnoUninstallKey: string;
   InnoUninstallKey: string;
 begin
   ExistingInstallDetected := False;
@@ -651,8 +575,6 @@ begin
   GetRegistryString64('Version', ExistingInstallVersion);
 
   InnoUninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppId}_is1';
-  LegacyInnoUninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#LegacyAppId}_is1';
-  LegacyUninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\Resistine';
 
   if GetUninstallRegistryString(InnoUninstallKey, 'UninstallString', ExistingUninstallCmd) then
   begin
@@ -660,20 +582,6 @@ begin
       GetUninstallRegistryString(InnoUninstallKey, 'DisplayVersion', ExistingInstallVersion);
     if ExistingInstallDir = '' then
       GetUninstallRegistryString(InnoUninstallKey, 'InstallLocation', ExistingInstallDir);
-  end
-  else if GetUninstallRegistryString(LegacyInnoUninstallKey, 'UninstallString', ExistingUninstallCmd) then
-  begin
-    if ExistingInstallVersion = '' then
-      GetUninstallRegistryString(LegacyInnoUninstallKey, 'DisplayVersion', ExistingInstallVersion);
-    if ExistingInstallDir = '' then
-      GetUninstallRegistryString(LegacyInnoUninstallKey, 'InstallLocation', ExistingInstallDir);
-  end
-  else if GetUninstallRegistryString(LegacyUninstallKey, 'UninstallString', ExistingUninstallCmd) then
-  begin
-    if ExistingInstallVersion = '' then
-      GetUninstallRegistryString(LegacyUninstallKey, 'DisplayVersion', ExistingInstallVersion);
-    if ExistingInstallDir = '' then
-      GetUninstallRegistryString(LegacyUninstallKey, 'InstallLocation', ExistingInstallDir);
   end;
 
   if (ExistingInstallDir = '') and DirExists(ExpandConstant('{autopf}\{#AppName}')) then
@@ -715,18 +623,6 @@ begin
     RegWriteStringValue(HKLM64, GetInteropSubkey, 'RemoveUserData', '1')
   else
     RegWriteStringValue(HKLM64, GetInteropSubkey, 'RemoveUserData', '0');
-
-  { The uninstaller about to run may predate the rename and only look under
-    the old key. Only written when that key is already there, so a machine
-    that never had such an install does not get one. }
-  if RegKeyExists(HKLM64, '{#LegacyAppRegKey}') then
-  begin
-    RegWriteStringValue(HKLM64, GetLegacyInteropSubkey, 'TriggeredByInstaller', '1');
-    if RemoveUserData then
-      RegWriteStringValue(HKLM64, GetLegacyInteropSubkey, 'RemoveUserData', '1')
-    else
-      RegWriteStringValue(HKLM64, GetLegacyInteropSubkey, 'RemoveUserData', '0');
-  end;
 end;
 
 procedure ClearInstallerUninstallInteropFlags;
@@ -735,8 +631,6 @@ begin
   RegDeleteValue(HKLM64, GetInteropSubkey, 'RemoveUserData');
   RegDeleteValue(HKLM, GetInteropSubkey, 'TriggeredByInstaller');
   RegDeleteValue(HKLM, GetInteropSubkey, 'RemoveUserData');
-  RegDeleteKeyIncludingSubkeys(HKLM64, GetLegacyInteropSubkey);
-  RegDeleteKeyIncludingSubkeys(HKLM, GetLegacyInteropSubkey);
 end;
 
 procedure LoadInstallerUninstallInteropFlags;
@@ -1021,9 +915,6 @@ begin
     exit;
 
   AppExe := QuotePath(ExpandConstant('{app}\Phoenix.exe'));
-  { The pre-rename entry points at Resistine.exe, which is gone now. }
-  RegDeleteValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Resistine');
   if WizardIsTaskSelected('startup') then
     RegWriteStringValue(HKLM64, 'Software\Microsoft\Windows\CurrentVersion\Run', 'Phoenix', AppExe)
   else
@@ -1375,8 +1266,7 @@ begin
   if ExistingInstallDir <> '' then
   begin
     AppExePath := AddBackslash(ExistingInstallDir) + 'Phoenix.exe';
-    ExistingAppExecutableAvailable := FileExists(AppExePath) or
-      FileExists(AddBackslash(ExistingInstallDir) + 'Resistine.exe');
+    ExistingAppExecutableAvailable := FileExists(AppExePath);
   end;
 
   if ExistingUninstallCmd <> '' then
@@ -1416,10 +1306,6 @@ begin
     RegDeleteValue(HKLM64, '{#AppRegKey}', 'Version');
     RegDeleteValue(HKLM, '{#AppRegKey}', 'InstallDir');
     RegDeleteValue(HKLM, '{#AppRegKey}', 'Version');
-    RegDeleteValue(HKLM64, '{#LegacyAppRegKey}', 'InstallDir');
-    RegDeleteValue(HKLM64, '{#LegacyAppRegKey}', 'Version');
-    RegDeleteValue(HKLM, '{#LegacyAppRegKey}', 'InstallDir');
-    RegDeleteValue(HKLM, '{#LegacyAppRegKey}', 'Version');
     exit;
   end;
 
@@ -1863,70 +1749,11 @@ begin
     RefreshPreflightSummary;
 end;
 
-{ True when this run installs over a copy that registered itself under the
-  pre-rename AppId. Setup treats a new AppId as a different product, so
-  without the cleanup below "Apps & features" would list the old entry next
-  to the new one, pointing at an uninstaller for files that are now ours. }
-function InstallsOverLegacyIdentity: Boolean;
-var
-  LegacyKey: string;
-  NewKey: string;
-  LegacyDir: string;
-  Ignored: string;
-begin
-  Result := False;
-  NewKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppId}_is1';
-  LegacyKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#LegacyAppId}_is1';
-
-  if GetUninstallRegistryString(NewKey, 'UninstallString', Ignored) then
-    exit;
-  if not GetUninstallRegistryString(LegacyKey, 'InstallLocation', LegacyDir) then
-    exit;
-
-  Result := CompareText(RemoveBackslashUnlessRoot(LegacyDir),
-                        RemoveBackslashUnlessRoot(WizardDirValue)) = 0;
-  if not Result then
-    Log('A pre-rename install exists in a different folder (' + LegacyDir + '); leaving it alone.');
-end;
-
-procedure RetireLegacyInstallIdentity;
-var
-  LegacyKey: string;
-  OldUninstaller: string;
-begin
-  if not RetireLegacyIdentityPending then
-    exit;
-  RetireLegacyIdentityPending := False;
-
-  Log('Retiring the pre-rename install identity ({#LegacyAppId}).');
-  LegacyKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#LegacyAppId}_is1';
-  RegDeleteKeyIncludingSubkeys(HKLM64, LegacyKey);
-  RegDeleteKeyIncludingSubkeys(HKLM, LegacyKey);
-  RegDeleteKeyIncludingSubkeys(HKLM64, '{#LegacyAppRegKey}');
-  RegDeleteKeyIncludingSubkeys(HKLM, '{#LegacyAppRegKey}');
-
-  { The old uninstaller would remove files this install now owns. Setup
-    numbers a new uninstaller past any it finds, so only delete the old
-    one when it is not the file Setup just wrote. }
-  OldUninstaller := ExpandConstant('{app}\unins000.exe');
-  if CompareText(OldUninstaller, ExpandConstant('{uninstallexe}')) <> 0 then
-  begin
-    DeleteFile(OldUninstaller);
-    DeleteFile(ExpandConstant('{app}\unins000.dat'));
-    DeleteFile(ExpandConstant('{app}\unins000.msg'));
-  end;
-end;
-
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   if not EnsurePhoenixClosedForInstall then
-  begin
     Result := 'Phoenix must be closed before installation can continue.';
-    exit;
-  end;
-  { Decided before Setup writes its own uninstall entry. }
-  RetireLegacyIdentityPending := ShouldPerformInstallAction and InstallsOverLegacyIdentity;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -1945,12 +1772,8 @@ begin
   try
     SetInstallStatus('Finishing setup...');
     RestoreDataAfterReinstallIfNeeded;
-    RetireLegacyInstallIdentity;
     ApplyStartupTaskSelection;
     InstallMissingDependenciesWithFeedback;
-    { The pre-rename service listens on the same local port; it has to be
-      gone before the new one is registered and started. }
-    StopAndDeleteService('{#LegacyVpnService}');
     RunVpnServiceSetupRequired;
   finally
     WizardForm.ProgressGauge.Style := npbstNormal;
@@ -2055,10 +1878,6 @@ begin
       'if exist "%ProgramFiles%\Phoenix Sysmon\Sysmon64.exe" ' +
       '"%ProgramFiles%\Phoenix Sysmon\Sysmon64.exe" -u force >nul 2>nul',
       ResultCode);
-    RunHiddenCmd(
-      'if exist "%ProgramFiles%\Resistine\Sysmon\Sysmon64.exe" ' +
-      '"%ProgramFiles%\Resistine\Sysmon\Sysmon64.exe" -u force >nul 2>nul',
-      ResultCode);
   end
   else if HiddenCmdSucceeded('sc query Sysmon >nul 2>nul') then
   begin
@@ -2066,10 +1885,6 @@ begin
     RunHiddenCmd(
       'if exist "%ProgramFiles%\Phoenix Sysmon\Sysmon.exe" ' +
       '"%ProgramFiles%\Phoenix Sysmon\Sysmon.exe" -u force >nul 2>nul',
-      ResultCode);
-    RunHiddenCmd(
-      'if exist "%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" ' +
-      '"%ProgramFiles%\Resistine\Sysmon\Sysmon.exe" -u force >nul 2>nul',
       ResultCode);
   end;
 
@@ -2086,10 +1901,8 @@ begin
       ResultCode);
   end;
 
-  { Remove the Sysmon directory (and the one a pre-rename install used) }
+  { Remove the Sysmon directory }
   DeleteDirectoryIfExists(ExpandConstant('{pf}\Phoenix Sysmon'));
-  DeleteDirectoryIfExists(ExpandConstant('{pf}\Resistine\Sysmon'));
-  RemoveDir(ExpandConstant('{pf}\Resistine'));
 
   { Remove any leftover Wazuh agent directory so the SIEM state is fully clean
     and a fresh install re-enrolls from scratch. }
@@ -2110,18 +1923,13 @@ begin
   begin
     { Remove keyring credentials (master key + update signing key) }
     RunHiddenCmd('cmdkey /delete:phoenix-master-key >nul 2>nul', ResultCode);
-    RunHiddenCmd('cmdkey /delete:resistine-master-key >nul 2>nul', ResultCode);
-    RunHiddenCmd('cmdkey /delete:resistine-updates >nul 2>nul', ResultCode);
 
     { Always remove user data and configs on uninstall }
     DeletePhoenixUserData;
 
-    { Remove the app's registry keys, and the ones a pre-rename install left }
+    { Remove the app's registry keys }
     RegDeleteKeyIncludingSubkeys(HKLM64, '{#AppRegKey}');
     RegDeleteKeyIncludingSubkeys(HKLM, '{#AppRegKey}');
     RegDeleteKeyIncludingSubkeys(HKCU, '{#AppRegKey}');
-    RegDeleteKeyIncludingSubkeys(HKLM64, '{#LegacyAppRegKey}');
-    RegDeleteKeyIncludingSubkeys(HKLM, '{#LegacyAppRegKey}');
-    RegDeleteKeyIncludingSubkeys(HKCU, '{#LegacyAppRegKey}');
   end;
 end;

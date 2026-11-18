@@ -293,7 +293,7 @@ def installed_agent_dir():
     """Return the install dir of an existing agent, or None.
 
     Only the directory itself is stat'ed, so a root-only (0700) tree such as
-    the NixOS module's /opt/resistine is still detected.
+    an agent installed by the NixOS module is still detected.
     """
     for d in LINUX_WAZUH_DIR_CANDIDATES:
         if os.path.isdir(d):

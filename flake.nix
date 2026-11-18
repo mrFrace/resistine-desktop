@@ -122,8 +122,6 @@
       {
         packages = rec {
           default = phoenix;
-          # Pre-rebrand attribute name, kept so existing system configs build.
-          resistine = phoenix;
 
           # The exact ClamAV the wrapper below puts on the app's PATH, exported
           # so a system config can install *this* one rather than whatever its

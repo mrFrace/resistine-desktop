@@ -254,7 +254,7 @@ if [ ! -f "packaging/Phoenix.spec" ]; then
     exit 1
 fi
 
-rm -rf dist/Resistine dist/Resistine.app dist/Phoenix dist/Phoenix.app
+rm -rf dist/Phoenix dist/Phoenix.app
 
 echo "  - Building with PyInstaller..."
 pyinstaller packaging/Phoenix.spec --noconfirm
@@ -571,54 +571,20 @@ PLISTEOF
         cp "$LAUNCHD_SRC/"*.plist "$DAEMONS_DIR/"
         echo "  - Placed launchd plists in Contents/Library/LaunchDaemons/"
 
-        # Normalize plist names to the exposed.phoenix.desktop.* convention
-        # that clamav-postinstall-darwin.sh (load_daemons step) and the runtime
-        # SMAppService registration both expect. The upstream artifact still
-        # ships the original names (com.resistine.clamd / com.resistine.clamonacc,
-        # and in newer builds com.resistine.desktop.*). Without this rename the
-        # postinstall fails with "plist not found" and antivirus setup never
-        # completes. Renames the file AND rewrites the internal Label so
-        # SMAppService registers under the matching identifier. Idempotent.
-        for base in clamd clamonacc; do
-            new="$DAEMONS_DIR/exposed.phoenix.desktop.$base.plist"
-            for old_label in "com.resistine.desktop.$base" "com.resistine.$base"; do
-                old="$DAEMONS_DIR/$old_label.plist"
-                [ -f "$old" ] || continue
-                /usr/bin/sed -i '' \
-                    "s/$(printf '%s' "$old_label" | sed 's/\./\\./g')/exposed.phoenix.desktop.$base/g" "$old"
-                mv "$old" "$new"
-                echo "  - Normalized $old_label.plist -> exposed.phoenix.desktop.$base.plist"
-                break
-            done
-        done
-
-        # The CI artifact plists hardcode /Applications/Resistine.app in
-        # ProgramArguments. After the Phoenix rename that path doesn't exist,
-        # so SMAppService registers daemons that spawn-fail forever (clamd
-        # EX_CONFIG loop) and clamonacc registration dies with "Operation not
-        # permitted" — the shipped bundle must point at its own install path.
+        # The artifact ships the plists under their final names and paths
+        # (phoenix-clamav-mac, launchd/). clamav-postinstall-darwin.sh and the
+        # SMAppService registration look them up by exactly these names, so a
+        # mismatch means antivirus setup never completes: fail the build.
         for base in clamd clamonacc; do
             p="$DAEMONS_DIR/exposed.phoenix.desktop.$base.plist"
-            if [ -f "$p" ]; then
-                # The support dir moved to .../Phoenix/clamav (see
-                # clamav-postinstall-darwin.sh). A plist left pointing at the
-                # old path starts a daemon with no config at all.
-                /usr/bin/sed -i '' \
-                    -e "s|/Applications/Resistine\.app|/Applications/${APP_NAME}.app|g" \
-                    -e "s|ResistineClamAV\.app|PhoenixClamAV.app|g" \
-                    -e "s|Application Support/Resistine/|Application Support/Phoenix/|g" \
-                    -e "s|Resistine Desktop installer|Phoenix Desktop installer|g" \
-                    -e "s|Resistine\.app bundle|Phoenix.app bundle|g" "$p"
+            if [ ! -f "$p" ] \
+               || ! grep -q "<string>exposed.phoenix.desktop.$base</string>" "$p" \
+               || ! grep -q "/Applications/${APP_NAME}.app/" "$p"; then
+                echo "  ERROR: ClamAV artifact has no usable exposed.phoenix.desktop.$base.plist"
+                echo "         Refresh it: scripts/build/download-clamav-artifacts.sh"
+                exit 1
             fi
         done
-        if grep -qE "/Applications/Resistine\.app|ResistineClamAV\.app|Application Support/Resistine/" \
-                "$DAEMONS_DIR"/*.plist 2>/dev/null; then
-            echo "  ERROR: a LaunchDaemon plist still references a Resistine path"
-            grep -lE "/Applications/Resistine\.app|ResistineClamAV\.app|Application Support/Resistine/" \
-                "$DAEMONS_DIR"/*.plist 2>/dev/null
-            exit 1
-        fi
-        echo "  - Rewrote daemon program paths to ${APP_NAME}.app"
     else
         echo "  - Warning: No launchd plists found in artifacts"
     fi
@@ -1214,16 +1180,11 @@ cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
 # screen. Launching from this script would run the app as root.
 
 # Quit the app gracefully, then force-kill any stragglers, before removing it.
-# Builds before the rename installed it as Resistine.app; remove that too.
-for name in Phoenix Resistine; do
-    osascript -e "quit app \"$name\"" 2>/dev/null || true
-    pkill -x "$name" 2>/dev/null || true
-done
+osascript -e 'quit app "Phoenix"' 2>/dev/null || true
+pkill -x Phoenix 2>/dev/null || true
 sleep 1
 
-for app in /Applications/Phoenix.app /Applications/Resistine.app; do
-    [ -d "$app" ] && rm -rf "$app" 2>/dev/null
-done
+[ -d /Applications/Phoenix.app ] && rm -rf /Applications/Phoenix.app 2>/dev/null
 true
 exit 0
 PREEOF
@@ -1238,30 +1199,6 @@ cat > "$PKG_SCRIPTS_DIR/postinstall" << 'POSTEOF'
 # They are activated via OSSystemExtensionRequest from the running app.
 # The app triggers extension activation/replacement on launch automatically.
 
-# Clean up stale log files from previous versions (the network extension
-# used to write to ~/Library/Logs/resistine.log but this can contain
-# outdated error messages that confuse diagnostics).
-CONSOLE_USER=$( /usr/bin/stat -f "%Su" /dev/console 2>/dev/null || echo "" )
-if [ -n "$CONSOLE_USER" ]; then
-    STALE_LOG=$( eval echo "~$CONSOLE_USER/Library/Logs/resistine.log" )
-    if [ -f "$STALE_LOG" ]; then
-        rm -f "$STALE_LOG" 2>/dev/null || true
-    fi
-    STALE_ERR=$( eval echo "~$CONSOLE_USER/Library/Logs/resistine-error.log" )
-    if [ -f "$STALE_ERR" ]; then
-        rm -f "$STALE_ERR" 2>/dev/null || true
-    fi
-fi
-
-# Clean up legacy ClamAV daemon labels from versions <= 4.12
-# Old versions registered these directly; new versions use SMAppService.
-for label in com.resistine.clamd com.resistine.freshclam; do
-    plist="/Library/LaunchDaemons/${label}.plist"
-    if [ -f "$plist" ]; then
-        launchctl bootout system "$plist" 2>/dev/null || true
-        rm -f "$plist" 2>/dev/null || true
-    fi
-done
 
 exit 0
 POSTEOF
@@ -1471,7 +1408,6 @@ rm -f /tmp/ne-distribution.entitlements.plist /tmp/cli-distribution.entitlements
 echo ""
 echo "Step 8: Installing to /Applications..."
 
-rm -rf "/Applications/Resistine.app" 2>/dev/null || true  # pre-rename bundle
 if [ -d "/Applications/$APP_NAME.app" ]; then
     echo "  - Removing old /Applications/$APP_NAME.app..."
     rm -rf "/Applications/$APP_NAME.app" || {

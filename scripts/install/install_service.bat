@@ -19,8 +19,6 @@ for %%A in (%*) do (
 
 :: ---- Config ----
 set SERVICE_NAME=PhoenixVPN
-:: What the service was registered as before the rename; only removed here.
-set LEGACY_SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
@@ -199,10 +197,6 @@ echo       OK
 :: ============================================================
 echo [6/6] Installing Windows service...
 
-:: The pre-rename service listens on the same local port: remove it first.
-:: Its data directory is migrated by the new service when it starts.
-call :remove_legacy_vpn_service
-
 :: Stop and remove if exists
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
@@ -325,23 +319,10 @@ if defined PYTHON_FULL (
 echo [3/4] Removing startup entries...
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
-:: Entries written before the rename.
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
-reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
-reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
 echo       OK
 
 echo [4/4] Removing VPN services...
 call :remove_wireguard_tunnel_service phoenix
-:: Tunnel names used before the rename.
-call :remove_wireguard_tunnel_service resistine
-call :remove_wireguard_tunnel_service resistine_default
-call :remove_wireguard_tunnel_service resistine_vpn
-
-call :remove_legacy_vpn_service
 
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
@@ -382,16 +363,6 @@ if defined _wg_exe (
     sc delete "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
     call :wait_for_named_service_absent "WireGuardTunnel$!_tunnel_name!" 10
 )
-exit /b 0
-
-:remove_legacy_vpn_service
-sc query %LEGACY_SERVICE_NAME% >nul 2>&1
-if errorlevel 1 exit /b 0
-echo       Removing pre-rename service %LEGACY_SERVICE_NAME%...
-sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
-call :wait_for_named_service_stopped_or_absent %LEGACY_SERVICE_NAME% 15
-sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
-call :wait_for_named_service_absent %LEGACY_SERVICE_NAME% 15
 exit /b 0
 
 :wait_for_named_service_stopped_or_absent

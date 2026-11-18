@@ -30,22 +30,20 @@ def test_libolm_is_not_installed():
     )
 
 
-class TestChatCaBundleHasNoResistineRoot:
-    """The chat TLS bundle must not trust the old company's internal root.
+class TestChatCaBundle:
+    """The chat TLS bundle trusts the two Cloudflare Origin roots and nothing else.
 
-    That bundle is what plugins/chat/main.py hands httpx as ``verify``. While
-    "rootCA Resistine" was pinned in it, any certificate issued by that CA was
-    accepted for dashboard.phoenix.exposed, so whoever held its key could
-    terminate the chat connection. It was removed on 2026-11-17 after the live
-    endpoint was confirmed to present a Cloudflare Origin certificate.
+    That bundle is what plugins/chat/main.py hands httpx as ``verify``: every
+    root in it can issue a certificate the app accepts for the chat endpoint,
+    so whoever holds the key of an extra root could terminate that connection.
+    An internal root was pinned there until 2026-11-17 and must not come back.
     """
 
     def _subjects(self):
         """Subjects of the certs actually trusted by the bundle.
 
-        Parsed, not grepped: the file's own comments name the removed root,
-        and a comment trusts nothing. Parsed in-process rather than through
-        openssl because conftest stubs subprocess for the whole suite.
+        Parsed, not grepped: a comment trusts nothing. Parsed in-process
+        rather than through openssl because conftest stubs subprocess.
         """
         import os
         from cryptography import x509
@@ -55,22 +53,13 @@ class TestChatCaBundleHasNoResistineRoot:
             pem = fh.read()
         return [c.subject.rfc4514_string() for c in x509.load_pem_x509_certificates(pem)]
 
-    def test_resistine_root_absent(self):
-        subjects = self._subjects()
-        assert subjects, "bundle parsed to zero certificates"
-        for subject in subjects:
-            assert "Resistine" not in subject, (
-                f"the old internal root is trusted again: {subject}"
-            )
-
-    def test_cloudflare_origin_roots_still_present(self):
-        """Removing the wrong cert would break chat instead of securing it."""
+    def test_only_the_cloudflare_origin_roots_are_trusted(self):
         subjects = self._subjects()
         assert len(subjects) == 2, subjects
         assert all("CloudFlare" in s for s in subjects), subjects
 
-    def test_no_resistine_ca_file_ships(self):
+    def test_no_other_ca_file_ships(self):
         import os
         from utils.functions import get_resource_path
-        stale = get_resource_path(os.path.join("resources", "certs", "resistine-rootCA.pem"))
-        assert not os.path.exists(stale), stale
+        certs_dir = get_resource_path(os.path.join("resources", "certs"))
+        assert sorted(os.listdir(certs_dir)) == ["chat-ca-bundle.pem"]
