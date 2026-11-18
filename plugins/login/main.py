@@ -240,7 +240,6 @@ class Plugin(BasePlugin):
             device_name.name_in_background()
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Device name after sign-in failed: {e}")
-        self._check_stale_installs()
 
         # First login on this machine: run the unified setup wizard instead
         # of dropping the user on the dashboard with everything unconfigured.
@@ -249,6 +248,7 @@ class Plugin(BasePlugin):
             self._transition_to_setup_wizard()
         else:
             self.app.create_dashboard()
+            self._check_stale_installs()
             # The wizard's endpoint step won't run again: re-enroll or link
             # the agent for this sign-in here.
             try:
@@ -300,6 +300,9 @@ class Plugin(BasePlugin):
 
         def on_setup_complete():
             self.app.create_dashboard()
+            # Only now: during the wizard the notice covered its "Skip for
+            # now" link and pointed at a Devices page that was not there yet.
+            self._check_stale_installs()
 
         self._wizard = SetupWizardScreen(self.app, on_setup_complete)
         self._wizard.show()
