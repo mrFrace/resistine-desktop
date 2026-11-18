@@ -64,7 +64,20 @@ def _user_agent() -> str:
             ver += f"+{build}"
     except Exception:
         ver = "dev"
-    return f"Phoenix-Desktop/{ver} ({platform.system()})"
+    # "Name/version (model; OS version)": the shape the account server (MAS)
+    # parses. With a single segment it recognised nothing and listed every
+    # install as "Phoenix Desktop: Unknown device". The model is generic on
+    # purpose: this header goes to every server the app talks to.
+    system = platform.system()
+    model, os_name = {"Darwin": ("Mac", "macOS"), "Windows": ("PC", "Windows"),
+                      "Linux": ("PC", "Linux")}.get(system, ("PC", system or "Unknown"))
+    try:
+        release = platform.mac_ver()[0] if system == "Darwin" else platform.release()
+    except Exception:  # noqa: BLE001
+        release = ""
+    release = "".join(c for c in str(release) if c.isalnum() or c in "._-")[:24]
+    os_part = f"{os_name} {release}" if release else os_name
+    return f"Phoenix-Desktop/{ver.replace(' ', '')} ({model}; {os_part})"
 
 
 def _session() -> requests.Session:
