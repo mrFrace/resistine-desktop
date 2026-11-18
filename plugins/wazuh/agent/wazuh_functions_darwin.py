@@ -653,6 +653,43 @@ def _stage_pkg_env_cmd(content):
     )
 
 
+# The osascript process of the install in progress (None after a restart).
+# Its exit is the only signal when the admin prompt is cancelled late or the
+# password is wrong: the script never runs, so no status file is ever written.
+_install_launcher = None
+
+
+def _launcher_outcome(status_file):
+    """Why an install with no status file is over, or None if it may still run.
+
+    Returns "user_canceled" / "script_failed" / "no_status_file".
+    """
+    proc = _install_launcher
+    if proc is not None:
+        rc = proc.poll()
+        if rc is None:
+            return None  # still at the password prompt, or installing
+        try:
+            stderr = proc.stderr.read().decode(errors="replace") if proc.stderr else ""
+        except (OSError, ValueError):
+            stderr = ""
+        # -128: cancelled. -60005/-60006/-60007: authorization failed/denied.
+        if rc != 0 and any(c in stderr for c in ("-128", "-6000")):
+            return "user_canceled"
+        return "user_canceled" if rc != 0 and not stderr.strip() else "script_failed"
+    # No handle: the app was restarted since the install began. The elevated
+    # command line names the status file, so a live install is findable.
+    try:
+        found = subprocess.run(
+            ["pgrep", "-f", os.path.basename(status_file)],
+            capture_output=True, timeout=5)
+        if found.returncode == 0:
+            return None
+    except Exception:  # noqa: BLE001 - cannot tell: keep waiting
+        return None
+    return "no_status_file"
+
+
 def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_file=None):
     """Launch the postinstall script with admin privileges via osascript.
 
@@ -737,8 +774,12 @@ def _launch_postinstall(pkg_path, agent_name, agent_group, restore_keys, key_fil
                 logger.error(f"osascript failed immediately: rc={proc.returncode} {stderr}")
                 return False, status_file
         except subprocess.TimeoutExpired:
-            # Still running = admin prompt accepted, script executing
+            # Still running: either the script is executing or the password
+            # prompt is still open. _poll_install_status tells them apart
+            # later by watching this process.
             pass
+        global _install_launcher
+        _install_launcher = proc
         logger.info(f"Postinstall launched (pid={proc.pid}), status_file={status_file}")
         return True, status_file
     except Exception as e:
@@ -757,8 +798,18 @@ def _poll_install_status(status_file):
         if status == "success":
             return True, True, data
         return True, False, data  # "failed"
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError):
+        pass
+    if os.path.exists(status_file):
+        return False, False, {}  # being written
+    # Nothing written yet. Without this check a prompt cancelled after the
+    # first two seconds (or a wrong password) left the install "Installing…"
+    # forever: the launcher was gone and the file would never appear.
+    outcome = _launcher_outcome(status_file)
+    if outcome is None:
         return False, False, {}
+    logger.warning(f"Agent install ended without a status file: {outcome}")
+    return True, False, {"status": "failed", "step": "init", "error": outcome}
 
 
 def full_install(progress_callback=None):

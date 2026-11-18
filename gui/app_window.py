@@ -160,9 +160,9 @@ class NavRail(QFrame):
             return
         label, caption = pair
         try:
-            if caption.text() == text:
+            if caption.property("fullText") == text:
                 return
-            caption.setText(text)
+            caption.setProperty("fullText", text)
             caption.setVisible(bool(text))
             self._place(btn)
         except RuntimeError:  # button deleted by a shell rebuild
@@ -172,11 +172,21 @@ class NavRail(QFrame):
         label, caption = self._labels[btn]
         label.adjustSize()
         x = self.COLLAPSED - 24
-        if not caption.text():
+        full = caption.property("fullText") or ""
+        if not full:
+            caption.setText("")
             label.move(x, (btn.height() - label.height()) // 2)
             return
+        # The open rail has room for about 20 characters. A longer reason
+        # ("Endpoint agent not running") used to run past its edge and be cut
+        # mid-word; it now ends in an ellipsis and the hover text has all of it.
+        room = self.EXPANDED - x - 12
+        shown = caption.fontMetrics().elidedText(full, Qt.TextElideMode.ElideRight, room)
+        caption.setText(shown)
+        caption.setFixedWidth(room)
         caption.adjustSize()
-        caption.setMaximumWidth(self.EXPANDED - x - 12)
+        caption.setFixedWidth(room)
+        btn.setToolTip(f"{label.text()}: {full}" if shown != full else "")
         total = label.height() + caption.height()
         top = (btn.height() - total) // 2
         label.move(x, top)

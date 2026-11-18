@@ -87,6 +87,22 @@ class TestNavCaption:
         rail.set_caption(btn, "")
         assert caption.isHidden() and name.y() == (btn.height() - name.height()) // 2
 
+    def test_long_reason_ends_in_an_ellipsis_inside_the_rail(self, qapp):
+        """ "Endpoint agent not running" ran past the open rail's edge and was
+        cut mid-word."""
+        rail, btn = self._rail(qapp)
+        _name, caption = rail._labels[btn]
+        long_reason = "Endpoint agent not running on this computer"
+        rail.set_caption(btn, long_reason)
+        assert caption.text().endswith("…") and caption.text() != long_reason
+        assert caption.x() + caption.width() <= rail.EXPANDED
+        assert caption.fontMetrics().horizontalAdvance(caption.text()) <= caption.width()
+        assert long_reason in btn.toolTip()  # nothing is lost
+        # same reason again is a no-op, and a short one drops the hover text
+        rail.set_caption(btn, long_reason)
+        rail.set_caption(btn, "Connected")
+        assert caption.text() == "Connected" and btn.toolTip() == ""
+
     def test_caption_on_unknown_button_is_ignored(self, qapp):
         from PyQt6.QtWidgets import QPushButton
 
