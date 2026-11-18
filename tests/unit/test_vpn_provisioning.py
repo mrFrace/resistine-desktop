@@ -300,3 +300,17 @@ class TestEnsureInBackground:
         src = inspect.getsource(login_main)
         skipped = src[src.index("needs_setup = not app_settings.get"):]
         assert "provisioning.ensure_in_background()" in skipped[:1500]
+
+
+@pytest.mark.unit
+def test_old_install_notice_waits_for_the_dashboard():
+    """Shown during the setup wizard it covered the wizard's own controls and
+    pointed at Devices → Sessions, which is not reachable until setup ends."""
+    import inspect
+    from plugins.login import main as login_main
+
+    src = inspect.getsource(login_main)
+    calls = [i for i in range(len(src)) if src.startswith("self._check_stale_installs()", i)]
+    assert len(calls) == 2
+    for i in calls:
+        assert "self.app.create_dashboard()" in src[max(0, i - 400):i]
