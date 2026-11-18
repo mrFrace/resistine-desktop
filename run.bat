@@ -35,21 +35,21 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Check ResistineVPN service; start it if installed-but-stopped, reinstall if missing
+:: Check PhoenixVPN service; start it if installed-but-stopped, reinstall if missing
 call :check_service_state
 if "!SERVICE_RUNNING!"=="1" (
     echo [run.bat] service: RUNNING -- skipping
 ) else if "!SERVICE_EXISTS!"=="1" (
     echo [run.bat] service: installed but not running -- starting
-    powershell -NoProfile -Command "Start-Process -FilePath 'sc.exe' -ArgumentList 'start','ResistineVPN' -Verb RunAs -Wait"
+    powershell -NoProfile -Command "Start-Process -FilePath 'sc.exe' -ArgumentList 'start','PhoenixVPN' -Verb RunAs -Wait"
     call :check_service_state
     if "!SERVICE_RUNNING!"=="1" (
         echo [run.bat] post-start: service is now RUNNING
     ) else (
         echo [run.bat] post-start: start failed -- registration may be stale ^(marked-for-deletion^); attempting full reinstall
-        set "INSTALL_LOG=%PROGRAMDATA%\Resistine\run_bat_install_service.log"
-        set "INSTALL_WRAPPER=%TEMP%\resistine_run_install_wrapper.bat"
-        if not exist "%PROGRAMDATA%\Resistine" mkdir "%PROGRAMDATA%\Resistine" >nul 2>&1
+        set "INSTALL_LOG=%PROGRAMDATA%\Phoenix\run_bat_install_service.log"
+        set "INSTALL_WRAPPER=%TEMP%\phoenix_run_install_wrapper.bat"
+        if not exist "%PROGRAMDATA%\Phoenix" mkdir "%PROGRAMDATA%\Phoenix" >nul 2>&1
         call :write_install_wrapper
         powershell -NoProfile -Command "Start-Process -FilePath '!INSTALL_WRAPPER!' -Verb RunAs -Wait"
         del "!INSTALL_WRAPPER!" >nul 2>&1
@@ -62,9 +62,9 @@ if "!SERVICE_RUNNING!"=="1" (
     )
 ) else (
     echo [run.bat] service: not installed -- reinstall required
-    set "INSTALL_LOG=%PROGRAMDATA%\Resistine\run_bat_install_service.log"
-    set "INSTALL_WRAPPER=%TEMP%\resistine_run_install_wrapper.bat"
-    if not exist "%PROGRAMDATA%\Resistine" mkdir "%PROGRAMDATA%\Resistine" >nul 2>&1
+    set "INSTALL_LOG=%PROGRAMDATA%\Phoenix\run_bat_install_service.log"
+    set "INSTALL_WRAPPER=%TEMP%\phoenix_run_install_wrapper.bat"
+    if not exist "%PROGRAMDATA%\Phoenix" mkdir "%PROGRAMDATA%\Phoenix" >nul 2>&1
     call :write_install_wrapper
     powershell -NoProfile -Command "Start-Process -FilePath '!INSTALL_WRAPPER!' -Verb RunAs -Wait"
     del "!INSTALL_WRAPPER!" >nul 2>&1
@@ -74,7 +74,7 @@ if "!SERVICE_RUNNING!"=="1" (
     ) else if "!SERVICE_EXISTS!"=="1" (
         echo [run.bat] post-install: service registered but not running
         echo [run.bat] install output: !INSTALL_LOG!
-        echo [run.bat] service setup log: %PROGRAMDATA%\Resistine\vpn_service_install.log
+        echo [run.bat] service setup log: %PROGRAMDATA%\Phoenix\vpn_service_install.log
     ) else (
         echo [run.bat] post-install: service still not installed -- UAC declined or install failed
         echo [run.bat] install output: !INSTALL_LOG!
@@ -96,10 +96,10 @@ goto :eof
 :check_service_state
 set "SERVICE_EXISTS="
 set "SERVICE_RUNNING="
-sc query ResistineVPN >nul 2>&1
+sc query PhoenixVPN >nul 2>&1
 if errorlevel 1 goto :check_service_state_done
 set "SERVICE_EXISTS=1"
-sc query ResistineVPN | findstr /C:"RUNNING" >nul 2>&1
+sc query PhoenixVPN | findstr /C:"RUNNING" >nul 2>&1
 if errorlevel 1 goto :check_service_state_done
 set "SERVICE_RUNNING=1"
 :check_service_state_done

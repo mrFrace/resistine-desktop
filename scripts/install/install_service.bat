@@ -18,7 +18,9 @@ for %%A in (%*) do (
 )
 
 :: ---- Config ----
-set SERVICE_NAME=ResistineVPN
+set SERVICE_NAME=PhoenixVPN
+:: What the service was registered as before the rename; only removed here.
+set LEGACY_SERVICE_NAME=ResistineVPN
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
@@ -32,8 +34,8 @@ for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
 set SERVICE_SCRIPT=%SCRIPT_DIR%\windows_vpn_service.py
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%SCRIPT_DIR%\plugins\vpn\wireguard\windows_vpn_service.py
 if not exist "%SERVICE_SCRIPT%" set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
-set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine\wireguard
-set LOG_DIR=%PROGRAMDATA%\Resistine
+set PROGRAMDATA_DIR=%PROGRAMDATA%\Phoenix\wireguard
+set LOG_DIR=%PROGRAMDATA%\Phoenix
 set SERVICE_SETUP_LOG=%LOG_DIR%\vpn_service_install.log
 
 if not exist "%SERVICE_SCRIPT%" (
@@ -161,10 +163,10 @@ set "PYWIN32_POSTINSTALL_OK="
 if !errorlevel! equ 0 (
     set "PYWIN32_POSTINSTALL_OK=1"
 ) else (
-    "%PYTHON_FULL%" -c "import sys, pathlib; p = pathlib.Path(sys.prefix) / 'Scripts' / 'pywin32_postinstall.py'; print(p)" > "%TEMP%\resistine_pywin32_postinstall_path.txt" 2>nul
-    if exist "%TEMP%\resistine_pywin32_postinstall_path.txt" (
-        set /p PYWIN32_POSTINSTALL_SCRIPT=<"%TEMP%\resistine_pywin32_postinstall_path.txt"
-        del "%TEMP%\resistine_pywin32_postinstall_path.txt" >nul 2>&1
+    "%PYTHON_FULL%" -c "import sys, pathlib; p = pathlib.Path(sys.prefix) / 'Scripts' / 'pywin32_postinstall.py'; print(p)" > "%TEMP%\phoenix_pywin32_postinstall_path.txt" 2>nul
+    if exist "%TEMP%\phoenix_pywin32_postinstall_path.txt" (
+        set /p PYWIN32_POSTINSTALL_SCRIPT=<"%TEMP%\phoenix_pywin32_postinstall_path.txt"
+        del "%TEMP%\phoenix_pywin32_postinstall_path.txt" >nul 2>&1
         if exist "%PYWIN32_POSTINSTALL_SCRIPT%" (
             "%PYTHON_FULL%" "%PYWIN32_POSTINSTALL_SCRIPT%" -install >nul 2>&1
             if !errorlevel! equ 0 set "PYWIN32_POSTINSTALL_OK=1"
@@ -196,6 +198,10 @@ echo       OK
 :: 6. Install / reinstall Windows service
 :: ============================================================
 echo [6/6] Installing Windows service...
+
+:: The pre-rename service listens on the same local port: remove it first.
+:: Its data directory is migrated by the new service when it starts.
+call :remove_legacy_vpn_service
 
 :: Stop and remove if exists
 sc query %SERVICE_NAME% >nul 2>&1
@@ -317,6 +323,9 @@ if defined PYTHON_FULL (
 )
 
 echo [3/4] Removing startup entries...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
+:: Entries written before the rename.
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
@@ -326,31 +335,35 @@ reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /
 echo       OK
 
 echo [4/4] Removing VPN services...
+call :remove_wireguard_tunnel_service phoenix
+:: Tunnel names used before the rename.
 call :remove_wireguard_tunnel_service resistine
 call :remove_wireguard_tunnel_service resistine_default
 call :remove_wireguard_tunnel_service resistine_vpn
 
+call :remove_legacy_vpn_service
+
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
-    echo       Stopping ResistineVPN...
+    echo       Stopping %SERVICE_NAME%...
     sc stop %SERVICE_NAME% >nul 2>&1
     call :wait_for_named_service_stopped_or_absent %SERVICE_NAME% 15
 
     if defined PYTHON_FULL (
-        echo       Removing ResistineVPN via service script...
+        echo       Removing %SERVICE_NAME% via service script...
         "%PYTHON_FULL%" "%SERVICE_SCRIPT%" remove >nul 2>&1
     )
 
     sc delete %SERVICE_NAME% >nul 2>&1
     call :wait_for_named_service_absent %SERVICE_NAME% 15
     if !errorlevel! neq 0 (
-        echo WARNING: ResistineVPN is still registered.
+        echo WARNING: %SERVICE_NAME% is still registered.
         call :pause_if_needed
         exit /b 1
     )
-    echo       OK - ResistineVPN removed
+    echo       OK - %SERVICE_NAME% removed
 ) else (
-    echo       ResistineVPN not found, skipping
+    echo       %SERVICE_NAME% not found, skipping
 )
 
 call :pause_if_needed
@@ -369,6 +382,16 @@ if defined _wg_exe (
     sc delete "WireGuardTunnel$!_tunnel_name!" >nul 2>&1
     call :wait_for_named_service_absent "WireGuardTunnel$!_tunnel_name!" 10
 )
+exit /b 0
+
+:remove_legacy_vpn_service
+sc query %LEGACY_SERVICE_NAME% >nul 2>&1
+if errorlevel 1 exit /b 0
+echo       Removing pre-rename service %LEGACY_SERVICE_NAME%...
+sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
+call :wait_for_named_service_stopped_or_absent %LEGACY_SERVICE_NAME% 15
+sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
+call :wait_for_named_service_absent %LEGACY_SERVICE_NAME% 15
 exit /b 0
 
 :wait_for_named_service_stopped_or_absent

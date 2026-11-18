@@ -1,5 +1,5 @@
 """
-Windows VPN client — thin IPC wrapper over the ResistineVPN service.
+Windows VPN client — thin IPC wrapper over the PhoenixVPN service.
 All tunnel control on Windows goes through here.
 
 Authors: Merhawi

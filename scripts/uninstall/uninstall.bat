@@ -1,6 +1,6 @@
 @echo off
 :: ============================================================
-:: Phoenix (formerly Resistine) — Full Uninstaller
+:: Phoenix — Full Uninstaller
 :: Removes services, configs, registry entries, and data dirs.
 :: ============================================================
 setlocal EnableDelayedExpansion
@@ -8,7 +8,10 @@ setlocal EnableDelayedExpansion
 set SCRIPT_DIR=%~dp0
 if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 
-set SERVICE_NAME=ResistineVPN
+set SERVICE_NAME=PhoenixVPN
+:: Names used before the rename, so an old install is removed as well.
+set LEGACY_SERVICE_NAME=ResistineVPN
+set LEGACY_PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
 
 :: Project root is always two levels up from scripts\uninstall\.
 for %%I in ("%SCRIPT_DIR%\..\..") do set PROJECT_ROOT=%%~fI
@@ -22,7 +25,7 @@ set VENV_PYTHON=%VENV_DIR%\Scripts\python.exe
 set APPDATA_DIR=%APPDATA%\Phoenix
 set LEGACY_APPDATA_DIR=%APPDATA%\Resistine
 set WG_DIR=%APPDATA_DIR%\wireguard
-set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
+set PROGRAMDATA_DIR=%PROGRAMDATA%\Phoenix
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
 set SHORTCUT=%USERPROFILE%\Desktop\Resistine VPN.lnk
 set SHORTCUT2=%USERPROFILE%\Desktop\Resistine.lnk
@@ -52,6 +55,7 @@ echo       OK
 
 :: ---- Remove startup registry entries (HKCU) ----
 echo [2/6] Removing user startup entries...
+reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
@@ -99,13 +103,13 @@ if not defined PYTHON_FULL (
 )
 
 if defined PYTHON_FULL (
-    echo %PYTHON_FULL%> "%TEMP%\resistine_python_path.txt"
+    echo %PYTHON_FULL%> "%TEMP%\phoenix_python_path.txt"
 )
 
 :: ---- Remove services + system data (needs admin) ----
 echo [6/6] Removing services and system data ^(requires Admin^)...
 set "SERVICE_LOG=%PROGRAMDATA_DIR%\uninstall_service.log"
-set "UNINSTALL_WRAPPER=%TEMP%\resistine_uninstall_service_wrapper.bat"
+set "UNINSTALL_WRAPPER=%TEMP%\phoenix_uninstall_service_wrapper.bat"
 if not exist "%PROGRAMDATA_DIR%" mkdir "%PROGRAMDATA_DIR%" >nul 2>&1
 > "%UNINSTALL_WRAPPER%" echo @echo off
 >> "%UNINSTALL_WRAPPER%" echo call "%~f0" /service ^> "%SERVICE_LOG%" 2^>^&1
@@ -115,7 +119,7 @@ if %errorlevel% neq 0 (
 )
 del "%UNINSTALL_WRAPPER%" >nul 2>&1
 
-del "%TEMP%\resistine_python_path.txt" >nul 2>&1
+del "%TEMP%\phoenix_python_path.txt" >nul 2>&1
 
 echo.
 echo ============================================================
@@ -141,8 +145,8 @@ echo ============================================================
 
 :: Read system Python path from temp file
 set SYS_PYTHON=
-if exist "%TEMP%\resistine_python_path.txt" (
-    set /p SYS_PYTHON= < "%TEMP%\resistine_python_path.txt"
+if exist "%TEMP%\phoenix_python_path.txt" (
+    set /p SYS_PYTHON= < "%TEMP%\phoenix_python_path.txt"
 )
 
 :: Fallback: search again if temp file missing
@@ -196,8 +200,15 @@ if exist "%WG_EXE%" (
 )
 echo       OK
 
-:: ---- Stop and remove ResistineVPN service ----
-echo Removing ResistineVPN service...
+:: ---- Stop and remove the VPN service ----
+sc query %LEGACY_SERVICE_NAME% >nul 2>&1
+if not errorlevel 1 (
+    echo Removing pre-rename service %LEGACY_SERVICE_NAME%...
+    sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
+    timeout /t 3 /nobreak >nul
+    sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
+)
+echo Removing %SERVICE_NAME% service...
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% neq 0 goto :vpn_service_not_present
 
@@ -250,7 +261,7 @@ if exist "C:\Program Files (x86)\ossec-agent" (
 :wazuh_done
 
 :: ---- Remove Sysmon/Defender blocks from ossec.conf ----
-echo Cleaning Resistine entries from ossec.conf...
+echo Cleaning Phoenix entries from ossec.conf...
 set "OSSEC_CONF=C:\Program Files (x86)\ossec-agent\ossec.conf"
 if exist "%OSSEC_CONF%" (
     powershell -NoProfile -Command "$c = Get-Content '%OSSEC_CONF%' -Raw; $c = $c -replace '(?s)\s*<localfile>\s*<location>Microsoft-Windows-Sysmon/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>', ''; $c = $c -replace '(?s)\s*<localfile>\s*<location>Microsoft-Windows-Windows Defender/Operational</location>\s*<log_format>eventchannel</log_format>\s*</localfile>', ''; Set-Content '%OSSEC_CONF%' $c -Encoding UTF8" >nul 2>&1
@@ -267,7 +278,8 @@ echo       Stopping Sysmon64...
 sc stop Sysmon64 >nul 2>&1
 timeout /t 3 /nobreak >nul
 :: Use Sysmon's own uninstall if available
-set "SYSMON_EXE=%PROGRAMFILES%\Resistine\Sysmon\Sysmon64.exe"
+set "SYSMON_EXE=%PROGRAMFILES%\Phoenix Sysmon\Sysmon64.exe"
+if not exist "%SYSMON_EXE%" set "SYSMON_EXE=%PROGRAMFILES%\Resistine\Sysmon\Sysmon64.exe"
 if exist "%SYSMON_EXE%" (
     "%SYSMON_EXE%" -u force >nul 2>&1
 ) else (
@@ -293,11 +305,15 @@ echo       OK
 
 :: ---- Remove startup registry entries (HKLM, requires admin) ----
 echo Removing system startup and registry entries...
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "PhoenixVPNTray" /f >nul 2>&1
+reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Phoenix" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPNTray" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "ResistineVPN" /f >nul 2>&1
 reg delete "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v "Resistine" /f >nul 2>&1
 
-:: Remove Resistine registry keys
+:: Remove the app's registry keys (and the pre-rename ones)
+reg delete "HKLM\Software\Phoenix" /f >nul 2>&1
+reg delete "HKCU\Software\Phoenix" /f >nul 2>&1
 reg delete "HKLM\Software\Resistine" /f >nul 2>&1
 reg delete "HKCU\Software\Resistine" /f >nul 2>&1
 echo       OK
@@ -310,18 +326,23 @@ if exist "%PROGRAMDATA_DIR%" (
 ) else (
     echo       Not found: %PROGRAMDATA_DIR%
 )
+if exist "%LEGACY_PROGRAMDATA_DIR%" (
+    rmdir /s /q "%LEGACY_PROGRAMDATA_DIR%"
+    echo       Removed: %LEGACY_PROGRAMDATA_DIR%
+)
 
 :: Remove Sysmon directory
-set "SYSMON_DIR=%PROGRAMFILES%\Resistine\Sysmon"
+set "SYSMON_DIR=%PROGRAMFILES%\Phoenix Sysmon"
 if exist "%SYSMON_DIR%" (
     rmdir /s /q "%SYSMON_DIR%"
     echo       Removed: %SYSMON_DIR%
 )
 
-:: Remove Resistine under Program Files if empty
-set "PF_RESISTINE=%PROGRAMFILES%\Resistine"
-if exist "%PF_RESISTINE%" (
-    rmdir "%PF_RESISTINE%" >nul 2>&1
+:: Same for the location a pre-rename install used
+set "LEGACY_PF_DIR=%PROGRAMFILES%\Resistine"
+if exist "%LEGACY_PF_DIR%\Sysmon" rmdir /s /q "%LEGACY_PF_DIR%\Sysmon"
+if exist "%LEGACY_PF_DIR%" (
+    rmdir "%LEGACY_PF_DIR%" >nul 2>&1
 )
 echo       OK
 

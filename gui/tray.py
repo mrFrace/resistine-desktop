@@ -1,8 +1,8 @@
 # tray.py
 """
 Phoenix VPN System Tray Icon — standalone, no project imports.
-Authors: Merhawi and the Resistine Team
-Copyright (c) Resistine 2025
+Authors: Merhawi and the Phoenix Team
+Copyright (c) Phoenix 2025-2026
 Licensed under the GNU General Public License v2 or later
 """
 
@@ -51,12 +51,12 @@ SERVICE_PORT = 51888
 BUFFER_SIZE  = 65536
 POLL_INTERVAL = 5
 
-# Token is written by the ResistineVPN service on first start and shared via
-# %PROGRAMDATA%\Resistine\wireguard\.ipc_token. Path must match IPC_TOKEN_FILE
+# Token is written by the PhoenixVPN service on first start and shared via
+# %PROGRAMDATA%\Phoenix\wireguard\.ipc_token. Path must match IPC_TOKEN_FILE
 # in plugins/vpn/wireguard/windows_vpn_service.py.
 _IPC_TOKEN_FILE = os.path.join(
     os.environ.get("PROGRAMDATA", r"C:\ProgramData"),
-    "Resistine",
+    "Phoenix",
     "wireguard",
     ".ipc_token",
 )
@@ -109,8 +109,7 @@ def _load_ipc_token() -> str:
     except OSError as e:
         logger.error(f"Failed to load IPC token: {e}")
     # Test/dev override
-    return os.environ.get("PHOENIX_IPC_TOKEN") or os.environ.get(
-        "RESISTINE_IPC_TOKEN", "")
+    return os.environ.get("PHOENIX_IPC_TOKEN", "")
 
 
 # IPC_TOKEN kept as a module attribute for backward compatibility, but

@@ -21,7 +21,7 @@ import sys
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-_SERVICE = "Resistine"
+_SERVICE = "Phoenix"
 _USERNAME = "sparkle-ed-private-key"
 
 

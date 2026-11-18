@@ -197,7 +197,7 @@ class TestKeyringSecurityCheck:
 # ===========================================================================
 # NOTE: the earlier version of this test just did
 #   `from plugins.vpn.wireguard.service_client import IPC_TOKEN`
-# and asserted it wasn't equal to "RESISTINE_INTERNAL_TOKEN_CHANGE_ME".
+# and asserted it wasn't equal to "PHOENIX_INTERNAL_TOKEN_CHANGE_ME".
 # That only covered one specific placeholder string at a specific
 # import location, and it broke as soon as the module stopped exposing
 # a module-level IPC_TOKEN constant at all. The pair of tests below
@@ -212,7 +212,7 @@ class TestKeyringSecurityCheck:
 @pytest.mark.security
 def test_service_client_has_no_hardcoded_token():
     """service_client must load the IPC token from the shared file (not a
-    hardcoded placeholder). Token comes from %PROGRAMDATA%\\Resistine\\wireguard\\.ipc_token
+    hardcoded placeholder). Token comes from %PROGRAMDATA%\\Phoenix\\wireguard\\.ipc_token
     written by the service at first start.
     """
     import inspect
@@ -233,7 +233,7 @@ def test_windows_ipc_token_is_not_default():
     from plugins.vpn.wireguard.service_client import _load_ipc_token
 
     token = _load_ipc_token()
-    assert token != "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", (
+    assert token != "PHOENIX_INTERNAL_TOKEN_CHANGE_ME", (
         "Default IPC token has not been changed — this is a security vulnerability"
     )
 

@@ -1,9 +1,9 @@
 """
-Shared pytest fixtures for the Resistine Desktop test suite.
+Shared pytest fixtures for the Phoenix Desktop test suite.
 
 All fixtures here are available to every test file without importing.
 Key design goals:
-- Never touch the real ~/.config/resistine or ~/Library/Application Support/Resistine
+- Never touch the real ~/.config/phoenix or ~/Library/Application Support/Phoenix
 - Never touch the real system keyring
 - Never make real network requests unless the test is explicitly marked @pytest.mark.network
 - Never call real subprocess commands unless explicitly mocked
@@ -31,17 +31,17 @@ if str(PROJECT_ROOT) not in sys.path:
 # Prevent module-load-time side effects from Windows code paths.
 #
 # Importing services.windows_vpn_service triggers:
-#   logging.basicConfig(filename=r"C:\ProgramData\Resistine\vpn_service.log", ...)
-#   os.makedirs(r"C:\ProgramData\Resistine\wireguard", exist_ok=True)
+#   logging.basicConfig(filename=r"C:\ProgramData\Phoenix\vpn_service.log", ...)
+#   os.makedirs(r"C:\ProgramData\Phoenix\wireguard", exist_ok=True)
 # On non-Windows or on real Windows outside the test env those would open
 # real file handles / create real directories. Redirect them to a temp path
 # BEFORE any test module imports the service.
 # ---------------------------------------------------------------------------
-_TEST_TMP_ROOT = Path(tempfile.gettempdir()) / "resistine_tests"
+_TEST_TMP_ROOT = Path(tempfile.gettempdir()) / "phoenix_tests"
 _TEST_TMP_ROOT.mkdir(exist_ok=True)
 # NOTE: make sure it's an assignment here... not os.environ.setdefault. On
 # Windows PROGRAMDATA is always pre-set, so setdefault was silently a no-op
-# and tests were writing real files into C:\ProgramData\Resistine\. - Austin
+# and tests were writing real files into C:\ProgramData\Phoenix\. - Austin
 _ORIGINAL_PROGRAMDATA = os.environ.get("PROGRAMDATA")
 _ORIGINAL_APPDATA = os.environ.get("APPDATA")
 os.environ["PROGRAMDATA"] = str(_TEST_TMP_ROOT / "ProgramData")
@@ -53,14 +53,14 @@ os.environ["APPDATA"] = str(_TEST_TMP_ROOT / "AppData")
 # send_command() tests don't short-circuit with "IPC token unavailable"
 # before their mocks run. Path mirrors plugins/vpn/wireguard/
 # windows_vpn_service.IPC_TOKEN_FILE.
-_TEST_TOKEN_DIR = _TEST_TMP_ROOT / "ProgramData" / "Resistine" / "wireguard"
+_TEST_TOKEN_DIR = _TEST_TMP_ROOT / "ProgramData" / "Phoenix" / "wireguard"
 _TEST_TOKEN_DIR.mkdir(parents=True, exist_ok=True)
 (_TEST_TOKEN_DIR / ".ipc_token").write_text("test_stub_ipc_token_" + "0" * 40)
 
 # NOTE: this logging.basicConfig wrapper is here because
 # services.windows_vpn_service calls logging.basicConfig(filename=...) at
 # module import time, and the path it hands over is a real
-# C:\ProgramData\Resistine\vpn_service.log location. Without this sandbox
+# C:\ProgramData\Phoenix\vpn_service.log location. Without this sandbox
 # every test import opens a real log file handle on your system and keeps
 # appending to it across runs. Please don't try to simplify this (even if
 # that module later stops configuring logging at import time) without
@@ -295,7 +295,7 @@ def _isolate_settings_dir(request, tmp_path_factory, monkeypatch):
 @pytest.fixture()
 def tmp_config_dir(tmp_path, monkeypatch):
     """Redirect all settings I/O to a private temp directory."""
-    config_dir = tmp_path / "resistine_config"
+    config_dir = tmp_path / "phoenix_config"
     config_dir.mkdir()
     monkeypatch.setattr("utils.settings.get_config_dir", lambda: str(config_dir))
     return config_dir

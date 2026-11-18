@@ -1,5 +1,5 @@
 """
-IPC client for the ResistineVPN Windows service.
+IPC client for the PhoenixVPN Windows service.
 Authors: Merhawi
 Copyright (c) Phoenix 2025
 """
@@ -18,11 +18,11 @@ SERVICE_PORT = 51888
 # Both the service (SYSTEM) and the GUI (current user) can access ProgramData.
 # IMPORTANT: this path must match IPC_TOKEN_FILE in
 # plugins/vpn/wireguard/windows_vpn_service.py — the service writes to
-# %PROGRAMDATA%\Resistine\wireguard\.ipc_token (dot-prefixed, inside the
+# %PROGRAMDATA%\Phoenix\wireguard\.ipc_token (dot-prefixed, inside the
 # wireguard/ subdirectory). The client reads from that same location so
 # both sides authenticate against the same token value.
 _PROGRAMDATA = os.environ.get("PROGRAMDATA", r"C:\ProgramData")
-_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Resistine", "wireguard", ".ipc_token")
+_IPC_TOKEN_FILE = os.path.join(_PROGRAMDATA, "Phoenix", "wireguard", ".ipc_token")
 
 
 def _load_ipc_token() -> str:
@@ -38,8 +38,7 @@ def _load_ipc_token() -> str:
     except OSError as e:
         logger.error(f"Failed to load IPC token: {e}")
     # Fallback: allow override via environment (useful for CI / testing)
-    return os.environ.get("PHOENIX_IPC_TOKEN") or os.environ.get(
-        "RESISTINE_IPC_TOKEN", "")
+    return os.environ.get("PHOENIX_IPC_TOKEN", "")
 
 
 def _recv_response(sock: socket.socket) -> bytes:
@@ -59,7 +58,7 @@ def _recv_response(sock: socket.socket) -> bytes:
 
 
 def send_command(command: str, tunnel: str, config_path: str = None) -> dict:
-    """Send a command to the ResistineVPN service via IPC socket.
+    """Send a command to the PhoenixVPN service via IPC socket.
 
     Args:
         command: The command to send (status, connect, disconnect, etc.)

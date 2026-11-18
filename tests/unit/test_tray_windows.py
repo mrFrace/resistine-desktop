@@ -235,7 +235,7 @@ class TestPhoenixTrayState:
         tray = PhoenixTray()
         tray._state = "disconnected"
         tray._tunnel = "wg0"
-        tray._config_path = r"C:\Users\Test\AppData\Roaming\Resistine\wireguard\wg0.conf"
+        tray._config_path = r"C:\Users\Test\AppData\Roaming\Phoenix\wireguard\wg0.conf"
         tray._icon = MagicMock()
 
         with patch("gui.tray._send_command", return_value={"status": "ok", "state": "Running"}) as mock_send:
@@ -263,19 +263,19 @@ class TestPhoenixTrayState:
 # ===========================================================================
 @pytest.mark.unit
 class TestTrayServiceTokenMismatch:
-    """The tray uses a hardcoded literal 'RESISTINE_INTERNAL_TOKEN_CHANGE_ME'
+    """The tray uses a hardcoded literal 'PHOENIX_INTERNAL_TOKEN_CHANGE_ME'
     while the service generates a random token at first start and stores it
-    in %PROGRAMDATA%\\Resistine\\ipc_token. These will never match → all tray
+    in %PROGRAMDATA%\\Phoenix\\ipc_token. These will never match → all tray
     IPC calls will be rejected as Unauthorized.
 
     NOTE: these two tests caught a ship-blocker bug the first time I ran
     them. gui/tray.py had IPC_TOKEN set to the literal placeholder
-    "RESISTINE_INTERNAL_TOKEN_CHANGE_ME", which meant every Connect/
+    "PHOENIX_INTERNAL_TOKEN_CHANGE_ME", which meant every Connect/
     Disconnect action from the tray was silently rejected by the service
     as Unauthorized and the tray menu effectively did nothing. If anyone
     reintroduces a module-level IPC_TOKEN constant on the tray side please
     ensure that it's actually loaded from the shared
-    %PROGRAMDATA%\\Resistine\\ipc_token file on every call, otherwise you'll
+    %PROGRAMDATA%\\Phoenix\\ipc_token file on every call, otherwise you'll
     experience the same non-working tray issue described above. - Austin
     """
 
@@ -285,7 +285,7 @@ class TestTrayServiceTokenMismatch:
         # A literal 'CHANGE_ME' string is a known broken placeholder
         assert "CHANGE_ME" not in IPC_TOKEN, (
             f"Tray uses placeholder token: {IPC_TOKEN!r}. The service generates "
-            "a random token in %PROGRAMDATA%\\Resistine\\ipc_token — the tray "
+            "a random token in %PROGRAMDATA%\\Phoenix\\ipc_token — the tray "
             "must read from the same file or it will always be rejected."
         )
 

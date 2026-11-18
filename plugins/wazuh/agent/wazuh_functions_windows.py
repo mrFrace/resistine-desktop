@@ -73,7 +73,7 @@ def pending_reboot_reason():
     return ""
 
 # Sysmon paths
-_SYSMON_DIR = os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Resistine", "Sysmon")
+_SYSMON_DIR = os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "Phoenix Sysmon")
 _SYSMON_EXE = os.path.join(_SYSMON_DIR, "Sysmon64.exe")
 _SYSMON_CONFIG = os.path.join(_SYSMON_DIR, "sysmonconfig-export.xml")
 
@@ -380,7 +380,7 @@ def _prepare_sysmon_download(progress_callback=None):
         progress_callback("Downloading Sysmon...")
 
     # Download and extract to a temp directory (no admin needed)
-    tmp_sysmon = os.path.join(tempfile.gettempdir(), "resistine_sysmon")
+    tmp_sysmon = os.path.join(tempfile.gettempdir(), "phoenix_sysmon")
     os.makedirs(tmp_sysmon, exist_ok=True)
 
     sysmon_zip = os.path.join(tmp_sysmon, "Sysmon.zip")

@@ -11,11 +11,14 @@ import sys
 
 from utils.logger import logger
 
+# Current installer identity first; the other two are what installs made
+# before the rename registered as, so the in-app uninstall still finds them.
 _INNO_UNINSTALL_KEYS = (
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\PhoenixDesktop_is1",
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\ResistineDesktop_is1",
     r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Resistine",
 )
-_APP_KEY = r"Software\Resistine"
+_APP_KEYS = (r"Software\Phoenix", r"Software\Resistine")
 
 
 def _progress(progress_callback, msg):
@@ -92,10 +95,14 @@ def _candidate_uninstaller_paths():
     roots = [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]
 
     for root in roots:
-        install_dir = _query_reg_string(winreg, root, _APP_KEY, "InstallDir")
-        if install_dir:
-            add(os.path.join(install_dir, "unins000.exe"))
-            add(os.path.join(install_dir, "Uninstall.exe"))
+        for app_key in _APP_KEYS:
+            install_dir = _query_reg_string(winreg, root, app_key, "InstallDir")
+            if install_dir:
+                # Inno numbers a second uninstaller unins001 when it installs
+                # over a copy that already had one.
+                add(os.path.join(install_dir, "unins000.exe"))
+                add(os.path.join(install_dir, "unins001.exe"))
+                add(os.path.join(install_dir, "Uninstall.exe"))
 
     for root in roots:
         for subkey in _INNO_UNINSTALL_KEYS:

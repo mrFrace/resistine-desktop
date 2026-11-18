@@ -1,7 +1,7 @@
 """
 Windows version compatibility tests.
 
-Validates that Resistine behaves correctly across:
+Validates that Phoenix behaves correctly across:
 - Windows 10 (21H2, 22H2)
 - Windows 11 (23H2, 24H2, 25H2)
 
@@ -139,6 +139,8 @@ class TestRegistryCompat:
         from utils.uninstall.windows import _INNO_UNINSTALL_KEYS
         assert len(_INNO_UNINSTALL_KEYS) >= 2
         # Must check the Inno Setup key format
+        assert "PhoenixDesktop_is1" in _INNO_UNINSTALL_KEYS[0]
+        # ...and the keys an install from before the rename registered under
         assert any("ResistineDesktop_is1" in key for key in _INNO_UNINSTALL_KEYS)
         assert any("Resistine" in key for key in _INNO_UNINSTALL_KEYS)
 
@@ -214,7 +216,7 @@ class TestUACCompat:
         from utils.uninstall.windows import run_uninstall
 
         with patch("utils.uninstall.windows._find_uninstaller_command",
-                   return_value=(r"C:\Program Files\Resistine\unins000.exe", "")):
+                   return_value=(r"C:\Program Files\Phoenix\unins000.exe", "")):
             with patch("os.path.exists", return_value=True):
                 # Win10: typically returns 42
                 with patch("ctypes.windll.shell32.ShellExecuteW", return_value=42):
@@ -490,8 +492,8 @@ class TestUninstallerCompat:
         """Uninstall command may be quoted (Inno Setup style)."""
         from utils.uninstall.windows import _split_uninstall_command
 
-        exe, args = _split_uninstall_command('"C:\\Program Files\\Resistine\\unins000.exe" /SILENT')
-        assert exe == r"C:\Program Files\Resistine\unins000.exe"
+        exe, args = _split_uninstall_command('"C:\\Program Files\\Phoenix\\unins000.exe" /SILENT')
+        assert exe == r"C:\Program Files\Phoenix\unins000.exe"
         assert args == "/SILENT"
 
     def test_split_unquoted_command(self):
@@ -535,7 +537,7 @@ class TestUninstallerCompat:
     def test_is_available_true_when_exe_exists(self):
         from utils.uninstall.windows import is_available
         with patch("utils.uninstall.windows._find_uninstaller_command",
-                   return_value=(r"C:\Resistine\unins000.exe", "")):
+                   return_value=(r"C:\Phoenix\unins000.exe", "")):
             with patch("os.path.exists", return_value=True):
                 assert is_available() is True
 

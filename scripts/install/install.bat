@@ -10,7 +10,9 @@ if "%SCRIPT_DIR:~-1%"=="\" set SCRIPT_DIR=%SCRIPT_DIR:~0,-1%
 set PROJECT_ROOT=%SCRIPT_DIR%\..\..
 for %%I in ("%PROJECT_ROOT%") do set PROJECT_ROOT=%%~fI
 
-set SERVICE_NAME=ResistineVPN
+set SERVICE_NAME=PhoenixVPN
+:: What the service was registered as before the rename; only removed here.
+set LEGACY_SERVICE_NAME=ResistineVPN
 set SERVICE_SCRIPT=%PROJECT_ROOT%\plugins\vpn\wireguard\windows_vpn_service.py
 set MAIN_SCRIPT=%PROJECT_ROOT%\main.py
 set TRAY_SCRIPT=%PROJECT_ROOT%\gui\tray.py
@@ -22,7 +24,7 @@ set REQUIREMENTS=%PROJECT_ROOT%\requirements\requirements-windows.txt
 if not exist "%REQUIREMENTS%" set REQUIREMENTS=%PROJECT_ROOT%\requirements.txt
 set APPDATA_DIR=%APPDATA%\Phoenix
 set WG_DIR=%APPDATA_DIR%\wireguard
-set PROGRAMDATA_DIR=%PROGRAMDATA%\Resistine
+set PROGRAMDATA_DIR=%PROGRAMDATA%\Phoenix
 set PROGRAMDATA_WG=%PROGRAMDATA_DIR%\wireguard
 set SHORTCUT=%USERPROFILE%\Desktop\Phoenix VPN.lnk
 set STARTUP_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run
@@ -156,7 +158,7 @@ echo       OK - %APPDATA_DIR%
 
 :: ---- Step 5: Desktop shortcut ----
 echo [5/6] Creating desktop shortcut...
-set VBS=%TEMP%\resistine_shortcut.vbs
+set VBS=%TEMP%\phoenix_shortcut.vbs
 
 >  "%VBS%" echo Set oWS = WScript.CreateObject("WScript.Shell")
 >> "%VBS%" echo Set oLink = oWS.CreateShortcut("%SHORTCUT%")
@@ -195,7 +197,7 @@ if %errorlevel% neq 0 (
 :: Write PYTHON_FULL to a temp file so the elevated process can read it
 :: (environment variables do not survive UAC elevation boundary)
 :: ============================================================
-echo %PYTHON_FULL%> "%TEMP%\resistine_python_path.txt"
+echo %PYTHON_FULL%> "%TEMP%\phoenix_python_path.txt"
 
 echo.
 echo Installing Windows service ^(requires Admin^)...
@@ -205,7 +207,7 @@ if %errorlevel% neq 0 (
     echo          VPN toggle will not work until service is installed.
 )
 
-del "%TEMP%\resistine_python_path.txt" >nul 2>&1
+del "%TEMP%\phoenix_python_path.txt" >nul 2>&1
 
 :: The tray is now a native QSystemTrayIcon inside the app (gui/system_tray.py),
 :: started by main.py — no separate tray process to launch here.
@@ -235,7 +237,7 @@ exit /b 0
 :: ============================================================
 :install_service
 echo ============================================================
-echo  Installing ResistineVPN Service ^(Admin^)
+echo  Installing PhoenixVPN Service ^(Admin^)
 echo ============================================================
 
 net session >nul 2>&1
@@ -246,8 +248,8 @@ if %errorlevel% neq 0 (
 
 :: Read system Python path passed from the user-level section
 set SYS_PYTHON=
-if exist "%TEMP%\resistine_python_path.txt" (
-    set /p SYS_PYTHON= < "%TEMP%\resistine_python_path.txt"
+if exist "%TEMP%\phoenix_python_path.txt" (
+    set /p SYS_PYTHON= < "%TEMP%\phoenix_python_path.txt"
 )
 
 :: Fallback: search for Python again if temp file is missing
@@ -349,7 +351,17 @@ if exist "%WG_EXE%" (
 timeout /t 2 /nobreak >nul
 echo       OK
 
-:: ---- Remove existing ResistineVPN service ----
+:: ---- Remove the pre-rename service (it listens on the same local port) ----
+sc query %LEGACY_SERVICE_NAME% >nul 2>&1
+if not errorlevel 1 (
+    echo Removing pre-rename service %LEGACY_SERVICE_NAME%...
+    sc stop %LEGACY_SERVICE_NAME% >nul 2>&1
+    timeout /t 3 /nobreak >nul
+    sc delete %LEGACY_SERVICE_NAME% >nul 2>&1
+)
+reg delete "%STARTUP_KEY%" /v "%LEGACY_SERVICE_NAME%Tray" /f >nul 2>&1
+
+:: ---- Remove existing PhoenixVPN service ----
 sc query %SERVICE_NAME% >nul 2>&1
 if %errorlevel% equ 0 (
     echo Stopping existing service...

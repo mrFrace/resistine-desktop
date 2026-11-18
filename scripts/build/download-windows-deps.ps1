@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Downloads bundled dependency installers for the Resistine Windows installer.
+    Downloads bundled dependency installers for the Phoenix Windows installer.
 .DESCRIPTION
     Downloads Python 3.13 and WireGuard installers into packaging/windows/deps/
     so they can be bundled into the Inno Setup package. Skips files that already exist.
