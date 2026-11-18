@@ -354,3 +354,15 @@ def test_user_agent_is_not_python_default():
 def test_tokens_expiry():
     t = oidc.Tokens.from_response({"access_token": "a", "expires_in": 60})
     assert t.expires_at and abs(t.expires_at - time.time() - 60) < 5
+
+
+def test_user_agent_has_the_shape_the_account_server_parses():
+    """MAS reads "Name/version (model; OS version)". With one segment in the
+    brackets it matched nothing and showed "Phoenix Desktop: Unknown device"."""
+    import re
+
+    m = re.match(r"^(?P<name>[^/]+)/(?P<version>[^ ]+) \((?P<segments>.+)\)$", oidc._user_agent())
+    assert m and "Mozilla/" not in oidc._user_agent()
+    segments = [s.strip() for s in m.group("segments").split(";")]
+    assert len(segments) >= 2 and all(segments)
+    assert segments[1].split(" ")[0] in ("macOS", "Windows", "Linux")
