@@ -296,6 +296,9 @@ def main() -> int:
     ):
         log_level = "DEBUG"
     setup_logging(level=log_level)
+    # Before any plugin imports matrix-nio: see utils/optional_deps.py.
+    from utils import optional_deps
+    optional_deps.block_unloadable()
     if args.trace or os.environ.get("PHOENIX_TRACE") == "1":
         from utils import http_trace
         trace_file = http_trace.enable(os.path.join(settings.get_config_dir(), "logs"))

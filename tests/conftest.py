@@ -281,6 +281,14 @@ def _isolate_settings_dir(request, tmp_path_factory, monkeypatch):
     kr.delete_password.side_effect = lambda s, u: store.pop((s, u), None)
     monkeypatch.setattr("utils.settings.keyring", kr)
     monkeypatch.setattr("utils.encryption.keyring", kr, raising=False)
+    # macOS keeps the WireGuard configs outside the config dir, in the App
+    # Group container. Sign-out and uninstall delete every .conf there, so a
+    # test reaching them unredirected wipes the developer's real VPN config
+    # (it did). No marker opts out of this one.
+    group_containers = tmp_path_factory.mktemp("group_containers")
+    monkeypatch.setattr(
+        "plugins.vpn.wireguard.vpn_functions_darwin.group_containers_dir",
+        lambda: str(group_containers))
     if request.node.get_closest_marker("real_config_dir"):
         yield  # tests of get_config_dir itself mock platform/env instead
         return

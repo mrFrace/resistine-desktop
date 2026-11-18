@@ -368,7 +368,7 @@ class TestWireguardDirPermissions:
 
     def test_darwin_dir_created_0700(self, tmp_path, monkeypatch):
         from plugins.vpn.wireguard import vpn_functions_darwin as d
-        monkeypatch.setattr(d.os.path, "expanduser", lambda _p: str(tmp_path))
+        monkeypatch.setattr(d, "group_containers_dir", lambda: str(tmp_path))
         path = d.get_writable_wireguard_dir()
         assert path.startswith(str(tmp_path))
         assert stat.S_IMODE(os.stat(path).st_mode) == 0o700
@@ -498,3 +498,30 @@ class TestVpnMainHelpers:
     def test_conf_path_rejects_traversal(self, vpn_main):
         with pytest.raises(ValueError):
             vpn_main._conf_path("../../etc/x")
+
+
+@pytest.mark.unit
+class TestSuiteNeverTouchesRealVpnConfigs:
+    """Sign-out deletes every .conf in the WireGuard directory. On macOS that
+    directory is in ~/Library/Group Containers, outside the config dir the
+    suite already redirects, and a test that called the sign-out cleanup
+    deleted the real config of whoever ran the tests."""
+
+    def test_darwin_wireguard_dir_is_redirected(self):
+        from plugins.vpn.wireguard import vpn_functions_darwin as d
+        real = os.path.join(os.path.expanduser("~"), "Library")
+        assert not d.get_writable_wireguard_dir().startswith(real)
+
+    def test_sign_out_cleanup_stays_inside_the_sandbox(self, monkeypatch):
+        import glob as _glob
+        from unittest.mock import MagicMock
+        from plugins.settings.main import Plugin
+
+        seen = []
+        real_glob = _glob.glob
+        monkeypatch.setattr("plugins.settings.main.glob.glob",
+                            lambda pattern, *a, **k: seen.append(pattern) or real_glob(pattern, *a, **k))
+        Plugin._clear_user_data(MagicMock())
+        home_library = os.path.join(os.path.expanduser("~"), "Library")
+        assert seen, "sign-out no longer globs for configs; update this test"
+        assert not any(p.startswith(home_library) for p in seen), seen

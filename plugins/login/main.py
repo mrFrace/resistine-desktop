@@ -256,6 +256,12 @@ class Plugin(BasePlugin):
                 sign_in.ensure_in_background()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Agent check after sign-in failed: {e}")
+            # Nor will its VPN step: sign-out deleted the config.
+            try:
+                from plugins.vpn import provisioning
+                provisioning.ensure_in_background()
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"VPN config after sign-in failed: {e}")
 
     def _check_stale_installs(self):
         """Point at Devices → Sessions when an earlier install of this

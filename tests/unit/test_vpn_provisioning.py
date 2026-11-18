@@ -260,3 +260,43 @@ class TestLinuxWriterAndKeys:
         assert linux.get_wireguard_private_key() == "OLDPRIV="
         assert not legacy.exists()
         assert linux.get_wireguard_public_key() == "OLDPUB="
+
+
+@pytest.mark.unit
+class TestEnsureInBackground:
+    """A sign-in that skips the setup wizard still has to get a config back:
+    sign-out deleted it, and nothing else fetched one until the VPN switch
+    was turned on."""
+
+    def _inline(self, monkeypatch):
+        from plugins.vpn import provisioning
+
+        class _T:
+            def __init__(self, target, **_k): self.target = target
+            def start(self): self.target()
+        monkeypatch.setattr(provisioning.threading, "Thread", _T)
+        return provisioning
+
+    def test_fetches_the_config(self, monkeypatch):
+        p = self._inline(monkeypatch)
+        called = []
+        monkeypatch.setattr(p, "ensure_vpn_config", lambda *a, **k: called.append(1) or ("phoenix", "/x"))
+        p.ensure_in_background()
+        assert called == [1]
+
+    @pytest.mark.parametrize("error", ["provisioning", "other"])
+    def test_failure_never_escapes_the_sign_in(self, monkeypatch, error):
+        p = self._inline(monkeypatch)
+
+        def boom(*a, **k):
+            raise p.ProvisioningError("no VPN access") if error == "provisioning" else RuntimeError("x")
+        monkeypatch.setattr(p, "ensure_vpn_config", boom)
+        p.ensure_in_background()  # must not raise
+
+    def test_sign_in_without_the_wizard_asks_for_it(self):
+        import inspect
+        from plugins.login import main as login_main
+
+        src = inspect.getsource(login_main)
+        skipped = src[src.index("needs_setup = not app_settings.get"):]
+        assert "provisioning.ensure_in_background()" in skipped[:1500]

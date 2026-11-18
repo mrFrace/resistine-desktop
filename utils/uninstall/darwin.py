@@ -676,9 +676,12 @@ def _clear_group_container(wg_dir):
 
 def _remove_wireguard_configs():
     """Remove WireGuard configuration files from the App Group container."""
-    from plugins.vpn.wireguard.vpn_functions_darwin import APP_GROUP_ID
+    from plugins.vpn.wireguard.vpn_functions_darwin import (
+        APP_GROUP_ID,
+        group_containers_dir,
+    )
 
-    base = os.path.expanduser("~/Library/Group Containers")
+    base = group_containers_dir()
     total_removed = 0
     total_failed = []
     for group_id in (APP_GROUP_ID,):
