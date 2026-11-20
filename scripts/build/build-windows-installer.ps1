@@ -194,14 +194,13 @@ if (Test-Path $depsScript) {
 $outputDir = Join-Path $ProjectRoot "dist\installers"
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
-# Generate LICENSE.txt from LICENSE.md so the Inno Setup license-acceptance
-# screen renders cleanly (without literal "#" / "##" / "---" leaking from
-# the source markdown). The .txt is gitignored and regenerated on every
-# build, so LICENSE.md remains the single source of truth.
-Write-Host "Generating LICENSE.txt for Inno Setup..."
-Convert-LicenseMdToTxt `
-    -SourceMd (Join-Path $ProjectRoot "LICENSE.md") `
-    -TargetTxt (Join-Path $ProjectRoot "LICENSE.txt")
+# The licence page shows packaging\windows\InstallAgreement.txt (Terms of
+# Service, Privacy Policy and the GPL notice), which is committed and kept in
+# step with docs\ by scripts\build\render_legal.py. Nothing to generate here.
+$agreement = Join-Path $ProjectRoot "packaging\windows\InstallAgreement.txt"
+if (-not (Test-Path $agreement)) {
+    throw "Install agreement not found at $agreement (run scripts/build/render_legal.py)"
+}
 
 $version = Get-AppVersion
 $iscc = Resolve-InnoCompiler

@@ -2,4 +2,8 @@
 set -e
 if [ "$1" = "configure" ]; then
 	update-desktop-database -q /usr/share/applications || true
+	# $2 is empty on a first install: say where the agreement is, once.
+	if [ -z "$2" ]; then
+		echo "Phoenix: by using it you agree to the Terms of Service and Privacy Policy in /usr/share/doc/phoenix/AGREEMENT.txt"
+	fi
 fi

@@ -13,9 +13,12 @@ import webbrowser
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -50,7 +53,12 @@ class Plugin(BasePlugin):
     def create_main_screen(self):
         from gui.qt_widgets import pixmap
 
+        # Two views in place (no dialogs): the sign-in screen, and a reader
+        # for the Terms of Service and Privacy Policy linked from it.
+        self._views = QStackedWidget()
         page = QWidget()
+        self._views.addWidget(page)
+        self._views.addWidget(self._build_legal_reader())
         outer = QVBoxLayout(page)
         outer.setContentsMargins(40, 20, 40, 16)
         outer.addStretch(1)
@@ -124,10 +132,7 @@ class Plugin(BasePlugin):
                 target=lambda: webbrowser.open(oidc.account_url()),
                 daemon=True).start())
         outer.addWidget(account, 0, Qt.AlignmentFlag.AlignHCenter)
-        terms = QLabel("By signing in you agree to the Terms of Use")
-        terms.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        terms.setStyleSheet("color: #888888; font-size: 12px;")
-        outer.addWidget(terms)
+        outer.addWidget(self._build_agreement_row(), 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Skip (bottom-right).
         skip_row = QHBoxLayout()
@@ -138,7 +143,100 @@ class Plugin(BasePlugin):
         skip.clicked.connect(self.skip_login)
         skip_row.addWidget(skip)
         outer.addLayout(skip_row)
-        return page
+        self._sync_agreement()
+        return self._views
+
+    # ---- Terms of Service / Privacy Policy ----------------------------------
+    def _build_agreement_row(self) -> QWidget:
+        """The checkbox that gates sign-in, with links to both documents."""
+        from utils import legal
+
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+        self.agree_box = QCheckBox()
+        self.agree_box.setAccessibleName(
+            "I agree to the Terms of Service and Privacy Policy")
+        self.agree_box.setChecked(legal.accepted())
+        self.agree_box.toggled.connect(lambda _on: self._sync_agreement())
+        h.addWidget(self.agree_box)
+        text = QLabel(
+            'I agree to the <a href="terms">Terms of Service</a> '
+            'and <a href="privacy">Privacy Policy</a>')
+        text.setTextFormat(Qt.TextFormat.RichText)
+        text.setStyleSheet("font-size: 12px;")
+        text.linkActivated.connect(self._show_legal)
+        h.addWidget(text)
+        return row
+
+    def _sync_agreement(self) -> None:
+        """Sign-in is only offered once the box is ticked."""
+        agreed = self.agree_box.isChecked()
+        for btn in (self.primary_btn, self.code_btn):
+            btn.setEnabled(agreed)
+            btn.setToolTip("" if agreed else
+                           "Agree to the Terms of Service and Privacy Policy first")
+
+    def _agreed(self) -> bool:
+        """Record the acceptance when a sign-in starts; refuse without it."""
+        from utils import legal
+
+        if not self.agree_box.isChecked():
+            self.update_status(
+                "Please agree to the Terms of Service and Privacy Policy to sign in.")
+            return False
+        if not legal.accepted():
+            legal.accept()
+        return True
+
+    def _build_legal_reader(self) -> QWidget:
+        reader = QWidget()
+        v = QVBoxLayout(reader)
+        v.setContentsMargins(40, 20, 40, 16)
+        v.setSpacing(12)
+        top = QHBoxLayout()
+        back = QPushButton("‹ Back")
+        back.setObjectName("Secondary")
+        back.setCursor(Qt.CursorShape.PointingHandCursor)
+        back.clicked.connect(lambda: self._views.setCurrentIndex(0))
+        top.addWidget(back)
+        top.addStretch(1)
+        v.addLayout(top)
+        self.legal_browser = QTextBrowser()
+        self.legal_browser.setOpenLinks(False)
+        self.legal_browser.anchorClicked.connect(
+            lambda url: self._follow_legal_link(url.toString()))
+        v.addWidget(self.legal_browser, 1)
+        return reader
+
+    def _show_legal(self, doc: str) -> None:
+        """Show ``doc`` ("terms" or "privacy") in the reader."""
+        from plugins.chat.qt_markdown import markdown_to_html
+        from utils import legal
+
+        if doc not in (legal.TERMS, legal.PRIVACY):
+            return
+        try:
+            html = markdown_to_html(legal.text(doc))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Could not load the {doc} document: {e}")
+            html = "<p>This document could not be loaded.</p>"
+        self.legal_browser.setHtml(html)
+        self._views.setCurrentIndex(1)
+
+    def _follow_legal_link(self, target: str) -> None:
+        """Links between the two documents stay in the reader; anything else
+        (a web or mail address) goes to the system handler."""
+        from utils import legal
+
+        name = target.rsplit("/", 1)[-1].lower()
+        if name == "terms.md":
+            self._show_legal(legal.TERMS)
+        elif name == "privacy.md":
+            self._show_legal(legal.PRIVACY)
+        elif target.startswith(("https://", "mailto:")):
+            threading.Thread(target=lambda: webbrowser.open(target), daemon=True).start()
 
     def update_status(self, message, color="red"):
         self.status_label.setText(message or "")
@@ -174,12 +272,16 @@ class Plugin(BasePlugin):
         threading.Thread(target=work, daemon=True).start()
 
     def start_browser_login(self):
+        if not self._agreed():
+            return
         self.update_status("Continue in your browser…", _OK)
         self.title_label.setText(
             "Finish signing in on the page that opened in your browser.")
         self._run(lambda cancel: oidc.login_browser(cancel=cancel))
 
     def start_code_login(self):
+        if not self._agreed():
+            return
         self.update_status("Requesting a sign-in code…", _OK)
 
         def show_code(dc):
