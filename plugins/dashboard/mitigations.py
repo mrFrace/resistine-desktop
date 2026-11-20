@@ -103,6 +103,8 @@ def validate(raw) -> Optional[dict]:
         "fixed_version": fixed if isinstance(fixed, str) and VERSION_RE.fullmatch(fixed) else None,
         # None: the scanner didn't say whether a fix exists.
         "fix_available": ev["fix_available"] if isinstance(ev.get("fix_available"), bool) else None,
+        # "remove": an old kernel left on disk (server ≥ 2026-11-20); else update.
+        "action": "remove" if ev.get("action") == "remove" else "update",
         "failed_checks": _int(ev.get("failed_checks")), "checks": _int(ev.get("checks")),
     }
     return {"id": item_id, "kind": kind, "severity": sev, "title": _plain(raw.get("title"), 120),
@@ -331,6 +333,16 @@ def fix_steps(item: dict) -> list:
     c, ev = item["check"], item["evidence"]
     if item["kind"] == "package_update":
         pkg = c["package"]
+        if ev["action"] == "remove":
+            # An old kernel still installed beside the running one: nothing to
+            # upgrade to, the package goes. The running kernel is untouched.
+            if c["package_type"] == "deb":
+                return [f"sudo apt purge {pkg}",
+                        "The running kernel is not affected; no restart needed."]
+            if c["package_type"] == "rpm":
+                return [f"sudo dnf remove {pkg}",
+                        "The running kernel is not affected; no restart needed."]
+            return [f"Remove {pkg}: it is an old version left installed beside the current one."]
         if ev["fix_available"] is False and not ev["fixed_version"]:
             steps = [f"No fixed version of {pkg} is released yet. Remove it if you don't need it, "
                      "or limit what can reach it until a fix ships."]

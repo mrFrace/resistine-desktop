@@ -33,6 +33,10 @@ Track completed work and active blockers here.
 - macOS identity moved to Phoenix's Apple team: Drake's 5 commits from `hardening/deferred-nov13` cherry-picked (team `KTKS453599`, App Group `group.exposed.phoenix.wireguard`, plistlib entitlements, installer certificate pinned, VPN artifacts from `DatOneOPGuy/phoenix-vpn-macos`). His security commit `1db4158` was deliberately not taken (three of its fixes already exist here; the rest is listed under the security review below). GitHub `mrFrace/resistine-desktop` branch `testmacbuild` mirrors `main` for the Mac build.
 - Devices against the backend as it is: the inventory list's Wazuh-native shape is normalized (`09bbc90`), the Inventory view dropdown is hidden until the detail endpoint exists (`4b01b3b`), the Responses tab filters executions per device itself and names thin AR records (`18741bf`), and a posture card with hostname "Unknown" takes its name from the inventory (`692dd22`).
 
+## Done (2026-11-20)
+
+- Fixes for agent 004 (the Ubuntu host behind dashboard.phoenix.exposed, agent name "francispc"): the two "Update linux-image-7.0.0-4x-generic" items were old kernels left on disk (purged by hand), after which the running kernel 7.0.0-44 took their place with the same unfixable CVEs. Server: `posture.py` offers a package only with a known fix, or as "Remove old kernel" when it is not the running kernel (`get_os().release`); `posture_cards.py` passes `evidence.action`. Desktop: `plugins/dashboard/mitigations.py` reads `action` and gives `sudo apt purge` / `dnf remove` steps without the restart line.
+
 ## Queue (as of 2026-11-13, after the server/infra pass)
 
 Needs the operator (one-off)
@@ -44,6 +48,7 @@ Server / infrastructure (blocked or needs a decision)
 - Swift VPN helper rebuild for the `exposed.phoenix.*` bundle IDs; macOS VPN testing waits for the Apple developer account. First distribution build on the new team: confirm `KTKS453599` is the Phoenix team (it is now hardcoded in `packaging/Resistine.entitlements`) and that the build Mac can reach `DatOneOPGuy/phoenix-vpn-macos` (the `mrFrace` gh account cannot).
 - ClamAV binaries still come from the legacy `ClamAV-Mac` repo: re-home with signing certificates. (VPN artifacts are re-homed to Drake's fork.)
 - LLMAgent-api: `GET /v1/me/active-response/executions` should honour `?agent_id=` (the desktop filters client-side meanwhile); `GET /v1/me/posture` sends hostname/os `"Unknown"` for an agent without a scan (036) instead of the manager's agent name.
+- LLMAgent-api, deploy pending (dashboard.phoenix.exposed:8002, changed 2026-11-20 in `~/REPOS/Resistine-LLMAgent-api`, uncommitted): a `package_update` mitigation is emitted only when the scanner names a fixed version, and a kernel package other than the running kernel becomes "Remove old kernel …" with `evidence.action: "remove"`. Until it is deployed, Devices → Fixes keeps showing every Ubuntu agent's current kernel as "Update linux-image-…" (CVEs Canonical lists without a fix).
 - phoenix-provisioning: `GET /v1/me/inventory` should carry `os` and `hardware` per device and `GET /v1/me/inventory/{id}` (processes, ports, network, packages) is still missing; the Inventory view dropdown stays hidden until then.
 - VPN provisioning "Later": request signing with the device's ed25519 key (design).
 - Build-image pinning by digest in `publish-linux-repos.sh` / `build-windows-vm.sh`.

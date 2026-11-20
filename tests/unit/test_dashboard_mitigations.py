@@ -330,6 +330,25 @@ class TestDetailText:
         item = mit.items_of(card(dict(PKG_ITEM, evidence={"fix_available": False})))[0]
         assert "No fixed version" in mit.fix_steps(item)[0]
 
+    def test_old_kernel_is_purged_without_a_restart(self):
+        raw = with_check(package="linux-image-7.0.0-43-generic", version="7.0.0-43.43")
+        raw = dict(raw, title="Remove old kernel 7.0.0-43",
+                   evidence=dict(PKG_ITEM["evidence"], fixed_version=None, action="remove"))
+        item = mit.items_of(card(raw))[0]
+        assert item["evidence"]["action"] == "remove"
+        steps = mit.fix_steps(item)
+        assert steps[0] == "sudo apt purge linux-image-7.0.0-43-generic"
+        assert "Restart" not in " ".join(steps)
+
+    @pytest.mark.parametrize("action", [None, "update", "rm -rf /"])
+    def test_anything_but_remove_is_an_update(self, action):
+        ev = dict(PKG_ITEM["evidence"])
+        if action is not None:
+            ev["action"] = action
+        item = mit.items_of(card(dict(PKG_ITEM, evidence=ev)))[0]
+        assert item["evidence"]["action"] == "update"
+        assert mit.fix_steps(item) == ["sudo apt update && sudo apt install --only-upgrade openssl"]
+
     def test_package_question_carries_the_evidence(self):
         q = mit.question(mit.items_of(card(PKG_ITEM))[0], "anubisai", True, "004")
         assert "this machine (anubisai, agent 004)" in q
