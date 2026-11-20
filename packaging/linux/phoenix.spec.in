@@ -35,6 +35,9 @@ cp -a %{_phoenix_root}/. %{buildroot}/
 
 %post
 update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
+if [ "$1" = 1 ]; then
+	echo "Phoenix: by using it you agree to the Terms of Service and Privacy Policy in /usr/share/doc/phoenix/AGREEMENT.txt" || :
+fi
 # openSUSE: zypper reads its own repo directory. (No rpm --import here: rpm
 # can't be run from its own scriptlet; dnf imports the key from gpgkey= on
 # first refresh.)
@@ -54,3 +57,4 @@ update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
 /usr/bin/phoenix
 /usr/share/applications/phoenix.desktop
 /usr/share/pixmaps/phoenix.png
+%doc /usr/share/doc/phoenix

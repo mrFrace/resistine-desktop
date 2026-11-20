@@ -795,6 +795,8 @@ class Plugin(BasePlugin):
     def _clear_user_data(self):
         import platform as plat
         settings.clear_namespace("auth")
+        # The next person to sign in on this device agrees for themselves.
+        settings.clear_namespace("legal")
         settings.delete("wireguard", "private_key")
         settings.delete("wireguard", "public_key")
         settings.clear_namespace("vpn")

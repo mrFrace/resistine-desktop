@@ -112,6 +112,10 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 `utils/settings.py` provides namespaced JSON config with Fernet encryption for secrets (prefixed `ENC:`). Master key stored in system keyring. Config dirs: `~/Library/Application Support/Phoenix` (macOS), `%APPDATA%/Phoenix` (Windows), `~/.config/phoenix` (Linux).
 
+### Terms of Service and Privacy Policy
+
+`docs/Terms.md` and `docs/Privacy.md` are the only place the text is written (Help lists them; `utils/legal.py` reads them). Sign-in is gated on a checkbox on the login screen, and acceptance is recorded per `legal.LEGAL_VERSION`; sign-out clears it. The installers show committed renderings (`packaging/pkg-resources/license.html`, `packaging/windows/InstallAgreement.txt`, `packaging/linux/AGREEMENT.txt`): after editing either document run `python scripts/build/render_legal.py`, and when the change needs agreement again bump `LEGAL_VERSION` and the "Version" line in both. `tests/unit/test_legal.py` fails on a stale rendering or a version mismatch. The Privacy Policy describes what the app sends: update it in the same change as any new data flow.
+
 ### Auth
 
 `main.py` is the app entry point (builds a `QApplication` and the `gui/app_window.py` main window). UI components are in `gui/`. The plugin manager injects plugin screens into the main window. Theme switching (light/dark) via `gui/theme_manager.py`.

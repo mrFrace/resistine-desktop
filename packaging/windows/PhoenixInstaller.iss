@@ -67,16 +67,14 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
 UninstallDisplayIcon={app}\Phoenix.exe
 SetupLogging=yes
-; Show the GPL-2.0-or-later text on the install acceptance screen. Inno
-; reads this at compile time and displays the contents as plain text in
-; the License Agreement dialog. LICENSE.txt is generated from LICENSE.md
-; by scripts/build/build-windows-installer.ps1 (markdown stripped so the
-; "#"/"##"/"---" syntax doesn't render as literal noise). The .txt is
-; gitignored and produced fresh on every build. Third-party licenses
-; are shipped as a separate file inside the install dir (see [Files]
-; below) since they're 370+ lines and would dominate the acceptance
-; dialog if combined.
-LicenseFile=..\..\LICENSE.txt
+; The acceptance screen shows the Terms of Service, the Privacy Policy and
+; the GPL notice. InstallAgreement.txt (next to this script) is generated
+; from docs/Terms.md, docs/Privacy.md and LICENSE.md by
+; scripts/build/render_legal.py and committed; a test fails when it is stale.
+; Silent installs (/VERYSILENT) skip the page: those are upgrades of a copy
+; whose user already accepted, and the app asks again at sign-in when the
+; version changes.
+LicenseFile=InstallAgreement.txt
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

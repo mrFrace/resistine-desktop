@@ -77,6 +77,13 @@ printf "#!/bin/sh\nexec /opt/phoenix/Phoenix \"\$@\"\n" >$root/usr/bin/phoenix
 chmod 755 $root/usr/bin/phoenix
 cp packaging/linux/phoenix.desktop $root/usr/share/applications/
 cp resources/icons/app_icon.png $root/usr/share/pixmaps/phoenix.png
+# Terms of Service and Privacy Policy: a package manager has no licence
+# screen, so they ship as documents, the package scripts point at them, and
+# the app asks for agreement at sign-in. AGREEMENT.txt is generated from the
+# two documents by scripts/build/render_legal.py.
+install -Dm644 packaging/linux/AGREEMENT.txt $root/usr/share/doc/phoenix/AGREEMENT.txt
+install -Dm644 docs/Terms.md $root/usr/share/doc/phoenix/Terms.md
+install -Dm644 docs/Privacy.md $root/usr/share/doc/phoenix/Privacy.md
 
 # Each package also sets up the Phoenix repository for its package manager
 # (packaging/linux/repo; served by scripts/build/publish-linux-repos.sh), so

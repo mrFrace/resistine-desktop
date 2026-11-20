@@ -7,6 +7,8 @@ _populate() {
 
 post_install() {
 	_populate
+	echo ">>> By using Phoenix you agree to the Terms of Service and Privacy Policy:"
+	echo ">>>   /usr/share/doc/phoenix/AGREEMENT.txt"
 	if ! grep -q '^\[phoenix\]' /etc/pacman.conf 2>/dev/null; then
 		echo ">>> To get Phoenix updates with pacman -Syu, add to /etc/pacman.conf:"
 		echo ">>>   [phoenix]"
