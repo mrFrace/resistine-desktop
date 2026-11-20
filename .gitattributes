@@ -16,3 +16,7 @@
 *.zip binary
 *.tar.gz binary
 *.whl binary
+
+# Shown as-is by the Windows installer's licence page, and compared byte for
+# byte with the generator's output: keep its CRLF line endings.
+packaging/windows/InstallAgreement.txt -text
