@@ -83,16 +83,32 @@ def _effective_db_dir(*, writable: bool = False) -> str:
         sys_db = plat.system_db_dir_writable()
         return sys_db if sys_db else _DB_DIR
 
-    # For reading: prefer whichever directory has actual DB files.
+    # For reading: prefer whichever directory has actual DB files, and the
+    # fresher one when both do. A system dir the app can't write (Arch's
+    # /var/lib/clamav without the distro freshclam service) keeps its old
+    # files while freshclam updates the user dir.
     sys_db = plat.system_db_dir()
     if sys_db:
         if _dir_has_db(sys_db):
+            if _dir_has_db(_DB_DIR) and _db_mtime(_DB_DIR) > _db_mtime(sys_db):
+                return _DB_DIR
             return sys_db
         # System dir exists but empty — fall back to user dir if it has files
         if _dir_has_db(_DB_DIR):
             return _DB_DIR
         return sys_db
     return _DB_DIR
+
+
+def _db_mtime(db_dir: str) -> float:
+    """Newest CVD/CLD mtime in *db_dir* (0.0 when none can be read)."""
+    newest = 0.0
+    for path in glob.glob(os.path.join(db_dir, "*.cvd")) + glob.glob(os.path.join(db_dir, "*.cld")):
+        try:
+            newest = max(newest, os.path.getmtime(path))
+        except OSError:
+            pass
+    return newest
 
 
 # ── Platform dispatch ─────────────────────────────────────
@@ -374,6 +390,7 @@ def run_freshclam(
         output = "\n".join(lines)
 
         if proc.returncode == 0:
+            _restart_clamd_if_db_moved()
             return True, "Signatures updated successfully."
         # Check for certs error before "up to date" — certs failure is
         # fatal even if some DBs reported up-to-date before the crash.
@@ -671,10 +688,38 @@ def _scan_dir_socket(
     return result
 
 
+def _clamd_conf_db_dir() -> str | None:
+    """The DatabaseDirectory the running clamd was started with."""
+    try:
+        with open(_CLAMD_CONF) as f:
+            for line in f:
+                if line.startswith("DatabaseDirectory "):
+                    return line.split(" ", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+def _restart_clamd_if_db_moved() -> None:
+    """Restart a running clamd that loads an older DB dir than the current one.
+
+    clamd outlives the app and NotifyClamd only reloads the directory it was
+    started with, so after freshclam fills a fresher dir it would keep
+    scanning with the old signatures.
+    """
+    if is_clamd_running() and _clamd_conf_db_dir() != _effective_db_dir():
+        logger.info("ClamAV: signature directory changed — restarting clamd")
+        stop_clamd()
+        start_clamd()
+
+
 def start_clamd() -> tuple[bool, str]:
-    """Start clamd daemon if not already running."""
+    """Start clamd daemon if not already running (or running on a stale DB dir)."""
     if is_clamd_running():
-        return True, "clamd already running."
+        if _clamd_conf_db_dir() == _effective_db_dir():
+            return True, "clamd already running."
+        logger.info("ClamAV: clamd uses an older signature directory — restarting it")
+        stop_clamd()
 
     plat = _get_platform()
     binary = plat.find_binary("clamd")

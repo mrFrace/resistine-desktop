@@ -307,6 +307,25 @@ def is_agent_installed():
     return installed_agent_dir() is not None
 
 
+def is_install_broken():
+    """True when an agent tree the app installs is left without its service.
+
+    An uninstall that only took the unit away (an older scripts/uninstall
+    run) leaves /opt/phoenix-agent behind, which is_agent_installed() still
+    reports, so the setup wizard would keep trying to start a service that
+    doesn't exist. Such a tree can only be reinstalled. Other install dirs
+    (the NixOS module's) are never reported.
+    """
+    if installed_agent_dir() not in (LINUX_WAZUH_DIR, "/var/ossec"):
+        return False
+    try:
+        r = subprocess.run(["systemctl", "list-unit-files", "wazuh-agent.service"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:  # noqa: BLE001 - no systemctl: nothing to judge by
+        return False
+    return "wazuh-agent.service" not in r.stdout
+
+
 _APP_INSTALLED = "app_installed"  # wazuh settings flag, set by full_install()
 
 

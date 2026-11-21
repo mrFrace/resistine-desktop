@@ -746,6 +746,17 @@ def _wazuh_installed() -> bool:
         return False
 
 
+def _wazuh_broken() -> bool:
+    """Linux: an agent tree left without its service, to be reinstalled."""
+    if _PLATFORM != "Linux":
+        return False
+    try:
+        from plugins.wazuh.agent import wazuh_functions_linux as m
+        return bool(m.is_install_broken())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _wazuh_running() -> bool:
     try:
         m = _wazuh_mod()
@@ -1110,7 +1121,7 @@ class _EndpointStepDirect(SetupStep):
                 self._working = False
 
         def _install():
-            if not _wazuh_installed():
+            if not _wazuh_installed() or _wazuh_broken():
                 if _PLATFORM == "Linux":
                     from plugins.wazuh.agent.wazuh_functions_linux import full_install
                 else:

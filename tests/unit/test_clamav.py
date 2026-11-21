@@ -841,9 +841,28 @@ class TestGetRealtimeStatus:
 class TestStartStopClamd:
     def test_start_already_running(self, monkeypatch):
         monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        # start_clamd() also compares the running clamd's signature dir with
+        # the effective one (a mismatch means "restart onto the fresher DB").
+        # Both read real machine/module state, so pin them equal — otherwise
+        # this test's result depends on what earlier tests patched.
+        monkeypatch.setattr(clamav_common, "_clamd_conf_db_dir", lambda: "/db")
+        monkeypatch.setattr(clamav_common, "_effective_db_dir", lambda *a, **k: "/db")
         ok, msg = clamav.start_clamd()
         assert ok is True
         assert "already running" in msg
+
+    def test_start_restarts_when_running_on_stale_db_dir(self, monkeypatch):
+        """A clamd on an older signature dir is restarted onto the fresh one."""
+        calls = []
+        monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: True)
+        monkeypatch.setattr(clamav_common, "_clamd_conf_db_dir", lambda: "/old")
+        monkeypatch.setattr(clamav_common, "_effective_db_dir", lambda *a, **k: "/new")
+        monkeypatch.setattr(clamav_common, "stop_clamd",
+                            lambda: calls.append("stop") or (True, ""))
+        monkeypatch.setattr(clamav_platform_darwin, "find_binary", lambda n: None)
+        ok, msg = clamav.start_clamd()
+        assert calls == ["stop"]        # it restarted rather than short-circuiting
+        assert ok is False and "not found" in msg
 
     def test_start_binary_not_found(self, monkeypatch):
         monkeypatch.setattr(clamav_common, "is_clamd_running", lambda: False)

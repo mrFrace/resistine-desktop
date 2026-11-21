@@ -31,8 +31,19 @@ class TestMenuRow:
 
     def test_click_does_not_take_focus(self, qapp):
         # A clicked row kept the :focus highlight and looked hovered.
+        # Inert rows (nothing connected to clicked) are not interactive at
+        # all: no tab stop, no hover, no pointing cursor.
         row = kit.MenuRow("plus", "Add")
+        assert row.focusPolicy() == Qt.FocusPolicy.NoFocus
+        assert row.property("interactive") is False
+        row.clicked.connect(lambda: None)
         assert row.focusPolicy() == Qt.FocusPolicy.TabFocus
+        assert row.property("interactive") is True
+
+    def test_on_click_makes_row_interactive(self, qapp):
+        row = kit.MenuRow("plus", "Add", on_click=lambda: None)
+        assert row.property("interactive") is True
+        assert row.cursor().shape() == Qt.CursorShape.PointingHandCursor
 
 
 @pytest.mark.unit

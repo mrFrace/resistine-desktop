@@ -103,6 +103,7 @@ class _ClickRow(QFrame):
     def __init__(self, row: dict, on_click):
         super().__init__()
         self.setObjectName("MenuRow")
+        self.setProperty("interactive", True)  # this row IS clickable
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.TabFocus)
@@ -546,6 +547,18 @@ class Plugin(BasePlugin):
                 tab = cls(_Ctx(self))
             except Exception as e:  # noqa: BLE001
                 logger.error(f"[DEVICES] building the {key} tab failed: {e}")
+                # Returning here kept the PREVIOUS tab's widget on screen, so
+                # a broken tab silently impersonated its neighbour ("the
+                # Events page looks identical to Vulnerabilities"). Show an
+                # explicit failure panel instead.
+                fail = QLabel(_t("tab_failed", error=str(e)))
+                fail.setWordWrap(True)
+                fail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                fail.setStyleSheet(
+                    f"color: {theme.color('text_secondary')}; padding: 40px;")
+                page = scroll_page(fail)
+                self._stack.addWidget(page)
+                self._stack.setCurrentWidget(page)
                 return
             tab.page = scroll_page(tab.widget)
             self._tabs[key] = tab
@@ -596,19 +609,46 @@ class Plugin(BasePlugin):
         # The shell already carries the page's side margins and the header.
         page.widget.widget().layout().setContentsMargins(0, 20, 0, 32)
 
+        pending_card = None
+        if data.this_machine_row(rows) is None:
+            enrolled = settings.get("wazuh", "enrolled_agent_id", "")
+            if enrolled:
+                pending_card = self._first_scan_card(enrolled)
+
         if not rows:
-            page.add(self._empty_card(st.get("status")))
+            page.add(pending_card or self._empty_card(st.get("status")))
             page.stretch()
             return page.widget
+        if pending_card is not None:
+            page.add(pending_card)
+            page.spacing(16)
 
         scoped = data.scope_rows(rows, self._scope)
         focus = (
             scoped[0] if len(scoped) == 1 else (data.this_machine_row(rows) or rows[0])
         )
 
-        page.add(self._device_card(focus, fleet_view=self._scope == data.ALL_DEVICES))
+        fleet_view = self._scope == data.ALL_DEVICES
+        page.add(self._device_card(focus, fleet_view=fleet_view))
         page.spacing(16)
         page.add(self._stat_grid(scoped))
+
+        def _add_fleet():
+            page.section(_t("section_fleet"))
+            page.add(_plain(muted(_t("fleet_hint"))))
+            page.spacing(8)
+            fleet = RowList()
+            for r in rows:
+                fleet.add_row(
+                    _ClickRow(r, lambda host=r["hostname"]: self._set_scope(host))
+                )
+            page.add(fleet)
+
+        # Viewing all devices, the device list IS the point — put it right
+        # under the stats ("Show all devices" used to land on a page whose
+        # list was below the to-do and alert sections, reading as a no-op).
+        if fleet_view and len(rows) > 1:
+            _add_fleet()
 
         page.section(_t("section_todo"))
         page.add(self._todo_list(focus))
@@ -616,15 +656,8 @@ class Plugin(BasePlugin):
         page.section(_t("section_alerts"))
         page.add(self._alerts_block(scoped))
 
-        page.section(_t("section_fleet"))
-        page.add(_plain(muted(_t("fleet_hint"))))
-        page.spacing(8)
-        fleet = RowList()
-        for r in rows:
-            fleet.add_row(
-                _ClickRow(r, lambda host=r["hostname"]: self._set_scope(host))
-            )
-        page.add(fleet)
+        if not (fleet_view and len(rows) > 1):
+            _add_fleet()
 
         page.spacing(24)
         page.add(_plain(muted(_t("footer"))))
@@ -732,6 +765,14 @@ class Plugin(BasePlugin):
             local = self._local_agent_text()
             if local:
                 facts.add(_t("local_agent"), local)
+            enrolled = settings.get("wazuh", "enrolled_agent_id", "")
+            if enrolled and row.get("agent_id") and enrolled != row["agent_id"]:
+                # Re-registered (dev reinstall, key wipe): the posture card
+                # is the OLD agent's. Flag it until the first new scan lands.
+                facts.add(
+                    _t("reenrolled_label"),
+                    _t("reenrolled_stale", old=row["agent_id"], new=enrolled),
+                )
         if not row["vulns_available"]:
             facts.add(
                 _t("card_vulns"),
@@ -769,6 +810,30 @@ class Plugin(BasePlugin):
         if actions.count() > 1:
             card.body.addSpacing(4)
             card.body.addLayout(actions)
+        return card
+
+    def _first_scan_card(self, enrolled_id: str) -> QWidget:
+        """Card for this machine when it's enrolled but has no posture card
+        yet — a fresh (re-)enrollment otherwise vanishes from the page until
+        the server's first scan."""
+        import socket
+
+        card = Card()
+        label = _plain(muted(_t("this_device")))
+        card.body.addWidget(label)
+        title = _plain(QLabel(socket.gethostname()))
+        title.setStyleSheet("font-size: 20px; font-weight: 700;")
+        title.setWordWrap(True)
+        card.body.addWidget(title)
+        facts = KVList()
+        facts.add(_t("agent_number", id=enrolled_id), "")
+        local = self._local_agent_text()
+        if local:
+            facts.add(_t("local_agent"), local)
+        card.body.addWidget(facts)
+        note = _plain(muted(_t("first_scan_pending")))
+        note.setWordWrap(True)
+        card.body.addWidget(note)
         return card
 
     def _local_agent_text(self) -> str:
@@ -909,12 +974,13 @@ class Plugin(BasePlugin):
         lst = RowList()
         for item, state in states:
             hint = mitigations.detail_line(item)
-            status = mitigations.state_text(state)
+            status = mitigations.list_status(state)
+            sub = "\n".join(s for s in (hint, status) if s)
             lst.add_row(
                 MenuRow(
                     _MITIGATION_ICON.get(item["kind"], "shield-check"),
                     item["title"],
-                    f"{hint}\n{status}" if hint else status,
+                    sub,
                     on_click=lambda it=item, st=state, r=row: self._open_mitigation(
                         it, st, r
                     ),
@@ -947,12 +1013,30 @@ class Plugin(BasePlugin):
         page.add(header)
         page.section(_t("section_details"))
         facts = KVList()
-        detail = mitigations.detail_line(item)
-        if detail:
-            facts.add(_t("mitigation_evidence"), detail)
+        structured = mitigations.detail_facts(item)
+        if structured:
+            for label, value in structured:
+                facts.add(label, value)
+        else:
+            detail = mitigations.detail_line(item)
+            if detail:
+                facts.add(_t("mitigation_evidence"), detail)
         facts.add(_t("mitigation_status"), mitigations.state_text(state))
         page.add(facts)
-        steps = mitigations.fix_steps(item)
+        if item["kind"] == "agent_connection" and row["this_machine"]:
+            open_ep = QPushButton(_t("open_endpoint"))
+            open_ep.setCursor(Qt.CursorShape.PointingHandCursor)
+            open_ep.clicked.connect(lambda: self.app.navigate("Endpoint"))
+            page.add(open_ep)
+        if item["kind"] == "package_update" and item["check"].get("package"):
+            view = QPushButton(_t("view_in_vulns"))
+            view.setObjectName("Secondary")
+            view.setCursor(Qt.CursorShape.PointingHandCursor)
+            view.clicked.connect(
+                lambda _=False, pkg=item["check"]["package"]:
+                self._jump_to_vulns(pkg))
+            page.add(view)
+        steps = mitigations.fix_steps(item, row.get("os") or "")
         if steps:
             page.section(_t("mitigation_fix"))
             lst = RowList()
@@ -961,6 +1045,19 @@ class Plugin(BasePlugin):
             page.add(lst)
         page.stretch()
         self._push(page.widget)
+
+    def _jump_to_vulns(self, package: str) -> None:
+        """Leave the mitigation page for the Vulnerabilities tab, searched
+        to this package, so every one of its CVEs is listed individually."""
+        self._pop()
+        self._switch_tab("vulns")
+        tab = self._tabs.get("vulns")
+        if tab is not None:
+            try:
+                tab._clear_sev()
+                tab.search.setText(package)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[DEVICES] vulns jump failed: {e}")
 
     @staticmethod
     def _step_row(n: int, text: str) -> QWidget:

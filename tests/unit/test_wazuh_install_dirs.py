@@ -96,3 +96,30 @@ class TestRemoveScriptSparesSystemManagedAgent:
             script = linux.build_remove_script(wipe_keys=True)
         assert "pacman -R --noconfirm wazuh-agent" in script
         assert "rm -rf '/opt/phoenix-agent'" in script
+
+
+@pytest.mark.unit
+class TestBrokenInstall:
+    """A tree left without its systemd unit (half-uninstalled) must be reinstalled."""
+
+    def _units(self, listed):
+        from unittest.mock import MagicMock
+        out = "UNIT FILE STATE PRESET\nwazuh-agent.service enabled disabled\n" if listed else \
+            "UNIT FILE STATE PRESET\n\n0 unit files listed.\n"
+        return patch.object(linux.subprocess, "run", return_value=MagicMock(stdout=out))
+
+    def test_tree_without_unit_is_broken(self):
+        with _only_dirs("/opt/phoenix-agent"), self._units(False):
+            assert linux.is_install_broken() is True
+
+    def test_tree_with_unit_is_fine(self):
+        with _only_dirs("/opt/phoenix-agent"), self._units(True):
+            assert linux.is_install_broken() is False
+
+    def test_nixos_module_tree_is_never_reported(self):
+        with _only_dirs("/opt/resistine"), self._units(False):
+            assert linux.is_install_broken() is False
+
+    def test_nothing_installed_is_not_broken(self):
+        with _only_dirs(), self._units(False):
+            assert linux.is_install_broken() is False

@@ -144,7 +144,6 @@ QLabel#NavLabel {{
     background-color: {c('card_bg')}; border: 1px solid {c('border')};
     border-radius: 12px;
 }}
-#Card:hover {{ background-color: {c('sidebar_hover_bg')}; }}
 #Surface {{
     background-color: {c('card_bg')}; border: 1px solid {c('border')};
     border-radius: 12px;
@@ -165,7 +164,7 @@ QLabel#Val {{ font-weight: 600; }}
 QLabel#RowTitle {{ font-size: 14px; font-weight: 600; }}
 QLabel#Hint {{ color: {c('text_secondary')}; font-size: 12px; }}
 #MenuRow {{ background: transparent; border: none; border-radius: 12px; }}
-#MenuRow:hover, #MenuRow:focus {{ background-color: {c('sidebar_hover_bg')}; }}
+#MenuRow[interactive="true"]:hover, #MenuRow[interactive="true"]:focus {{ background-color: {c('sidebar_hover_bg')}; }}
 QLabel#RowTitle[danger="true"] {{ color: {badge_colors('error')[1]}; }}
 QLabel#RowTitle:disabled {{ color: {c('text_secondary')}; }}
 QLabel#MenuTile {{
