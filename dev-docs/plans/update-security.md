@@ -202,6 +202,16 @@ Also done: 4 (`utils/updates/background.py`, started from `main.py`, with
 a switch in Settings). It toasts, and sends a desktop notification when the
 window is in the tray; a Dashboard row was left out.
 
+6, done 2026-11-21: `gpgcheck=1` in `phoenix.repo` and `pkg_gpgcheck=1` in
+`phoenix-zypp.repo`, after checking that all three rpms served at
+`phoenix.exposed/linux/rpm` verify against the shipped key
+(`4D3FCADE139178F8`). It reaches a machine with the next package: dnf gets
+the new repo file (unless it was edited by hand), and `%post` flips the
+copy in `/etc/zypp/repos.d`. dnf asks once to import the key into the rpm
+database. From now on an unsigned rpm in the repository fails every
+upgrade; `publish-linux-repos.sh` signs and verifies them on each run.
+Not tried on a Fedora or openSUSE machine.
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 

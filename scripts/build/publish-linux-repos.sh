@@ -82,7 +82,8 @@ prune "$REPO/rpm" 'phoenix-*.rpm'
 prune "$REPO/arch" 'phoenix-*.pkg.tar.*[!g]'
 
 # RPM: the packages carry their own OpenPGP signature (rpmsign through the
-# same gpg-agent), so dnf can run with gpgcheck=1, not just repo_gpgcheck.
+# same gpg-agent): the repo files the package installs have gpgcheck=1 and
+# pkg_gpgcheck=1, so an unsigned rpm here would break every upgrade.
 if command -v rpmsign >/dev/null; then
 	RPMSIGN=(rpmsign)
 	RPM=(rpm)

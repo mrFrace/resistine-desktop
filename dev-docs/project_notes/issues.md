@@ -38,7 +38,6 @@ Track completed work and active blockers here.
 Needs the operator (one-off)
 - Today ~16:53 the revocation sync's first run after the grace will find 16 devices of other users without a session, above `PROV_SYNC_MAX_RELEASE=10`, and release none. Check `journalctl -u phoenix-provisioning | grep "due for release"`; when they are real sign-outs, raise the cap for one run (`PROV_SYNC_MAX_RELEASE=20` in `/etc/secrets/phoenix-provisioning.env`, restart, then remove it).
 - Deploy `~/flakes` 1599318 (nixos-rebuild from a clean checkout).
-- First real `publish-linux-repos.sh` run with the release key signs the RPMs; then switch the published `.repo` file to `gpgcheck=1`.
 
 Server / infrastructure (blocked or needs a decision)
 - Swift VPN helper rebuild for the `exposed.phoenix.*` bundle IDs; macOS VPN testing waits for the Apple developer account. First distribution build on the new team: confirm `KTKS453599` is the Phoenix team (it is now hardcoded in `packaging/Phoenix.entitlements`) and that the build Mac can reach `DatOneOPGuy/phoenix-vpn-macos` (the `mrFrace` gh account cannot).

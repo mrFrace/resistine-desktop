@@ -44,6 +44,11 @@ fi
 if [ -d /etc/zypp/repos.d ] && [ ! -e /etc/zypp/repos.d/phoenix.repo ]; then
 	cp /usr/share/phoenix/phoenix-zypp.repo /etc/zypp/repos.d/phoenix.repo || :
 fi
+# A copy made by a build from before the packages were signed: turn the
+# package signature check on in it too.
+if [ -f /etc/zypp/repos.d/phoenix.repo ]; then
+	sed -i 's/^pkg_gpgcheck=0$/pkg_gpgcheck=1/' /etc/zypp/repos.d/phoenix.repo || :
+fi
 
 %postun
 update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || :
