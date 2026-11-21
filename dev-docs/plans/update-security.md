@@ -186,6 +186,11 @@ reachable from the build VM, setting `PHOENIX_SIGN_THUMBPRINT` and
 the signer check is skipped. None of the Windows or macOS paths has been
 run on a real machine.
 
+Backlog (decided 2026-11-21): the code-signing certificate. In-app updates
+are already bound to the signed manifest, so it is not needed against a
+middleman; it would cover the first download from the website and the
+SmartScreen warning. The build and app code for it is in place and inert.
+
 Also done: 4 (`utils/updates/background.py`, started from `main.py`, with
 a switch in Settings). It toasts, and sends a desktop notification when the
 window is in the tray; a Dashboard row was left out.
