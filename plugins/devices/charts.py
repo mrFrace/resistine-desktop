@@ -55,7 +55,11 @@ class Donut(QWidget):
         )
 
     def set_counts(self, counts: dict) -> None:
+        """Wedges for the four severities; ``untriaged`` (rated with none of
+        them) has no wedge but counts in the centre, so the number is the
+        scan's total."""
         self._counts = {s: int(counts.get(s, 0) or 0) for s in SEVERITIES}
+        self._untriaged = max(0, int(counts.get("untriaged", 0) or 0))
         self.update()
 
     def set_selected(self, sev) -> None:
@@ -72,7 +76,8 @@ class Donut(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect, thickness = self._geometry()
         inner = rect.adjusted(thickness, thickness, -thickness, -thickness)
-        total = sum(self._counts.values())
+        rated = sum(self._counts.values())
+        total = rated + getattr(self, "_untriaged", 0)
         self._arcs = []
         pen = QPen()
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
@@ -85,6 +90,10 @@ class Donut(QWidget):
             p.setPen(pen)
             p.drawArc(ring, 0, 360 * 16)
         else:
+            if total > rated:  # the unrated share: track colour, not a severity
+                pen.setColor(QColor(theme.color("track")))
+                p.setPen(pen)
+                p.drawArc(ring, 0, 360 * 16)
             start = 90.0  # 12 o'clock, clockwise
             for s in SEVERITIES:
                 n = self._counts[s]

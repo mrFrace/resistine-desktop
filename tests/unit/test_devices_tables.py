@@ -283,6 +283,8 @@ class TestTables:
         cves = tables.posture_cves(cards)
         assert [c["id"] for c in cves] == ["CVE-2026-1", "CVE-2026-2"]
         assert cves[0]["package_name"] == "pillow" and cves[0]["source"] == "posture"
+        # No per-severity counts on the item: every CVE keeps the item's severity.
+        assert [c["severity"] for c in cves] == ["critical", "critical"]
         events = tables.alerts_as_events(
             [
                 {
@@ -303,6 +305,37 @@ class TestTables:
             and events[0]["rule_id"] == "triage"
             and events[0]["timestamp"]
         )
+
+    def test_posture_cves_split_the_items_severity_by_its_counts(self):
+        # The item is critical because of its worst CVE; the server lists the
+        # CVEs worst first and says how many are critical, the rest are high.
+        card = {
+            "hostname": "francispc", "agent_id": "004", "computed_at": "2026-11-21T10:08:32",
+            "mitigations": [
+                {"kind": "package_update", "severity": "critical", "title": "Update libavdevice62",
+                 "evidence": {"package": "libavdevice62", "version": "7:8.0.1-3ubuntu2", "critical": 1, "high": 8,
+                              "cves": ["CVE-2026-75143", "CVE-2026-38344", "CVE-2026-38348"]}},
+                {"kind": "package_update", "severity": "high", "title": "Update libass9",
+                 "evidence": {"package": "libass9", "version": "1", "critical": 0, "high": 2,
+                              "cves": ["CVE-2026-61626", "CVE-2026-61627"]}},
+            ],
+        }
+        sev = {c["id"]: c["severity"] for c in tables.posture_cves([card])}
+        assert sev == {"CVE-2026-75143": "critical", "CVE-2026-38344": "high", "CVE-2026-38348": "high",
+                       "CVE-2026-61626": "high", "CVE-2026-61627": "high"}
+
+    def test_bucket_by_severity_keeps_unrated_records_in_the_total(self):
+        counts = tables.bucket_by_severity([{"severity": "critical"}, {"severity": "untriaged"}, {"severity": "-"}, {}])
+        assert counts == {"critical": 1, "high": 0, "medium": 0, "low": 0, "untriaged": 3}
+        assert sum(counts.values()) == 4
+
+    def test_api_cve_unrated_is_untriaged(self):
+        from plugins.devices import api
+
+        assert api.normalize_cve({"cve": "CVE-2026-1", "severity": "-"})["severity"] == "untriaged"
+        assert api.normalize_cve({"cve": "CVE-2026-1", "severity": "Unknown"})["severity"] == "untriaged"
+        assert api.normalize_cve({"cve": "CVE-2026-1", "severity": "Medium"})["severity"] == "medium"
+        assert api.normalize_cve({"cve": "CVE-2026-1", "severity": "Low", "cvss3_score": "2.1"})["cvss_score"] == 2.1
 
     def test_inventory_shaping(self):
         agent = tables.shape_inventory_agent(

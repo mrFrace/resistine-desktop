@@ -40,7 +40,7 @@ def severity_color(sev: str) -> QColor:
     hexval = _SEVERITY_CHART.get(sev)
     if hexval:
         return QColor(hexval)
-    if sev == "other":
+    if sev in ("other", "untriaged"):
         return QColor(theme.color("text_secondary"))
     _bg, fg = theme.badge_colors(SEVERITY_KIND.get(sev, "info"))
     return QColor(fg)

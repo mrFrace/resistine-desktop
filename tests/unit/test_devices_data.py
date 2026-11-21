@@ -135,12 +135,17 @@ class TestTotals:
 
     def test_vuln_totals(self):
         vt = data.vuln_totals(self.rows)
-        assert (
-            vt["critical"] == 9
-            and vt["high"] == 129
-            and vt["total"] == 9 + 129 + 53 + 12
-        )
+        assert vt["critical"] == 9 and vt["high"] == 129
+        # The scan's total counts CVEs the scanner left unrated too; the gap
+        # is reported as untriaged so the numbers add up.
+        assert vt["total"] == sum(max(r["vulns_total"], sum(r["vulns"].values())) for r in self.rows)
+        assert vt["untriaged"] == vt["total"] - (9 + 129 + 53 + 12) >= 0
         assert vt["scanned"] is True
+
+    def test_vuln_totals_without_a_scan_total(self):
+        rows = data.fleet_rows([_card(vulnerabilities={"critical": 1, "high": 2, "medium": 0, "low": 0})], set())
+        vt = data.vuln_totals(rows)
+        assert vt["total"] == 3 and vt["untriaged"] == 0
 
     def test_vuln_totals_flag_unscanned(self):
         rows = data.fleet_rows(

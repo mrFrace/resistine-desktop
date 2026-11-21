@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 
 from gui import theme
 from gui.qt_widgets import Card, ResponsiveStack, set_pill
-from plugins.devices import api, tables
+from plugins.devices import api, data, tables
 from plugins.devices.charts import Donut, Pager, SeverityPills, StackedBars
 from plugins.devices.tables import SEVERITIES
 
@@ -279,8 +279,8 @@ class VulnerabilitiesTab:
         if slot.ready and not slot.error and slot.data:
             return tables.bucket_by_severity(self._vulns())
         rows = self.ctx.scoped_rows()
-        totals = {s: sum(r["vulns"][s] for r in rows) for s in SEVERITIES}
-        return totals
+        totals = data.vuln_totals(rows)
+        return {s: totals[s] for s in (*SEVERITIES, tables.UNTRIAGED)}
 
     def _banner_text(self) -> tuple:
         slot = self.ctx.store.slot("vulns")
@@ -306,14 +306,17 @@ class VulnerabilitiesTab:
         self.donut.set_selected(self._sev)
         _clear(self._legend_holder)
         self._legend_holder.addStretch(1)
-        for s in SEVERITIES:
+        legend = list(SEVERITIES)
+        if counts.get(tables.UNTRIAGED):
+            legend.append(tables.UNTRIAGED)  # only when the scan left CVEs unrated
+        for s in legend:
             from plugins.devices.widgets import severity_color
 
             row = QHBoxLayout()
             dot = QLabel("●")
             dot.setStyleSheet(f"color: {severity_color(s).name()};")
             row.addWidget(dot)
-            row.addWidget(_label(s.capitalize()))
+            row.addWidget(_label(self.t("sev_untriaged") if s == tables.UNTRIAGED else s.capitalize()))
             row.addStretch(1)
             n = _label(f"{counts.get(s, 0):,}", bold=True)
             n.setStyleSheet(f"color: {severity_color(s).name()};")

@@ -942,5 +942,6 @@
   "devices.stat_action": "対応が必要",
   "devices.stat_critical": "重大",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "未評価",
   "devices.donut_no_cves": "CVE なし"
 }

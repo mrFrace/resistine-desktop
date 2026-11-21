@@ -942,5 +942,6 @@
   "devices.stat_action": "İşlem gerekli",
   "devices.stat_critical": "Kritik",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "Derecelendirilmemiş",
   "devices.donut_no_cves": "CVE yok"
 }

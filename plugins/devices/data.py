@@ -195,6 +195,10 @@ def fleet_rows(
                 "health": _text(c.get("health"), 32).replace("_", " "),
                 "agent_status": _text(c.get("agent_status"), 16).lower(),
                 "vulns": {s: _int(v.get(s)) for s in SEVERITIES},
+                # The scan's total: more than the four severities when the
+                # scanner left CVEs unrated (the Vulnerabilities tab shows
+                # the gap as "untriaged").
+                "vulns_total": _int(v.get("total")),
                 "vulns_available": v.get("available", True) is not False,
                 "vulns_reason": _text(v.get("reason"), 32),
                 "compliance_pct": (
@@ -241,10 +245,13 @@ def this_machine_row(rows: list) -> dict | None:
 def vuln_totals(rows: list) -> dict:
     """Per-severity sums plus whether every scoped device was scanned."""
     out = {s: 0 for s in SEVERITIES}
+    scanned_total = 0
     for r in rows:
         for s in SEVERITIES:
             out[s] += r["vulns"][s]
-    out["total"] = sum(out[s] for s in SEVERITIES)
+        scanned_total += max(r.get("vulns_total") or 0, sum(r["vulns"].values()))
+    out["untriaged"] = scanned_total - sum(out[s] for s in SEVERITIES)
+    out["total"] = scanned_total
     out["scanned"] = all(r["vulns_available"] for r in rows) if rows else False
     out["devices"] = len(rows)
     return out

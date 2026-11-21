@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 SEVERITIES = ("critical", "high", "medium", "low")
+UNTRIAGED = "untriaged"  # the scanner rated it with none of the four
 SEVERITY_SHORT = {"critical": "CRIT", "high": "HIGH", "medium": "MED", "low": "LOW"}
 SEV_TO_STATUS = {
     "critical": "CRITICAL",
@@ -173,11 +174,12 @@ def scope_records(records: list, field: str, scope) -> list:
 
 
 def bucket_by_severity(items) -> dict:
-    counts = {s: 0 for s in SEVERITIES}
+    """Counts per severity; a record rated outside the four (the scanner gave
+    none) lands in ``untriaged`` so the buckets still add up to the list."""
+    counts = {s: 0 for s in (*SEVERITIES, UNTRIAGED)}
     for it in items:
         sev = (it.get("severity") or "").lower() if isinstance(it, dict) else ""
-        if sev in counts:
-            counts[sev] += 1
+        counts[sev if sev in counts else UNTRIAGED] += 1
     return counts
 
 
@@ -341,6 +343,14 @@ def posture_cves(cards: list) -> list:
                 continue
             ev = item.get("evidence") if isinstance(item.get("evidence"), dict) else {}
             sev = _text(item.get("severity"), 16).lower()
+            # The item's severity is its worst CVE's. The server lists the
+            # CVEs worst first, so the first ``evidence.critical`` of them are
+            # the critical ones and the rest are high (the server names no
+            # CVE below high); an item without counts keeps its own severity.
+            try:
+                n_crit = max(0, int(ev.get("critical") or 0))
+            except (TypeError, ValueError):
+                n_crit = 0
             fixed = _text(ev.get("fixed_version"), 64)
             desc = (
                 f"Named by the posture scan under \"{_text(item.get('title'), 80)}\"."
@@ -349,14 +359,18 @@ def posture_cves(cards: list) -> list:
                 desc += f" Fixed in {fixed}."
             elif ev.get("fix_available") is False:
                 desc += " No fixed version has been released yet."
-            for cve in (ev.get("cves") or [])[:100]:  # same cap as the mitigation parser
+            for i, cve in enumerate((ev.get("cves") or [])[:100]):  # same cap as the mitigation parser
                 cid = _text(cve, 64)
                 if not cid:
                     continue
+                if sev in ("critical", "high") and ev.get("critical") is not None:
+                    cve_sev = "critical" if i < n_crit else "high"
+                else:
+                    cve_sev = sev if sev in SEVERITIES else "low"
                 out.append(
                     {
                         "id": cid,
-                        "severity": sev if sev in SEVERITIES else "low",
+                        "severity": cve_sev,
                         "cvss_score": None,
                         "epss": None,
                         "package_name": _text(ev.get("package"), 120),

@@ -942,5 +942,6 @@
   "devices.stat_action": "يتطلب إجراءً",
   "devices.stat_critical": "حرج",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "غير مصنّف",
   "devices.donut_no_cves": "لا توجد CVE"
 }

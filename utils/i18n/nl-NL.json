@@ -942,5 +942,6 @@
   "devices.stat_action": "Actie nodig",
   "devices.stat_critical": "Kritiek",
   "devices.donut_cves": "CVE's",
+  "devices.sev_untriaged": "Niet beoordeeld",
   "devices.donut_no_cves": "Geen CVE's"
 }

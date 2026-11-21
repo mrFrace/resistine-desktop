@@ -37,6 +37,18 @@ Inventory is fleet-wide. Device identity everywhere is `agent_id` +
 
 ## Tab: Vulnerabilities
 
+**As served from 2026-11-21** (LLMAgent-api `vulnerability_cards.py`, forwarded by
+phoenix-provisioning, deploy pending): `GET /v1/me/vulnerabilities?top=5` answers
+`{total_devices, total_vulnerabilities, by_severity, devices: [{agent_id, total,
+by_severity, detected_at, top_cves}]}` and `GET /v1/me/vulnerabilities/{agent_id}
+?limit=500&offset=0[&severity=]` answers `{agent_id, available, detected_at, total,
+by_severity, matched, returned, limit, offset, vulnerabilities: [{cve, severity,
+cvss3_score, package, version, description, published, first_detected_at,
+condition}]}`, worst first. `by_severity` has a fifth key `untriaged` (the scanner
+rated the CVE with none of the four); an agent that is not the caller's is 404.
+The page's `normalize_cve` reads this shape as is; `epss`, `status` and `updated`
+are not served.
+
 ### Data
 
 Group summary (cheap, drove the Overview card):

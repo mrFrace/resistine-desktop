@@ -942,5 +942,6 @@
   "devices.stat_action": "Потрібна дія",
   "devices.stat_critical": "Критично",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "Без оцінки",
   "devices.donut_no_cves": "Немає CVE"
 }

@@ -129,9 +129,12 @@ def normalize_cve(
         epss = float(raw["epss"]) if raw.get("epss") is not None else None
     except (TypeError, ValueError):
         epss = None
+    sev = _s(raw.get("severity") or "", 16).lower()
     return {
         "id": _s(raw.get("cve") or raw.get("id") or "", 64),
-        "severity": _s(raw.get("severity") or "", 16).lower() or "low",
+        # Unrated ("-", "Unknown", empty) is untriaged, not low: the scanner
+        # has not said, and the counts must still add up.
+        "severity": sev if sev in ("critical", "high", "medium", "low") else "untriaged",
         "cvss_score": score,
         "epss": epss,
         "package_name": _s(raw.get("package") or raw.get("package_name") or "", 120),

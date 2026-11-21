@@ -942,5 +942,6 @@
   "devices.stat_action": "Handlung nötig",
   "devices.stat_critical": "Kritisch",
   "devices.donut_cves": "CVEs",
+  "devices.sev_untriaged": "Nicht bewertet",
   "devices.donut_no_cves": "Keine CVEs"
 }

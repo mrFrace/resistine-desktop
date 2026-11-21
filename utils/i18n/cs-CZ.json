@@ -942,5 +942,6 @@
   "devices.stat_action": "Vyžaduje zásah",
   "devices.stat_critical": "Kritické",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "Bez hodnocení",
   "devices.donut_no_cves": "Žádné CVE"
 }

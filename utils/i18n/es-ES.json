@@ -942,5 +942,6 @@
   "devices.stat_action": "Acción necesaria",
   "devices.stat_critical": "Crítico",
   "devices.donut_cves": "CVE",
+  "devices.sev_untriaged": "Sin clasificar",
   "devices.donut_no_cves": "Sin CVE"
 }

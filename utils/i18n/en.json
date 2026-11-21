@@ -479,5 +479,6 @@
   "devices.stat_action": "Action needed",
   "devices.stat_critical": "Critical",
   "devices.donut_cves": "CVEs",
+  "devices.sev_untriaged": "Untriaged",
   "devices.donut_no_cves": "No CVEs"
 }
