@@ -449,11 +449,40 @@ class TestCheckForUpdates:
     def test_update_available(self, built_plugin):
         text = self._run_worker(built_plugin, return_value=_check_result(available=True))
         assert "202610221500 is available" in text
+        assert not built_plugin.update_install_row.isHidden()
+
+    def test_install_row_is_hidden_until_there_is_something_to_install(self, built_plugin):
+        assert built_plugin.update_install_row.isHidden()
+        self._run_worker(built_plugin, return_value=_check_result())
+        assert built_plugin.update_install_row.isHidden()
+
+    def test_install_downloads_then_starts_the_verified_file(self, built_plugin):
+        offer = _check_result(available=True)
+        self._run_worker(built_plugin, return_value=offer)
+        built_plugin.app.after.side_effect = lambda ms, fn, *a: fn(*a)
+        with patch("utils.updates.installer.download", return_value="/u/setup.exe") as dl, \
+                patch("utils.updates.installer.launch") as launch:
+            built_plugin._update_install_worker(offer)
+        assert dl.call_args.args[0] is offer
+        launch.assert_called_once_with("/u/setup.exe", offer.latest)
+        assert "installing" in built_plugin.update_status_label.text()
+
+    def test_failed_download_starts_nothing(self, built_plugin):
+        offer = _check_result(available=True)
+        built_plugin.app.after.side_effect = lambda ms, fn, *a: fn(*a)
+        with patch("utils.updates.installer.download",
+                   side_effect=RuntimeError("does not match its signed manifest")), \
+                patch("utils.updates.installer.launch") as launch:
+            built_plugin._update_install_worker(offer)
+        launch.assert_not_called()
+        assert built_plugin.update_status_label.text() == \
+            "Update failed: does not match its signed manifest"
 
     def test_update_available_on_linux_comes_from_the_repository(self, built_plugin):
         text = self._run_worker(built_plugin, return_value=_check_result(
             available=True, os_key="linux-rpm"))
         assert "software updates install it" in text
+        assert built_plugin.update_install_row.isHidden()
 
     def test_up_to_date(self, built_plugin):
         assert self._run_worker(built_plugin, return_value=_check_result()) == "Phoenix is up to date"

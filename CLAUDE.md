@@ -61,7 +61,7 @@ Configured linters: ruff, black, isort, bandit, shellcheck, shfmt, markdownlint,
 ./scripts/build/build-windows-vm.sh     # Phoenix-Setup-<version>.exe into dist/installers/
 ```
 
-Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: WinSparkle upgrades run it with `/VERYSILENT /SUPPRESSMSGBOXES`, so use `SuppressibleMsgBox`, never `MsgBox`.
+Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over SSH in a throwaway copy of the golden Windows image from `Resistine-Server-install/scripts/windows/make_golden.sh` (dockur/windows, needs docker and /dev/kvm). Set `GOLDEN_DIR` if the image is not in `/var/lib/phoenix-win/golden`, and `BUILD_DIR` off tmpfs (the VM disk copy is sparse, up to 64 GB). The installer must stay silent-safe: in-app updates run it with `/SILENT /SUPPRESSMSGBOXES /NORESTART`, so use `SuppressibleMsgBox`, never `MsgBox`.
 
 ### NixOS
 
@@ -131,7 +131,7 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### Updates
 
-The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed manifest at `auth.phoenix.exposed/packages/desktop/current/`, asked by Settings → Check for updates; it refuses builds at or below the running one.
+The Phoenix update channel is `utils/updates/channel.py`: one minisign-signed manifest at `auth.phoenix.exposed/packages/desktop/current/`, asked by Settings → Check for updates; it refuses builds at or below the running one. On Windows and macOS "Download and install" (`utils/updates/installer.py`) fetches the package from the store and starts it only when it matches the manifest's size and sha512, re-checked right before launch; never start a downloaded file any other way. Linux installs update from the signed apt/dnf/pacman repository. Windows builds are Authenticode-signed when `PHOENIX_SIGN_THUMBPRINT` is set (`build-windows-installer.ps1`); once releases are signed, `installer.WINDOWS_PUBLISHER` pins the signer the app requires.
 
 **The legacy Sparkle/appcast auto-updater is hard-disabled** (`utils/updates/manager.py: UPDATES_ENABLED = False`): that feed and its signing keys belong to the old company. Never re-point it at the old endpoint; re-enabling it needs Phoenix-owned feed infrastructure plus a FRESH signing keypair. The platform backends (`utils/updates/{darwin,windows,linux}.py`) keep their verification logic: signatures are mandatory, unsigned entries are refused.
 

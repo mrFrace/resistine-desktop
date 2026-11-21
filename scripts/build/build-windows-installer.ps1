@@ -67,6 +67,53 @@ function Convert-LicenseMdToTxt {
     Write-Host "  Wrote $TargetTxt ($($out.Count) lines)"
 }
 
+# Authenticode signing. Set PHOENIX_SIGN_THUMBPRINT to the SHA-1 thumbprint of
+# a code-signing certificate in this machine's certificate store (a hardware
+# token or cloud HSM exposes it there through its provider); Phoenix.exe, the
+# uninstaller and Setup.exe are then signed and timestamped. Without it the
+# build is unsigned and says so; PHOENIX_REQUIRE_SIGNING=1 makes that an
+# error, which is what a release build should set. The private key never
+# passes through this script. After the first signed release, set
+# WINDOWS_PUBLISHER in utils/updates/installer.py to the certificate's CN.
+function Resolve-SignTool {
+    $fromPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($fromPath) { return $fromPath.Source }
+    $kits = "C:\Program Files (x86)\Windows Kits\10\bin"
+    if (Test-Path $kits) {
+        $found = Get-ChildItem -Path $kits -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match "\\x64\\" } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+        if ($found) { return $found.FullName }
+    }
+    throw "signtool.exe not found. Install the Windows SDK signing tools, or unset PHOENIX_SIGN_THUMBPRINT."
+}
+
+$SignThumbprint = $env:PHOENIX_SIGN_THUMBPRINT
+$SignTimestampUrl = if ($env:PHOENIX_SIGN_TIMESTAMP_URL) { $env:PHOENIX_SIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+$SignTool = $null
+if ($SignThumbprint) {
+    if ($SignThumbprint -notmatch '^[0-9A-Fa-f]{40}$') {
+        throw "PHOENIX_SIGN_THUMBPRINT must be a 40-digit hex SHA-1 certificate thumbprint"
+    }
+    if ($SignTimestampUrl -notmatch '^https?://[0-9A-Za-z./:_-]+$') {
+        throw "PHOENIX_SIGN_TIMESTAMP_URL is not a plain http(s) URL"
+    }
+    $SignTool = Resolve-SignTool
+} elseif ($env:PHOENIX_REQUIRE_SIGNING -eq "1") {
+    throw "PHOENIX_REQUIRE_SIGNING=1 but PHOENIX_SIGN_THUMBPRINT is not set"
+} else {
+    Write-Warning "PHOENIX_SIGN_THUMBPRINT is not set: this build is NOT Authenticode-signed."
+}
+
+function Invoke-Sign {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not $SignTool) { return }
+    & $SignTool sign /sha1 $SignThumbprint /fd SHA256 /tr $SignTimestampUrl /td SHA256 $Path
+    if ($LASTEXITCODE -ne 0) { throw "signtool could not sign $Path (exit $LASTEXITCODE)" }
+    & $SignTool verify /pa /q $Path
+    if ($LASTEXITCODE -ne 0) { throw "signature on $Path does not verify (exit $LASTEXITCODE)" }
+}
+
 function Resolve-InnoCompiler {
     $fromPath = Get-Command iscc.exe -ErrorAction SilentlyContinue
     if ($fromPath -and (Test-Path $fromPath.Path)) {
@@ -154,6 +201,7 @@ if (-not (Test-Path (Join-Path $sourceDir "Phoenix.exe"))) {
     throw "Expected PyInstaller output not found at $sourceDir\Phoenix.exe"
 }
 Invoke-VenvPython (Join-Path $ProjectRoot "scripts\build\check_bundle.py") $sourceDir
+Invoke-Sign (Join-Path $sourceDir "Phoenix.exe")
 
 # Copy installer helper files into distribution directory
 Write-Host "Copying installer helper files..."
@@ -228,7 +276,14 @@ $maxAttempts = 3
 try {
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         Get-ChildItem -Path $innoTempDir -File -ErrorAction SilentlyContinue | Remove-Item -Force
-        & $iscc "/DAppName=Phoenix" "/DAppVersion=$version" "/DAppBuild=$build" "/DSourceDir=$sourceDir" "/DOutputDir=$innoTempDir" "/DTargetArch=$targetArch" $issScript
+        # With a certificate, Setup signs its uninstaller and itself through
+        # the "phoenix" sign tool ($q is Inno's quote, $f the file to sign).
+        $isccArgs = @("/DAppName=Phoenix", "/DAppVersion=$version", "/DAppBuild=$build", "/DSourceDir=$sourceDir", "/DOutputDir=$innoTempDir", "/DTargetArch=$targetArch")
+        if ($SignTool) {
+            $isccArgs += "/DSigned=1"
+            $isccArgs += ('/Sphoenix=$q' + $SignTool + '$q sign /sha1 ' + $SignThumbprint + ' /fd SHA256 /tr ' + $SignTimestampUrl + ' /td SHA256 $f')
+        }
+        & $iscc @isccArgs $issScript
         if ($LASTEXITCODE -eq 0) { break }
         if ($attempt -eq $maxAttempts) {
             throw ("Inno Setup compilation failed with exit code $LASTEXITCODE after $maxAttempts attempts. " +
@@ -244,6 +299,10 @@ try {
         throw "Inno Setup reported success but produced no .exe in $innoTempDir"
     }
     foreach ($f in $built) {
+        if ($SignTool) {
+            & $SignTool verify /pa /q $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Setup.exe came out of Inno Setup without a valid signature" }
+        }
         $dest = Join-Path $outputDir $f.Name
         if (Test-Path $dest) { Remove-Item $dest -Force }
         Move-Item -Path $f.FullName -Destination $dest -Force

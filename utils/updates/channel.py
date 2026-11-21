@@ -5,7 +5,7 @@ https://auth.phoenix.exposed/packages/desktop/current/ as ONE manifest listing
 every OS's package, signed with the desktop minisign key and checked here
 against the key pinned in plugins/wazuh/agent/phoenix_packages.py. This module
 only answers "is there a newer build for this install, and which file is it";
-downloading and installing it is the platform backends' job.
+utils/updates/installer.py downloads that file and starts it (Windows, macOS).
 
 Guarantees beyond the signature:
 - Rollback protection: a release below the highest build this machine has

@@ -370,6 +370,64 @@ def remove_cached(pkg_path: str) -> None:
         _unlink(p)
 
 
+def _fetch_verified(http, url: str, token_box: list, final: str, manifest: Manifest,
+                    what: str, progress: Optional[Callable[[int, int], None]] = None) -> int:
+    """Stream ``url`` into ``final``: written under a temporary name and
+    renamed into place only after its size and sha512 match the signed
+    manifest. ``progress(done, total)`` is called per chunk. Returns the size;
+    raises PackageError and leaves nothing behind otherwise."""
+    logger.info(f"[PKG] Downloading {url}")
+    part = final + ".part"
+    h, size = hashlib.sha512(), 0
+    try:
+        with _get(http, url, token_box, stream=True) as r, open(part, "wb") as out:
+            for chunk in r.iter_content(_CHUNK):
+                size += len(chunk)
+                if size > manifest.size:
+                    raise PackageError("The downloaded package is larger than its manifest says.")
+                h.update(chunk)
+                out.write(chunk)
+                if progress:
+                    progress(size, manifest.size)
+        if size != manifest.size or h.hexdigest() != manifest.sha512:
+            raise PackageError("The downloaded package does not match its signed manifest.")
+        os.replace(part, final)
+    except PackageError:
+        _unlink(part)
+        raise
+    except Exception as e:  # noqa: BLE001
+        _unlink(part)
+        raise PackageError(
+            f"The {what} download was interrupted. Try again.") from e
+    return size
+
+
+def download_desktop(manifest: Manifest, dest_dir: str,
+                     progress: Optional[Callable[[int, int], None]] = None,
+                     http=None, token_box: Optional[list] = None) -> str:
+    """Download the desktop package a verified release manifest names (from
+    fetch_desktop_manifest) into ``dest_dir``; the path of the file, which
+    matches the manifest's size and sha512. Raises PackageError otherwise."""
+    from plugins.login import oidc
+
+    if manifest.product != DESKTOP or manifest.size > _MAX_PACKAGE:
+        raise PackageError("This is not a Phoenix Desktop release.")
+    if token_box is None:
+        try:
+            token = oidc.refresh()
+        except oidc.OIDCError as e:
+            raise PackageError(f"Couldn't reach the sign-in server: {e}") from e
+        if not token:
+            raise PackageError("Sign in to Phoenix to download the update.")
+        token_box = [token]
+    http = http or oidc._session()
+    final = os.path.join(dest_dir, manifest.file)
+    url = f"{packages_url()}/{DESKTOP_PLATFORM}/{manifest.dir}/{manifest.file}"
+    size = _fetch_verified(http, url, token_box, final, manifest, "Phoenix update", progress)
+    logger.info(f"[PKG] Verified {final} (desktop {manifest.dir}, {size} bytes)")
+    return final
+
+
 def download(dest_dir: str, progress_callback: Optional[Callable[[str], None]] = None,
              plat: Optional[str] = None, filename: Optional[str] = None) -> tuple[str, Manifest]:
     """Download this platform's current agent package into ``dest_dir``.
@@ -408,27 +466,7 @@ def download(dest_dir: str, progress_callback: Optional[Callable[[str], None]] =
     if progress_callback:
         progress_callback(f"Downloading Phoenix agent {manifest.version}...")
     url = f"{packages_url()}/{plat}/{manifest.dir}/{manifest.file}"
-    logger.info(f"[PKG] Downloading {url}")
-    part = final + ".part"
-    h, size = hashlib.sha512(), 0
-    try:
-        with _get(http, url, token_box, stream=True) as r, open(part, "wb") as out:
-            for chunk in r.iter_content(_CHUNK):
-                size += len(chunk)
-                if size > manifest.size:
-                    raise PackageError("The downloaded package is larger than its manifest says.")
-                h.update(chunk)
-                out.write(chunk)
-        if size != manifest.size or h.hexdigest() != manifest.sha512:
-            raise PackageError("The downloaded package does not match its signed manifest.")
-        os.replace(part, final)
-    except PackageError:
-        _unlink(part)
-        raise
-    except Exception as e:  # noqa: BLE001
-        _unlink(part)
-        raise PackageError(
-            "The Phoenix agent download was interrupted. Try again.") from e
+    size = _fetch_verified(http, url, token_box, final, manifest, "Phoenix agent")
     _save_manifest(final, manifest)
     logger.info(f"[PKG] Verified {final} ({plat} {manifest.dir}, {size} bytes)")
     return final, manifest
