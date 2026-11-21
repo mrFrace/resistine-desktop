@@ -22,7 +22,7 @@ from the cached posture and refreshes in place.
 
 Alert bodies and posture text quote monitored systems and the server: they
 are rendered as plain text, or through markdown_to_html(allow_html=False)
-with links disabled (the Dashboard's _AlertText), never as HTML.
+with links disabled (the Alerts plugin's _AlertText), never as HTML.
 """
 
 from __future__ import annotations
@@ -1259,9 +1259,9 @@ class Plugin(BasePlugin):
     @staticmethod
     def _alert_text(text: str) -> QWidget:
         """The alert body as rich text with HTML escaped and links disabled
-        (the Dashboard's widget); plain text if that widget is unavailable."""
+        (the Alerts plugin's widget); plain text if that widget is unavailable."""
         try:
-            from plugins.dashboard.main import _AlertText
+            from plugins.alerts.main import _AlertText
 
             return _AlertText(text)
         except Exception:  # noqa: BLE001
