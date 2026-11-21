@@ -52,7 +52,7 @@ class TestDocuments:
 
     def test_they_reach_the_bundle_and_the_help_viewer(self):
         """docs/ is bundled as data and Help lists every .md in it."""
-        assert "(_src('docs'), 'docs')" in _read("packaging/Phoenix.spec")
+        assert "(_src('docs'), 'docs')" in _read("packaging/Resistine.spec")
         for doc in (legal.TERMS, legal.PRIVACY):
             assert os.path.dirname(legal.path(doc)).endswith("docs")
             assert os.path.exists(legal.path(doc))
@@ -81,7 +81,7 @@ class TestInstallers:
             "scripts/build/build-distribution.sh")
 
     def test_windows_installer_shows_it_on_the_licence_page(self):
-        iss = _read("packaging/windows/PhoenixInstaller.iss")
+        iss = _read("packaging/windows/ResistineInstaller.iss")
         assert "LicenseFile=InstallAgreement.txt" in iss
         raw = (REPO / "packaging/windows/InstallAgreement.txt").read_bytes()
         assert raw.isascii()  # Inno shows the bytes as they are

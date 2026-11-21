@@ -136,7 +136,7 @@ cannot install anything this way; they can only delay.
 ### F7. Legacy updater leftovers (low)
 
 Still shipped or run although unused: `WinSparkle.dll`
-(`packaging/Phoenix.spec:166`), `Sparkle.framework` (copied and signed by
+(`packaging/Resistine.spec:166`), `Sparkle.framework` (copied and signed by
 `build-distribution.sh`), the "Sign DMG for Sparkle" step and
 `SPARKLE_ED_PRIVATE_KEY` secret in `.github/workflows/release.yml`, and
 `utils/updates/{appcast,darwin,windows,linux}.py`. Inert today; they are
@@ -167,18 +167,18 @@ minisign machinery above could cover this list too.
 | # | Change | Closes | Where |
 |---|---|---|---|
 | 1 | In-app verified download: fetch `desktop/<dir>/<file>` from the store, check size and sha512 against the signed manifest (reuse the agent `download()` flow), write to a fresh private directory, re-verify immediately before launch, then start the installer. Windows first; macOS can open the verified dmg. | F1 | `utils/updates/channel.py`, `phoenix_packages.py`, `plugins/settings/main.py`, tests in `test_update_channel.py` and `test_security_hardening.py` |
-| 2 | Authenticode-sign the Windows installer and the app executables in the build; have the app check the signer of the file it is about to run as a second, independent check. | F1, F2 | `scripts/build/build-windows-installer.ps1`, `PhoenixInstaller.iss` (`SignTool=`) |
+| 2 | Authenticode-sign the Windows installer and the app executables in the build; have the app check the signer of the file it is about to run as a second, independent check. | F1, F2 | `scripts/build/build-windows-installer.ps1`, `ResistineInstaller.iss` (`SignTool=`) |
 | 3 | Publish for every download on the website: the sha512, a `.minisig`, and the public keys with fingerprints, plus two lines on how to verify. | F2 | website, `publish-desktop.sh` |
 | 4 | Check quietly after start and once a day (jittered, manual check stays); show an "update available" row and the stale warning without being asked. No silent install. | F3, F6 | `main.py`, `utils/updates/channel.py`, Dashboard/Settings |
 | 5 | Pin a second, offline backup key in the app now (accept either); write the rotation and compromise procedure; move the active keys to a hardware token. | F4 | `phoenix_packages.py`, new section in this folder |
 | 6 | Set `gpgcheck=1` (and `pkg_gpgcheck=1`) once every rpm in the repository is signed. | F5 | `packaging/linux/repo/*.repo` |
 | 7 | Shorten the default expiry to 30 to 45 days and re-sign the current release on a schedule. | F6 | `publish-desktop.sh` (`PHOENIX_EXPIRES_DAYS`) |
-| 8 | Remove WinSparkle, Sparkle.framework, the Sparkle signing step and secret, and the appcast backends; fix CLAUDE.md. | F7 | `Phoenix.spec`, `build-distribution.sh`, `release.yml`, `utils/updates/` |
+| 8 | Remove WinSparkle, Sparkle.framework, the Sparkle signing step and secret, and the appcast backends; fix CLAUDE.md. | F7 | `Resistine.spec`, `build-distribution.sh`, `release.yml`, `utils/updates/` |
 | 9 | Sign `optional_plugins.json` with a pinned minisign key and verify it before trusting any hash in it. | F8 | `plugins/plugin_manager.py`, plugin repo |
 
 Done on `autofixes`: 1 (`utils/updates/installer.py`, Settings → "Download
 and install", Windows and macOS) and the code half of 2 (signing in
-`build-windows-installer.ps1` and `PhoenixInstaller.iss`, signer check in
+`build-windows-installer.ps1` and `ResistineInstaller.iss`, signer check in
 the app). Still open for 2: buying a code-signing certificate, making it
 reachable from the build VM, setting `PHOENIX_SIGN_THUMBPRINT` and
 `PHOENIX_REQUIRE_SIGNING=1` for releases, and then

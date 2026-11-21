@@ -48,7 +48,7 @@ _SUFFIX = {"windows": ".exe", "macos-arm64": ".dmg"}
 
 # Inno Setup: progress window only, no questions (the user already asked for
 # the update), never reboot. Setup closes the running app and starts the new
-# one (packaging/windows/PhoenixInstaller.iss: CloseApplications, [Run]).
+# one (packaging/windows/ResistineInstaller.iss: CloseApplications, [Run]).
 _WINDOWS_ARGS = "/SILENT /SUPPRESSMSGBOXES /NORESTART"
 
 

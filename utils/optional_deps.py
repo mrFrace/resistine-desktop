@@ -7,7 +7,7 @@ frozen build that shipped the module without the file it raised
 FileNotFoundError, which escaped that guard and aborted ``import nio`` — so
 Matrix chat and the SIEM alerts listener were dead on every start.
 
-The build bundles the file (packaging/Phoenix.spec). This is the second line:
+The build bundles the file (packaging/Resistine.spec). This is the second line:
 whatever such a package fails with, turn it into the ImportError its importer
 already knows how to skip.
 """
