@@ -42,6 +42,15 @@ minisign -G -p phoenix-desktop-backup.pub -s phoenix-desktop-backup.key
 `tests/unit/test_update_channel.py` checks the pinned keys are well-formed
 and have distinct key ids.
 
+## Keeping the channel fresh
+
+A release is signed for 45 days (`PHOENIX_EXPIRES_DAYS`); after that the
+app tells users the update channel is stale. When no new build goes out,
+run `./scripts/build/publish-desktop.sh --renew` before the date: it signs
+the last published manifest again with a new expiry and uploads only that.
+The server takes it for the current release when nothing else changed
+(server flake, see `plans/update-security-server-renewal.patch`).
+
 ## Planned rotation (new release key, nothing went wrong)
 
 1. Generate the new key. Pin it as a backup key, add it to the server.

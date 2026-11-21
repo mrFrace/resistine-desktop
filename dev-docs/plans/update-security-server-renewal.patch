@@ -1,0 +1,102 @@
+--- a/modules/services/phoenix-packages.nix	2026-11-21 23:44:34.016411652 +0100
++++ b/modules/services/phoenix-packages.nix	2026-11-21 23:44:34.017084323 +0100
+@@ -26,6 +26,10 @@
+ #    "published", "files": {"windows"|"linux-deb"|"linux-rpm"|"linux-arch"|
+ #    "macos-arm64": {"file", "sha512", "size"}}}
+ # trusted comment "phoenix-desktop <dir> <expires>"; the app checks the same.
++# A renewal (publish-desktop.sh --renew) is an upload for the current release
++# holding only a newly signed manifest: accepted when nothing but a later
++# expiry (and the publication time) differs, so the release never goes stale
++# between builds while a replayed old manifest stops passing after weeks.
+ #
+ # Downloads need a MAS access token: nginx asks MAS /oauth2/userinfo for each
+ # request (the desktop app's token carries the openid scope). The gate keeps
+@@ -57,6 +61,13 @@
+     untrusted comment: minisign public key BEA7ECA1B610B3A0
+     RWSgsxC2oeynvutf13Lmgaqf29dX8MAKKtaEV21w4HEfsB3wXq71XjFT
+   '';
++  # The offline backup key the app also pins (Resistine-Desktop
++  # dev-docs/release-keys.md, DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS).
++  desktopMinisignBackupPub = pkgs.writeText "phoenix-desktop-minisign-backup.pub" ''
++    untrusted comment: minisign public key 6D13747A8A9A1783
++    RWSDF5qKenQTbb876r4mO42vNTO/+rqpKW3v0cHKCUf0wKYtlk7OUPqP
++  '';
++  desktopMinisignPubs = [ desktopMinisignPub desktopMinisignBackupPub ];
+ 
+   promote = pkgs.writeShellApplication {
+     name = "phoenix-packages-promote";
+@@ -97,12 +108,15 @@
+         check_file "$src" "$plat" "$dir" "$file" "$(jq -r .sha512 "$m")" "$(jq -r .size "$m")"
+       }
+ 
+-      check_desktop() { # <src> <dir>
+-        local src="$1" dir="$2" m verified expires key
++      check_desktop() { # <src> <dir> [renewal]: a renewal carries no packages
++        local src="$1" dir="$2" renewal="''${3:-}" m verified expires key pubkey
+         m="$src/manifest.json"
+-        if ! verified="$(minisign -V -p ${desktopMinisignPub} -m "$m" -x "$m.minisig" 2>&1)"; then
+-          reject "$src" desktop "$dir" "bad signature"; return 1
+-        fi
++        verified=""
++        for pubkey in ${lib.concatStringsSep " " desktopMinisignPubs}; do
++          verified="$(minisign -V -p "$pubkey" -m "$m" -x "$m.minisig" 2>&1)" && break
++          verified=""
++        done
++        [ -n "$verified" ] || { reject "$src" desktop "$dir" "bad signature"; return 1; }
+         jq -e --arg d "$dir" '
+           (.build | tostring) as $b
+           | .product == "phoenix-desktop" and .dir == $d
+@@ -123,6 +137,7 @@
+           || { reject "$src" desktop "$dir" "signed for another directory or expiry"; return 1; }
+         build="$(jq -r .build "$m")"
+         files=()
++        [ -z "$renewal" ] || return 0
+         for key in $(jq -r '.files | keys[]' "$m"); do
+           files+=("$(jq -r --arg k "$key" '.files[$k].file' "$m")")
+           check_file "$src" desktop "$dir" "''${files[-1]}" \
+@@ -140,6 +155,32 @@
+           || { reject "$src" "$plat" "$dir" "sha512 or size of $file does not match the manifest"; return 1; }
+       }
+ 
++      # The current desktop release, signed again with a later expiry. Only
++      # the manifest and its signature are replaced; the packages it lists
++      # are the ones already served, checked when that release came in.
++      renew_desktop() { # <src> <dir>
++        local src="$1" dir="$2" m cur build
++        local -a files
++        m="$src/manifest.json"
++        cur="$pub/desktop/$dir/manifest.json"
++        check_desktop "$src" "$dir" renewal || return 0
++        jq -e -n --slurpfile new "$m" --slurpfile old "$cur" '
++          ($new[0] | del(.expires, .published)) == ($old[0] | del(.expires, .published))
++          and $new[0].expires > $old[0].expires
++        ' >/dev/null || { reject "$src" desktop "$dir" "renewal changes more than the expiry, or does not extend it"; return; }
++        # Dot names are never served. The signature goes first: for the
++        # instant between the two renames the app sees a manifest that does
++        # not verify and asks again later.
++        cp "$m" "$pub/desktop/$dir/.manifest.json.new"
++        cp "$m.minisig" "$pub/desktop/$dir/.manifest.json.minisig.new"
++        chmod 0644 "$pub/desktop/$dir/.manifest.json.new" "$pub/desktop/$dir/.manifest.json.minisig.new"
++        mv -T "$pub/desktop/$dir/.manifest.json.minisig.new" "$pub/desktop/$dir/manifest.json.minisig"
++        mv -T "$pub/desktop/$dir/.manifest.json.new" "$pub/desktop/$dir/manifest.json"
++        echo "RENEWED desktop $dir (expires $(jq -r .expires "$m"), build $build)"
++        rm -rf "$src" 2>/dev/null \
++          || echo "cannot clear $src: the upload must be group-writable (phoenix-pkg)" >&2
++      }
++
+       promote_one() { # <src> <platform> <dir>
+         local src="$1" plat="$2" dir="$3" m build cur_build f
+         local -a files
+@@ -147,6 +188,12 @@
+         [[ "$dir" =~ ^[0-9A-Za-z.+~-]+-[0-9]+$ ]] || { reject "$src" "$plat" "$dir" "bad directory name"; return; }
+         m="$src/manifest.json"
+         [ -f "$m" ] && [ -f "$m.minisig" ] || { reject "$src" "$plat" "$dir" "no manifest or signature"; return; }
++        # Nothing but a manifest, for the release being served: a renewal.
++        if [ "$plat" = desktop ] && [ "$(readlink "$pub/desktop/current" 2>/dev/null)" = "$dir" ] \
++          && [ -z "$(find "$src" -mindepth 1 ! -name manifest.json ! -name manifest.json.minisig ! -name .done -print -quit)" ]; then
++          renew_desktop "$src" "$dir"
++          return
++        fi
+         if [ "$plat" = desktop ]; then
+           check_desktop "$src" "$dir" || return 0
+         else

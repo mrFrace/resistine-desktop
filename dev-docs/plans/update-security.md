@@ -212,6 +212,28 @@ database. From now on an unsigned rpm in the repository fails every
 upgrade; `publish-linux-repos.sh` signs and verifies them on each run.
 Not tried on a Fedora or openSUSE machine.
 
+7, desktop half done 2026-11-21: `publish-desktop.sh` signs for 45 days
+instead of 90 and has `--renew`, which signs the last published manifest
+again with a new expiry and uploads only the manifest. The app needs no
+change: it already takes a later expiry for the build it knows. The server
+does: `phoenix-packages-promote` refuses anything not newer than the
+current build, so `update-security-server-renewal.patch` in this folder
+teaches it renewals (same release, same file list, strictly later expiry,
+valid signature) and, while there, the backup key from step 5. Apply it
+with `git -C ~/flakes apply <patch>` and deploy. The patched script was
+built and run against throwaway keys in a temporary root: release,
+renewal by the main and the backup key, and refusals for an unchanged or
+earlier expiry, a foreign key, a changed hash, a re-upload with packages
+and a manifest-only upload for another build. It has not run on the
+server.
+
+Until the patch is deployed a renewal is rejected there (harmless), so a
+release now goes stale after 45 days unless a newer build ships. "On a
+schedule" is by hand: the key has a password, so nothing can renew
+unattended. Run `./scripts/build/publish-desktop.sh --renew` about monthly
+when no build went out; it only knows releases published from this machine
+after this change (`~/.config/phoenix-release/desktop-published-manifest.json`).
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 
