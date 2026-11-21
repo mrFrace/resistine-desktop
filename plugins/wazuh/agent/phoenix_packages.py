@@ -45,6 +45,14 @@ MINISIGN_PUBLIC_KEY = "RWQ/U6dSOjm1DsQR44jVW5YMhrPoSvAdCYphPZJWrKqrGwMFbP2d3aPc"
 # release machine (scripts/build/publish-desktop.sh).
 DESKTOP_MINISIGN_PUBLIC_KEY = "RWSgsxC2oeynvutf13Lmgaqf29dX8MAKKtaEV21w4HEfsB3wXq71XjFT"
 
+# Backup release keys: a desktop release signed with any of these is accepted
+# exactly like one signed with the key above. Their secret halves are kept
+# offline and are used only when the key above is lost or stolen
+# (dev-docs/release-keys.md). A key is revoked by shipping a build without
+# it; never list a key whose secret half lives on the release machine or on
+# a server.
+DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS: tuple[str, ...] = ()
+
 AGENT, DESKTOP = "phoenix-agent", "phoenix-desktop"
 DESKTOP_PLATFORM = "desktop"  # the store's directory for desktop releases
 # OS keys of a desktop release manifest's "files".
@@ -172,6 +180,24 @@ def verify_minisign(data: bytes, signature: str, public_key: Optional[str] = Non
     return trusted_comment
 
 
+def desktop_public_keys() -> tuple[str, ...]:
+    """Every key a desktop release may be signed with."""
+    return (DESKTOP_MINISIGN_PUBLIC_KEY, *DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS)
+
+
+def _key_for(signature: str, public_keys: tuple[str, ...]) -> str:
+    """The one of ``public_keys`` whose key id the signature names (minisign
+    signatures carry it); the signature itself is checked by verify_minisign."""
+    lines = signature.splitlines()
+    if len(lines) < 2:
+        raise PackageError("Malformed package signature.")
+    key_id = _b64(lines[1], 74, "package signature")[2:10]
+    for public_key in public_keys:
+        if _b64(public_key, 42, "public key")[2:10] == key_id:
+            return public_key
+    raise PackageError("The package is signed with an unknown key.")
+
+
 def parse_manifest(data: bytes, signature: str, plat: str,
                    public_key: Optional[str] = None) -> Manifest:
     """Check the signature and the fields of a manifest for ``plat``."""
@@ -205,12 +231,13 @@ def parse_desktop_manifest(data: bytes, signature: str, os_key: str,
                            public_key: Optional[str] = None) -> Optional[Manifest]:
     """Check a desktop release manifest; return the package for ``os_key``.
 
-    Verified against the desktop key, never the agent one. Returns None when
+    Verified against the desktop keys (the release key or a pinned backup
+    key), never the agent one. Returns None when
     the (valid) release has no package for this OS; raises PackageError when
     anything is wrong.
     """
-    trusted_comment = verify_minisign(data, signature,
-                                      public_key or DESKTOP_MINISIGN_PUBLIC_KEY)
+    trusted_comment = verify_minisign(
+        data, signature, public_key or _key_for(signature, desktop_public_keys()))
     try:
         m = json.loads(data)
     except ValueError as e:

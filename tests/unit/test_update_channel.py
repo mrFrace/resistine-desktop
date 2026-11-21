@@ -23,6 +23,7 @@ from plugins.wazuh.agent import phoenix_packages as pp
 from utils.updates import channel, installer
 
 DESKTOP_ID = bytes.fromhex("1112131415161718")
+BACKUP_ID = bytes.fromhex("2122232425262728")
 AGENT_ID = bytes.fromhex("0102030405060708")
 
 
@@ -94,6 +95,34 @@ class TestParseDesktopManifest:
         with pytest.raises(pp.PackageError, match="unknown key"):
             pp.parse_manifest(agent, sig, "windows")
 
+    def test_backup_key_signs_a_release(self, keys):
+        bsk, bpub = _keypair(BACKUP_ID)
+        data, sig = _signed(bsk, key_id=BACKUP_ID)
+        with pytest.raises(pp.PackageError, match="unknown key"):  # not pinned yet
+            pp.parse_desktop_manifest(data, sig, "windows")
+        with patch.object(pp, "DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS", (bpub,)):
+            assert pp.parse_desktop_manifest(data, sig, "windows").build == 202610221204
+            # the release key still works next to it
+            data, sig = _signed(keys[0])
+            assert pp.parse_desktop_manifest(data, sig, "windows") is not None
+
+    def test_backup_key_id_with_another_keys_signature_is_refused(self, keys):
+        _, bpub = _keypair(BACKUP_ID)
+        data, sig = _signed(keys[0], key_id=BACKUP_ID)  # release key, backup's id
+        with patch.object(pp, "DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS", (bpub,)):
+            with pytest.raises(pp.PackageError, match="not valid"):
+                pp.parse_desktop_manifest(data, sig, "windows")
+
+    def test_backup_key_cannot_sign_agent_packages(self, keys):
+        bsk, bpub = _keypair(BACKUP_ID)
+        agent = json.dumps({"product": "phoenix-agent", "platform": "windows",
+                            "version": "5", "build": 1, "dir": "5-1", "file": "a.msi",
+                            "sha512": "0" * 128, "size": 1}).encode()
+        sig = _sign(bsk, agent, "phoenix-agent windows 5-1", BACKUP_ID)
+        with patch.object(pp, "DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS", (bpub,)):
+            with pytest.raises(pp.PackageError, match="unknown key"):
+                pp.parse_manifest(agent, sig, "windows")
+
     @pytest.mark.parametrize("comment", [
         "phoenix-desktop 2026.07.20-rc-202610221204 2099-01-01",  # expiry pushed out
         "phoenix-desktop 2026.07.20-rc-202610221300 2027-01-20",  # another build
@@ -121,6 +150,18 @@ class TestParseDesktopManifest:
         sig = _sign(keys[0], data, f"phoenix-desktop {d} {exp}")
         with pytest.raises(pp.PackageError, match="malformed"):
             pp.parse_desktop_manifest(data, sig, "windows")
+
+
+def test_pinned_desktop_keys_are_well_formed_and_distinct():
+    """The keys really compiled in: minisign Ed25519 keys, each with its own
+    key id (a release is matched to its key by id), none of them the agent's."""
+    keys = pp.desktop_public_keys()
+    raw = [base64.b64decode(k, validate=True) for k in keys]
+    assert keys[0] == pp.DESKTOP_MINISIGN_PUBLIC_KEY
+    assert all(len(r) == 42 and r[:2] == b"Ed" for r in raw)
+    ids = [r[2:10] for r in raw]
+    assert len(set(ids)) == len(ids)
+    assert base64.b64decode(pp.MINISIGN_PUBLIC_KEY)[2:10] not in ids
 
 
 # ===========================================================================
