@@ -234,6 +234,19 @@ unattended. Run `./scripts/build/publish-desktop.sh --renew` about monthly
 when no build went out; it only knows releases published from this machine
 after this change (`~/.config/phoenix-release/desktop-published-manifest.json`).
 
+8, done 2026-11-21: removed `frameworks/Sparkle.framework`,
+`frameworks/WinSparkle`, `utils/updates/{appcast,darwin,linux,windows,manager}.py`,
+`gui/update_dialog.py`, `scripts/build/sign_update` and
+`sign_update_windows.py`, their catalog strings, the copy/sign/verify steps
+in `build-distribution.sh`, the WinSparkle binary and the `SU*` Info.plist
+key in `Phoenix.spec`, and the "Sign DMG for Sparkle" step in
+`release.yml`. The two Linux-updater tests in `test_security_hardening.py`
+went with the code they exercised; in their place the same refusals
+(unsigned release, non-https store) are pinned on the signed channel, plus
+a test that the legacy updater stays removed. Left to do by hand: delete
+the `SPARKLE_ED_PRIVATE_KEY` secret in the GitHub repository settings. The
+macOS and Windows builds have not been run since.
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 

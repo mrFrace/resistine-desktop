@@ -682,17 +682,6 @@ fi
 echo "  - Creating symlink for CLI..."
 ln -sf "PhoenixCLI.app/Contents/MacOS/phoenix-vpn-cli" "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli"
 
-# --- Copy Sparkle.framework for auto-updates ---
-echo "  - Copying Sparkle.framework..."
-SPARKLE_SOURCE="$PYTHON_UI_PATH/frameworks/Sparkle.framework"
-if [ -d "$SPARKLE_SOURCE" ]; then
-    mkdir -p "$PYTHON_APP/Contents/Frameworks"
-    cp -R "$SPARKLE_SOURCE" "$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
-    echo "    Sparkle.framework copied"
-else
-    echo "    Warning: Sparkle.framework not found at $SPARKLE_SOURCE — skipping auto-update"
-fi
-
 # --- Copy LICENSE files into bundle Resources/ ---
 # Ship the GPL text and the auto-generated third-party license file inside
 # Contents/Resources/ so end users can find them via "Show Package Contents"
@@ -1007,59 +996,10 @@ while IFS= read -r binary; do
 done < <(find "$PYTHON_APP/Contents/Frameworks" \
     -path "*.framework/Versions/*" -type f \
     ! -name "*.plist" ! -name "*.prl" ! -name "*.h" \
-    ! -path "*Sparkle.framework*" ! -path "*Python.framework*")
+    ! -path "*Python.framework*")
 echo "    Qt framework binaries signed ($_QT_SIGNED)"
 
-# 5e: Sign Sparkle.framework (inner-to-outer: deepest bundles first)
-if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
-    SPARKLE_FW="$PYTHON_APP/Contents/Frameworks/Sparkle.framework"
-    echo "  - Signing Sparkle.framework internals (inner-to-outer)..."
-
-    # Sign XPC services (Downloader.xpc, Installer.xpc)
-    # --preserve-metadata=entitlements: keeps Sparkle's original entitlements intact
-    find "$SPARKLE_FW" -name "*.xpc" -type d | while read -r xpc_bundle; do
-        codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp \
-            --preserve-metadata=entitlements \
-            "$xpc_bundle" 2>/dev/null || {
-            echo "    Warning: Failed to sign: $(basename "$xpc_bundle")"
-        }
-    done
-
-    # Sign Updater.app (Sparkle 2.9+ ships its own updater app)
-    find "$SPARKLE_FW" -name "Updater.app" -type d | while read -r updater_app; do
-        codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp \
-            --preserve-metadata=entitlements \
-            "$updater_app" 2>/dev/null || {
-            echo "    Warning: Failed to sign Updater.app"
-        }
-    done
-
-    # Sign the Autoupdate executable
-    # CRITICAL: Autoupdate has com.apple.application-identifier which it needs
-    # to register mach services for the installer agent connection.
-    find "$SPARKLE_FW" -name "Autoupdate" -type f | while read -r autoupdate; do
-        codesign --force --sign "$SIGN_IDENTITY" \
-            --options runtime --timestamp \
-            --preserve-metadata=entitlements \
-            "$autoupdate" 2>/dev/null || {
-            echo "    Warning: Failed to sign Autoupdate"
-        }
-    done
-
-    # Sign the Sparkle.framework bundle itself (outermost)
-    echo "  - Signing Sparkle.framework..."
-    codesign --force --sign "$SIGN_IDENTITY" \
-        --options runtime --timestamp \
-        "$SPARKLE_FW" || {
-        echo "  Sparkle.framework signing failed"
-        exit 1
-    }
-    echo "    Sparkle.framework signed"
-fi
-
-# 5f: Sign the outer Phoenix.app bundle
+# 5e: Sign the outer Phoenix.app bundle
 echo "  - Signing main Phoenix.app bundle..."
 codesign --force --sign "$SIGN_IDENTITY" \
     --options runtime \
@@ -1081,11 +1021,6 @@ codesign --verify --verbose "$PYTHON_APP/Contents/Library/SystemExtensions/$NE_B
 
 codesign --verify --verbose "$PYTHON_APP/Contents/MacOS/phoenix-vpn-cli" 2>&1 && \
     echo "    phoenix-vpn-cli: valid" || { echo "    phoenix-vpn-cli: INVALID"; VERIFY_FAILED=true; }
-
-if [ -d "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" ]; then
-    codesign --verify --verbose "$PYTHON_APP/Contents/Frameworks/Sparkle.framework" 2>&1 && \
-        echo "    Sparkle.framework: valid" || { echo "    Sparkle.framework: INVALID"; VERIFY_FAILED=true; }
-fi
 
 if [ "$CLAMAV_AVAILABLE" = true ] && [ -d "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" ]; then
     codesign --verify --verbose "$PYTHON_APP/Contents/Helpers/PhoenixClamAV.app" 2>&1 && \
@@ -1175,9 +1110,8 @@ cat > "$PKG_SCRIPTS_DIR/preinstall" << 'PREEOF'
 # atomically, which is why pre-pkg releases updated cleanly. Deleting first makes
 # the pkg behave the same way.
 #
-# We do NOT relaunch here: Sparkle relaunches the app (as the correct user)
-# after an auto-update, and a manual pkg install shows Installer's own success
-# screen. Launching from this script would run the app as root.
+# We do NOT relaunch here: a pkg install shows Installer's own success
+# screen, and launching from this script would run the app as root.
 
 # Quit the app gracefully, then force-kill any stragglers, before removing it.
 osascript -e 'quit app "Phoenix"' 2>/dev/null || true

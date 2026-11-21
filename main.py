@@ -154,9 +154,8 @@ def _build_app() -> tuple[QApplication, object]:
     except Exception as e:
         logger.debug(f"Desktop entry setup skipped: {e}")
 
-    # The legacy auto-updater (Sparkle, WinSparkle) stays off: updates.init is
-    # never called. The signed channel is asked quietly once a day; it only
-    # tells the user, installing is theirs to start (utils/updates/background.py).
+    # The signed update channel is asked quietly once a day; it only tells
+    # the user, installing is theirs to start (utils/updates/background.py).
     try:
         from utils.updates import background
         background.start(window)
@@ -326,14 +325,9 @@ def main() -> int:
         rc = qt_app.exec()
     except KeyboardInterrupt:
         rc = 0
-    # Orderly teardown, then hard exit: non-daemon helper threads (updater,
-    # spawned installers) must not hold the process open after the Qt loop
-    # ends — the CTk app had the same terminal-hang failure mode.
-    try:
-        from utils import updates
-        updates.shutdown()
-    except Exception:
-        pass
+    # Hard exit: non-daemon helper threads (spawned installers) must not hold
+    # the process open after the Qt loop ends — the CTk app had the same
+    # terminal-hang failure mode.
     try:
         logger.complete()
     except Exception:

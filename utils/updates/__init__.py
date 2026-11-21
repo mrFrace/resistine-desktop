@@ -1,15 +1,8 @@
+"""Phoenix Desktop updates.
+
+- ``channel``: asks the signed update channel whether a newer build exists
+- ``background``: the quiet daily check
+- ``installer``: downloads the release and starts it, checked against the
+  signed manifest (Windows, macOS; Linux updates from its package repository)
+- ``version``: the running version and build
 """
-Cross-Platform Auto-Update Package.
-
-Usage:
-    from utils import updates
-
-    updates.init(app)
-    updates.check_for_updates()
-    updates.is_available()
-    updates.shutdown()
-"""
-
-from utils.updates.manager import check_for_updates, init, is_available, shutdown
-
-__all__ = ["init", "check_for_updates", "is_available", "shutdown"]

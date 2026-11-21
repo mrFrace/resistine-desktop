@@ -48,7 +48,7 @@ Server / infrastructure (blocked or needs a decision)
 - Build-image pinning by digest in `publish-linux-repos.sh` / `build-windows-vm.sh`.
 
 Security review, still open (docs/SECURITY_REVIEW_2026-11.md, "Deferred")
-- Windows IPC to a named pipe with DACL; bot device-key pinning in chat; DM membership check; appcast signing before any updater re-enable; OIDC low-priority items; remove dead `plugins/login/api.py`.
+- Windows IPC to a named pipe with DACL; bot device-key pinning in chat; DM membership check; OIDC low-priority items; remove dead `plugins/login/api.py`.
 
 Desktop
 - Devices → Inventory: the view dropdown (Devices / Processes / Ports / Network / Packages) is hidden (`plugins/devices/tabs.py`, `self.view_combo.hide()`, 2026-11-13) because only "Devices" shows data. The other four views read the per-device detail `GET /v1/me/inventory/{id}` (processes, ports, network, packages), which phoenix-provisioning does not serve yet (404); the list endpoint `GET /v1/me/inventory` (AR-B7) only returns `{id, name, status, ip}`, so OS comes from posture and CPU / RAM stays "—". Unhide once the backend serves the detail and `hardware`/`os` in the list.

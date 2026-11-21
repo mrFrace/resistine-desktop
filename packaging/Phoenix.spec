@@ -162,8 +162,7 @@ if IS_WINDOWS:
 a = Analysis(
     [_src('main.py')],
     pathex=[base_path],
-    binaries=_vodozemac_binaries + (
-        [(_src('frameworks/WinSparkle/WinSparkle.dll'), '.')] if IS_WINDOWS else []),
+    binaries=_vodozemac_binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -355,10 +354,5 @@ if IS_MACOS:
                 }
             ],
 
-            # Sparkle Auto-Update — DISABLED for the Phoenix migration.
-            # No SUFeedURL and no SUPublicEDKey: the old feed and signing key
-            # belong to the previous vendor; a Phoenix build must never consult them.
-            # Re-enable only with a Phoenix-owned feed + a fresh EdDSA key.
-            'SUEnableAutomaticChecks': False,
         },
     )

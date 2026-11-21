@@ -3,7 +3,8 @@
 Each test pins a rejection path that previously failed open:
 - Windows VPN service: tunnel-name traversal, config_path confinement,
   constant-time token check, ACL grantee allowlist.
-- Linux updater: unsigned appcast entries refused, traversal guard uses
+- Updates: a release without a valid signature is refused, the store is
+  https only, the legacy appcast updaters stay removed; traversal guard uses
   commonpath (sibling-prefix directories don't pass).
 - Wazuh Linux: agent group derived from the (user-writable) email setting is
   allowlist-sanitized before reaching root sh -c strings.
@@ -94,65 +95,46 @@ class TestWindowsServiceInputValidation:
 
 @pytest.mark.unit
 @pytest.mark.security
-class TestLinuxUpdaterPolicy:
-    def test_unsigned_appcast_entry_refused(self):
-        """An AppcastItem without edSignature must never reach extraction."""
-        from utils.updates import linux as lx
+class TestUpdatePolicy:
+    """The signed channel is the only updater. The appcast updaters it
+    replaced (Sparkle, WinSparkle, the Linux tarball updater) are removed,
+    and their refusals are pinned here on the channel instead."""
 
-        class Dialog:
-            cancelled = False
-            errors = []
-            def show_error(self, msg, retry=None):
-                Dialog.errors.append(msg)
-            def set_download_progress(self, frac, status):
-                pass
+    _MANIFEST = (b'{"product": "phoenix-desktop", "version": "1", "build": 2,'
+                 b' "dir": "1-2", "expires": "2099-01-01", "files": {}}')
 
-        class App:
-            def after(self, _ms, fn=None, *args):
-                if callable(fn):
-                    fn(*args)
+    @pytest.mark.parametrize("signature", [
+        "",
+        "untrusted comment: x\n",
+        "untrusted comment: x\nAAAA\ntrusted comment: phoenix-desktop 1-2 2099-01-01\nAAAA\n",
+    ])
+    def test_unsigned_release_refused(self, signature):
+        """A manifest without a valid signature never becomes a release."""
+        from plugins.wazuh.agent import phoenix_packages as pp
+        with pytest.raises(pp.PackageError):
+            pp.parse_desktop_manifest(self._MANIFEST, signature, "windows")
 
-        item = lx.AppcastItem(
-            version="99.99.99", title="x",
-            download_url="https://example.invalid/u.tar.gz",
-            download_length=4, signature="",
-        )
-        applied = []
-        with patch.object(lx, "_app", App()), \
-             patch.object(lx, "_apply_update",
-                          side_effect=lambda p: applied.append(p) or (True, "")), \
-             patch.object(lx.requests, "get") as get:
-            resp = get.return_value
-            resp.raise_for_status.return_value = None
-            resp.headers = {"Content-Length": "4"}
-            resp.iter_content.return_value = [b"data"]
-            lx._download_worker(item, Dialog())
-        assert applied == [], "unsigned update must not be applied"
-        assert any("unsigned" in e.lower() for e in Dialog.errors)
+    def test_non_https_store_refused(self, monkeypatch):
+        """No plain-http store: nothing is fetched (or a token sent) there."""
+        from plugins.wazuh.agent import phoenix_packages as pp
+        monkeypatch.setenv("PHOENIX_PACKAGES_URL", "http://example.invalid/packages")
+        assert pp.packages_url() == pp.PACKAGES_URL.rstrip("/")
+        assert pp.packages_url().startswith("https://")
 
-    def test_non_https_url_refused(self):
-        from utils.updates import linux as lx
-
-        class Dialog:
-            cancelled = False
-            errors = []
-            def show_error(self, msg, retry=None):
-                Dialog.errors.append(msg)
-
-        class App:
-            def after(self, _ms, fn=None, *args):
-                if callable(fn):
-                    fn(*args)
-
-        item = lx.AppcastItem(
-            version="99.99.99", title="x",
-            download_url="http://example.invalid/u.tar.gz",
-            download_length=4, signature="sig",
-        )
-        with patch.object(lx, "_app", App()), \
-             patch.object(lx.requests, "get") as get:
-            lx._download_worker(item, Dialog())
-            assert not get.called, "no bytes may be fetched over plain http"
+    def test_legacy_updaters_are_gone(self):
+        """Nothing left to re-point at an appcast feed or the old keys."""
+        import importlib.util
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        for name in ("appcast", "darwin", "linux", "windows", "manager"):
+            assert importlib.util.find_spec(f"utils.updates.{name}") is None, name
+        assert not (root / "frameworks" / "Sparkle.framework").exists()
+        assert not (root / "frameworks" / "WinSparkle").exists()
+        for path in ("packaging/Phoenix.spec", "scripts/build/build-distribution.sh",
+                     ".github/workflows/release.yml",
+                     "scripts/build/build-windows-installer.ps1"):
+            text = (root / path).read_text(encoding="utf-8").lower()
+            assert "sparkle" not in text and "appcast" not in text, path
 
     def test_traversal_guard_rejects_sibling_prefix(self, tmp_path):
         """'/root-evil' must not pass a guard protecting '/root'."""

@@ -124,14 +124,8 @@
     "utils.uninstall.darwin.uninstall_smappservice_unregister_error_plist": "[UNINSTALL] SMAppService unregister error ({plist_name}): {err}",
     "utils.uninstall.darwin.uninstall_smappservice_unregister_failed_plist": "[UNINSTALL] SMAppService unregister failed ({plist_name}): {e}",
     "utils.uninstall.darwin.uninstall_unexpected_bundle_path_app": "[UNINSTALL] Unexpected bundle path: {app_bundle}",
-    "utils.updates.darwin.sparkle_controller_not_initialized": "[SPARKLE] Controller not initialized",
-    "utils.updates.linux.update_linux_could_not_read": "[UPDATE-LINUX] Could not read version from spec file; updater disabled",
-    "utils.updates.linux.update_linux_no_signature_in": "[UPDATE-LINUX] No signature in appcast entry, skipping verification",
-    "utils.updates.manager.update_no_update_backend_for": "[UPDATE] No update backend for this platform",
     "utils.updates.version.version_could_not_read_bundled": "[VERSION] Could not read bundled VERSION file: {e}",
     "utils.updates.version.version_could_not_read_spec": "[VERSION] Could not read spec file: {e}",
-    "utils.updates.windows.winsparkle_eddsa_public_key_was": "[WINSPARKLE] EdDSA public key was not accepted",
-    "utils.updates.windows.winsparkle_not_initialized": "[WINSPARKLE] Not initialized",
     "vpn.could_not_compute_client_public": "Could not compute client public key: {e}",
     "vpn.could_not_determine_vpn_status": "⚠️ Could not determine VPN status on Windows: {e}",
     "vpn.could_not_enumerate_wireguard_interfaces": "⚠️ Could not enumerate WireGuard interfaces: {e}",
@@ -245,7 +239,6 @@
     "settings.language.restart_required": "Restart Phoenix to apply the new language.",
     "store.available": "Available",
     "store.uninstalled": "Uninstalled",
-    "utils.updates.linux.downloading_mb_down_mb_total": "Downloading... {mb_down} / {mb_total} MB",
     "vpn.stopped": "Stopped",
     "wazuh.agent.wazuh_functions_darwin.agent_name_is_empty_after": "Agent name is empty after sanitizing hostname: {hostname}"
   }

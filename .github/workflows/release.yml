@@ -138,23 +138,6 @@ jobs:
           chmod +x scripts/build/build-distribution.sh
           ./scripts/build/build-distribution.sh
 
-      # --- Sign DMG with Sparkle EdDSA key ---
-      - name: Sign DMG for Sparkle
-        id: sparkle_sign
-        env:
-          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-        run: |
-          # sign_update reads the key from SPARKLE_ED_PRIVATE_KEY env var
-          # when the keychain entry isn't available
-          SIGN_OUTPUT=$(./scripts/build/sign_update dist/Phoenix-Installer.dmg)
-          echo "Raw output: $SIGN_OUTPUT"
-
-          ED_SIGNATURE=$(echo "$SIGN_OUTPUT" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
-          LENGTH=$(echo "$SIGN_OUTPUT" | grep -o 'length="[^"]*"' | cut -d'"' -f2)
-
-          echo "ED_SIGNATURE=$ED_SIGNATURE" >> "$GITHUB_OUTPUT"
-          echo "LENGTH=$LENGTH" >> "$GITHUB_OUTPUT"
-
       # --- Create GitHub Release with the DMG ---
       - name: Create GitHub Release
         id: release

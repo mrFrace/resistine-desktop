@@ -1,12 +1,8 @@
 # Release History
 
-> **DEPRECATED / DISABLED:** This document describes the legacy release and
-> auto-update pipeline (Sparkle/WinSparkle + the old appcast feed). That
-> channel is retired: Phoenix builds have updates hard-disabled
-> (`utils/updates/manager.py: UPDATES_ENABLED = False`) and carry no feed URL
-> or update-signing public key. Do not re-point anything at the old feed.
-> A new document will replace this one when Phoenix update infrastructure
-> (new feed host + fresh signing keys in CI) exists.
+> The history below predates the Phoenix update channel. The Sparkle and
+> WinSparkle updaters it mentions are removed; see "Update Instructions"
+> for how updates work now.
 
 
 Complete release history for Phoenix Desktop across all platforms.
@@ -130,8 +126,8 @@ Complete release history for Phoenix Desktop across all platforms.
 
 | Platform | Current Version | Auto-Update | Status |
 |----------|-----------------|-------------|--------|
-| macOS (13.0+) | 2026.03.19 | ✓ Sparkle | Stable |
-| Windows (10+) | 2026.03.19 | ✓ WinSparkle | Stable |
+| macOS (13.0+) | 2026.03.19 | ✓ In-app | Stable |
+| Windows (10+) | 2026.03.19 | ✓ In-app | Stable |
 | Linux | 2026.03.19 | ✓ Package Manager | Stable |
 | Android | TBD | ✓ Google Play | Coming Soon |
 
@@ -147,7 +143,7 @@ Complete release history for Phoenix Desktop across all platforms.
 ## Update Instructions
 
 ### macOS
-Updates are delivered automatically via Sparkle. You'll be notified when an update is available.
+Phoenix checks its signed update channel once a day and tells you when a newer build exists. Settings → Updates → "Download and install" fetches it, checks it against the signed release and starts it.
 
 **Manual Update:**
 1. Download the latest DMG from the releases page
@@ -155,7 +151,7 @@ Updates are delivered automatically via Sparkle. You'll be notified when an upda
 3. Restart the application
 
 ### Windows
-Updates are delivered automatically via WinSparkle. You'll be notified when an update is available.
+Phoenix checks its signed update channel once a day and tells you when a newer build exists. Settings → Updates → "Download and install" fetches it, checks it against the signed release and starts it.
 
 **Manual Update:**
 1. Download the latest .exe installer

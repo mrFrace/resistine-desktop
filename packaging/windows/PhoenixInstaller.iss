@@ -1724,7 +1724,7 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
 
-  { Silent mode (WinSparkle upgrade): skip maintenance page, just overwrite }
+  { Silent mode (in-app update): skip maintenance page, just overwrite }
   if WizardSilent and ExistingInstallDetected then
   begin
     SelectedAction := maInstall;

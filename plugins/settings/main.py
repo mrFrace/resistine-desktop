@@ -730,10 +730,9 @@ class Plugin(BasePlugin):
                     _th.Timer(0.3, lambda: _os._exit(0)).start()
                 else:
                     # Windows/Linux: orderly shutdown so any spawned
-                    # uninstaller (Inno's unins000.exe) and WinSparkle
-                    # finish cleanly. Quit the Qt loop; main()'s teardown
-                    # (updates.shutdown + hard exit) runs after exec()
-                    # returns.
+                    # uninstaller (Inno's unins000.exe) finishes cleanly.
+                    # Quit the Qt loop; main()'s teardown (hard exit) runs
+                    # after exec() returns.
                     from PyQt6.QtWidgets import QApplication
                     self.app.close()
                     QApplication.instance().quit()

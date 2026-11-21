@@ -905,7 +905,7 @@ def set_freshclam_daemon_enabled(enabled: bool) -> tuple[bool, str]:
 def refresh_system_configs():
     """Rewrite system-level ClamAV configs where the user can write them.
 
-    Called after a Sparkle update to ensure configs reflect the current
+    Called after an update to ensure configs reflect the current
     app bundle (e.g. updated CVDCertsDirectory path).
 
     The system configs are root-owned (0644) BY DESIGN: they are consumed

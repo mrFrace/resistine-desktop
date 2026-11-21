@@ -22,7 +22,7 @@ Important config, ports, quirks, and environment details worth remembering.
 - **AR executions endpoint:** `GET /v1/me/active-response/executions` ignores `?agent_id=`; the Responses tab filters per device itself (`active_response_api.executions_for`)
 - **Posture placeholder:** an agent the posture service has no scan for arrives as hostname/os `"Unknown"`; `data.fleet_rows` names it from the inventory list (`names_by_agent`)
 - **ClamAV artifacts:** Downloaded from a release on `DatOneOPGuy/phoenix-clamav-mac` via `gh` CLI
-- **Update channel:** one minisign-signed manifest at `auth.phoenix.exposed/packages/desktop/current/`; the Sparkle/appcast updater is hard-disabled
+- **Update channel:** one minisign-signed manifest at `auth.phoenix.exposed/packages/desktop/current/`; the Sparkle/appcast updater is removed
 - **Linting:** Trunk (ruff, black, isort, bandit, shellcheck, shfmt, markdownlint, prettier, trufflehog, checkov)
 - **CI:** `python -m compileall` + pip-audit on push/PR (Python 3.13)
 - **Tests:** `pytest -m unit tests/unit`; `tests/platform` has 17 long-standing failures (macOS/Windows config-dir and service tests run on Linux)
