@@ -121,6 +121,34 @@ class TestUpdatePolicy:
         assert pp.packages_url() == pp.PACKAGES_URL.rstrip("/")
         assert pp.packages_url().startswith("https://")
 
+    def test_unsigned_plugin_catalog_refused(self, tmp_path, monkeypatch):
+        """Store plugins are code: a catalog without a valid signature by a
+        pinned key offers nothing and supplies no hash to install against."""
+        from unittest.mock import MagicMock, patch
+
+        from plugins.plugin_manager import PluginManager
+        monkeypatch.setattr("plugins.plugin_manager.get_config_dir", lambda: str(tmp_path))
+        with patch.object(PluginManager, "load_plugins", return_value=[]):
+            mgr = PluginManager(MagicMock(spec=[]))
+        mgr.OPTIONAL_PLUGINS_URL = "https://example.invalid/optional_plugins.json"
+        catalog = (b'{"serial": 1, "plugins": [{"id": "1", "url":'
+                   b' "https://example.invalid/p.zip", "sha256": "' + b"0" * 64 + b'"}]}')
+        signature = (b"untrusted comment: x\nAAAA\n"
+                     b"trusted comment: phoenix-plugins 1\nAAAA\n")
+
+        def get(url, **kwargs):
+            resp = MagicMock(status_code=200)
+            resp.raise_for_status.return_value = None
+            body = signature if url.endswith(".minisig") else catalog
+            resp.iter_content = lambda chunk_size=1: iter([body])
+            return resp
+
+        with patch("plugins.plugin_manager.requests.get", side_effect=get):
+            assert mgr.get_available_plugins() == []
+        assert mgr._published_hashes == {}
+        ok, _ = mgr.download_plugin("https://example.invalid/p.zip", plugin_id="1")
+        assert ok is False
+
     def test_legacy_updaters_are_gone(self):
         """Nothing left to re-point at an appcast feed or the old keys."""
         import importlib.util

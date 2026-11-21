@@ -247,6 +247,31 @@ a test that the legacy updater stays removed. Left to do by hand: delete
 the `SPARKLE_ED_PRIVATE_KEY` secret in the GitHub repository settings. The
 macOS and Windows builds have not been run since.
 
+9, app side done 2026-11-22: the Store uses `optional_plugins.json` only
+with a valid `optional_plugins.json.minisig` next to it
+(`plugins/plugin_catalog.py`, `PluginManager.get_available_plugins`). The
+keys are the desktop release keys (main and backup), not a new one: the
+same person holds them on the same machine, so a separate key would add a
+password and nothing else. The trusted comment `phoenix-plugins <serial>`
+keeps a release signature from passing as a catalog signature and the
+reverse. The app remembers the highest serial it saw signed
+(`plugins.catalog_serial`) and refuses an older catalog, which could offer
+a withdrawn plugin again. Without a verified catalog there are no hashes,
+so nothing installs. The catalog URL must be https and is not redirected.
+`scripts/build/sign-plugin-catalog.sh` writes the serial, checks every
+entry (id, https url, 64-hex sha256) and signs; it was run with a
+throwaway key and its output verified by the app code.
+
+Not covered: there is no expiry, so a host that keeps serving an old
+(still newest-seen) catalog is not noticed; a new install has seen no
+serial and accepts any signed catalog. Plugin archives are still not
+signed themselves; their hash is, which binds them as long as the catalog
+is right. The catalog repository (`DatOneOPGuy/phoenix-desktop-plugins`)
+does not exist yet (404 on 2026-11-22), so the Store lists no optional
+plugins today and this has not run against a published catalog. When it is
+created: write `plugins/optional_plugins.json`, run the script, commit both
+files together.
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 

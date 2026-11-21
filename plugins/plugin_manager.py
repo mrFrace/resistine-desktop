@@ -16,6 +16,8 @@ import sys
 import re
 import json
 from urllib.parse import urljoin, urlparse
+from plugins import plugin_catalog
+from utils import settings
 from utils.logger import logger
 from utils.settings import get_config_dir
 
@@ -31,13 +33,18 @@ class PluginManager:
     # at Phoenix-owned infrastructure only. It previously pointed at the old
     # company's repo, which left them able to choose what code this app ran.
     #
+    # The catalog is used only with a valid signature by a pinned key
+    # (plugins/plugin_catalog.py; the signature is this URL + ".minisig").
     # Until the Phoenix catalog is published, the fetch fails and the Store
     # shows nothing -- which is the correct direction to fail for executable
-    # content. Override with PHOENIX_PLUGINS_URL for local testing.
+    # content. PHOENIX_PLUGINS_URL points it elsewhere (https only); the
+    # signature is required there too.
     OPTIONAL_PLUGINS_URL = os.environ.get(
         "PHOENIX_PLUGINS_URL",
         "https://raw.githubusercontent.com/DatOneOPGuy/phoenix-desktop-plugins/main/plugins/optional_plugins.json",
     )
+
+    _SETTINGS_NS = "plugins"
 
     # Network timeouts (seconds)
     METADATA_TIMEOUT = 15
@@ -78,20 +85,61 @@ class PluginManager:
 
     def get_available_plugins(self):
         """
-        Fetch the list of optional plugins from the remote repository.
+        Fetch the signed list of optional plugins from the remote repository.
+
+        Returns [] unless the catalog carries a valid signature by a pinned
+        key and is not older than one already seen. Only a verified catalog
+        supplies the hashes download_plugin() checks archives against.
         """
         try:
-            response = requests.get(
-                self.OPTIONAL_PLUGINS_URL, timeout=self.METADATA_TIMEOUT, verify=True
-            )
-            response.raise_for_status()
-            data = response.json()
-            plugins = data.get("plugins", [])
+            url = self.OPTIONAL_PLUGINS_URL
+            if not str(url).startswith("https://"):
+                raise plugin_catalog.CatalogError(
+                    "the plugin catalog must be fetched over HTTPS")
+            data = self._fetch_small(url, plugin_catalog.MAX_CATALOG)
+            signature = self._fetch_small(
+                url + plugin_catalog.SIGNATURE_SUFFIX, plugin_catalog.MAX_SIGNATURE
+            ).decode("utf-8", "replace")
+            serial, plugins = plugin_catalog.parse(data, signature)
+            highest = self._highest_catalog_serial()
+            if serial < highest:
+                raise plugin_catalog.CatalogError(
+                    f"catalog {serial} is older than {highest}, already seen signed")
+            if serial > highest:
+                settings.set(self._SETTINGS_NS, "catalog_serial", serial)
+            self._published_hashes = {}
             self._remember_published_hashes(plugins)
             return plugins
         except Exception as e:
             logger.error(f"Failed to fetch optional plugins: {e}")
             return []
+
+    def _fetch_small(self, url, limit):
+        """GET a small file, refusing a body larger than ``limit`` bytes."""
+        response = requests.get(
+            url, timeout=self.METADATA_TIMEOUT, verify=True, stream=True,
+            allow_redirects=False,
+        )
+        try:
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise requests.RequestException(
+                    f"unexpected HTTP {response.status_code} for the plugin catalog")
+            buffer = bytearray()
+            for chunk in response.iter_content(chunk_size=self.DOWNLOAD_CHUNK):
+                buffer.extend(chunk)
+                if len(buffer) > limit:
+                    raise requests.RequestException("oversized plugin catalog")
+            return bytes(buffer)
+        finally:
+            response.close()
+
+    def _highest_catalog_serial(self):
+        """The newest catalog serial this install has seen validly signed."""
+        try:
+            return int(settings.get(self._SETTINGS_NS, "catalog_serial", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _load_state(self):
         """Load persistent plugin state (e.g., uninstalled plugins, download order)."""
@@ -323,9 +371,10 @@ class PluginManager:
         """
         try:
             # Plugin zips are executable content (importlib.import_module runs
-            # them). Until archives are signed, at minimum: HTTPS only, a
-            # mandatory SHA-256 check, and size caps enforced while streaming
-            # so a hostile feed can't zip-bomb the client.
+            # them). The archive itself is not signed: its SHA-256 comes from
+            # the signed catalog, so it is mandatory. Also HTTPS only, and
+            # size caps enforced while streaming so a hostile host can't
+            # zip-bomb the client.
             if not str(url).startswith("https://"):
                 logger.error(f"Refusing non-HTTPS plugin download: {url}")
                 return False, "Refused: plugin downloads must use HTTPS."

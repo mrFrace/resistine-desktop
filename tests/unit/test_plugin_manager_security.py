@@ -3,7 +3,8 @@ Security tests for plugins/plugin_manager.py (ported from drake/repo-cleaning
 commits 92fa9e6 and 3d4491f).
 
 Covers:
-- SHA-256 verification of downloaded plugin archives (explicit and from metadata)
+- SHA-256 verification of downloaded plugin archives (explicit and from metadata;
+  the metadata's own signature is in test_plugin_catalog.py)
 - redirect handling: allow_redirects=False, only trusted HTTPS redirects followed
 - verify=True / timeouts on metadata fetch and downloads
 - zip-slip guard ('..' entries, absolute paths)
@@ -94,11 +95,7 @@ class TestHashVerification:
 
     def test_hash_from_metadata_is_enforced(self, mgr):
         url = "https://example.com/calc.zip"
-        meta = MagicMock()
-        meta.raise_for_status.return_value = None
-        meta.json.return_value = {"plugins": [{"id": "100", "url": url, "sha256": "f" * 64}]}
-        with patch("plugins.plugin_manager.requests.get", return_value=meta):
-            mgr.get_available_plugins()
+        mgr._remember_published_hashes([{"id": "100", "url": url, "sha256": "f" * 64}])
 
         (ok, msg), _ = _download(mgr, [_ok(_make_zip({"main.py": "x"}))], url=url, plugin_id="100")
         assert ok is False
@@ -149,8 +146,9 @@ class TestHashVerification:
 class TestRequestHardening:
     def test_metadata_fetch_uses_timeout_and_verify(self, mgr):
         meta = MagicMock()
+        meta.status_code = 200
         meta.raise_for_status.return_value = None
-        meta.json.return_value = {"plugins": []}
+        meta.iter_content = lambda chunk_size=8192: iter([b'{"plugins": []}'])
         with patch("plugins.plugin_manager.requests.get", return_value=meta) as get:
             mgr.get_available_plugins()
         kwargs = get.call_args.kwargs

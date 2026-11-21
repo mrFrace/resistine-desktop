@@ -19,6 +19,13 @@ has reached that install.
 The agent package key (`MINISIGN_PUBLIC_KEY`, CI variable) and the Linux
 repository OpenPGP key are separate and not covered here.
 
+The same keys sign the Store's plugin catalog (`optional_plugins.json`,
+`scripts/build/sign-plugin-catalog.sh`, checked by
+`plugins/plugin_catalog.py`). Whoever holds a release key can therefore
+also choose which plugins the Store installs: after a rotation or a theft,
+sign the catalog again with the new key and treat the old catalog like an
+old release.
+
 ## Create the backup key (once, now)
 
 On a machine that is not the release machine and not a server:

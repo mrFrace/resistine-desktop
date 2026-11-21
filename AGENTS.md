@@ -71,7 +71,7 @@ Runs `scripts/build/build-windows-installer.ps1` (PyInstaller + Inno Setup) over
 
 ### Plugin System
 
-All features are plugins in `plugins/`. Each plugin subclasses `plugins/base_plugin.py:BasePlugin` and overrides `create_main_screen()` (returns a QWidget). Plugins are discovered by scanning the `plugins/` directory (and a user plugins directory) at runtime. `plugins/plugin_manager.py` handles dynamic loading, ordering, and Store downloads.
+All features are plugins in `plugins/`. Each plugin subclasses `plugins/base_plugin.py:BasePlugin` and overrides `create_main_screen()` (returns a QWidget). Plugins are discovered by scanning the `plugins/` directory (and a user plugins directory) at runtime. `plugins/plugin_manager.py` handles dynamic loading, ordering, and Store downloads. The Store's catalog (`optional_plugins.json`) is used only with a minisign signature by the pinned release keys (`plugins/plugin_catalog.py`; trusted comment `phoenix-plugins <serial>`, an older serial than one already seen is refused); each archive's SHA-256 comes from that signed catalog. `scripts/build/sign-plugin-catalog.sh` signs it.
 
 Core (non-uninstallable) plugins: Dashboard, Alerts, Store, Help, Settings. Optional: Login, Chat, VPN, Wazuh (Endpoint), Devices, Antivirus. `plugins/devices/` is the successor of the removed Wazuh Overview: it is built on the posture cards from `GET /v1/me/posture` (`plugins/dashboard/posture.py`), the SIEM alerts from Matrix and the local agent state, because the Phoenix API has no vulnerability/inventory/SCA endpoints; its charts are QPainter (no matplotlib).
 

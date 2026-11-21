@@ -367,30 +367,19 @@ class TestGetAvailablePlugins:
 
         assert result == []
 
-    def test_returns_empty_list_on_bad_json(self, mgr):
-        """If the remote JSON is malformed, must return []."""
+    def test_returns_empty_list_on_unsigned_catalog(self, mgr):
+        """A catalog served without a valid signature must return [] (the
+        signed path is covered in test_plugin_catalog.py)."""
         mock_resp = MagicMock()
+        mock_resp.status_code = 200
         mock_resp.raise_for_status.return_value = None
-        mock_resp.json.side_effect = ValueError("bad JSON")
+        mock_resp.iter_content = lambda chunk_size=8192: iter(
+            [b'{"serial": 1, "plugins": [{"id": "ext_001"}]}'])
 
         with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
             result = mgr.get_available_plugins()
 
         assert result == []
-
-    def test_returns_plugins_list_from_valid_response(self, mgr):
-        """A valid response with 'plugins' key must return that list."""
-        plugin_list = [
-            {"id": "ext_001", "name": "Extra Plugin", "url": "https://example.com/p.zip"},
-        ]
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status.return_value = None
-        mock_resp.json.return_value = {"plugins": plugin_list}
-
-        with patch("plugins.plugin_manager.requests.get", return_value=mock_resp):
-            result = mgr.get_available_plugins()
-
-        assert result == plugin_list
 
     def test_returns_empty_list_on_http_error(self, mgr):
         """An HTTP error (e.g., 404) must return []."""
