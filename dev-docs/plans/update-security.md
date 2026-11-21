@@ -193,9 +193,9 @@ SmartScreen warning. The build and app code for it is in place and inert.
 
 5, code and procedure: the app accepts pinned backup keys
 (`DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS`) and `dev-docs/release-keys.md`
-describes backup, rotation and compromise. **No backup key exists yet**, so
-the list is empty and F4 is still open until one is generated offline,
-pinned, added to the server and shipped. The hardware-token part is
+describes backup, rotation and compromise. A backup key (id
+`6D13747A8A9A1783`) is pinned; F4 closes once it is also in the server's
+`phoenix-packages-promote` and a release carrying it has shipped. The hardware-token part is
 dropped: minisign keys cannot live on one.
 
 Also done: 4 (`utils/updates/background.py`, started from `main.py`, with

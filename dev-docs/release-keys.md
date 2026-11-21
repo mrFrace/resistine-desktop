@@ -7,9 +7,10 @@ minisign key pinned in `plugins/wazuh/agent/phoenix_packages.py`:
   `~/.config/phoenix-release/desktop-minisign.key` on the release machine,
   password-protected, used by `scripts/build/publish-desktop.sh`.
 - `DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS`: backup keys. A release signed with
-  any of them is accepted the same way. **Empty today: no backup key has
-  been generated yet.** Until one is pinned and shipped, losing the release
-  key means no existing install can ever be updated through the channel.
+  any of them is accepted the same way. One is pinned: key id
+  `6D13747A8A9A1783` (2026-11-21). It protects only installs running a
+  build made after that date; for older installs, losing the release key
+  still means they cannot be updated through the channel.
 
 A build only knows the keys it was shipped with. Everything below works
 through that: a key can sign for an install only after a build pinning it

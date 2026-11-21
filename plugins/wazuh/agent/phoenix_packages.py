@@ -51,7 +51,9 @@ DESKTOP_MINISIGN_PUBLIC_KEY = "RWSgsxC2oeynvutf13Lmgaqf29dX8MAKKtaEV21w4HEfsB3wX
 # (dev-docs/release-keys.md). A key is revoked by shipping a build without
 # it; never list a key whose secret half lives on the release machine or on
 # a server.
-DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS: tuple[str, ...] = ()
+DESKTOP_MINISIGN_BACKUP_PUBLIC_KEYS: tuple[str, ...] = (
+    "RWSDF5qKenQTbb876r4mO42vNTO/+rqpKW3v0cHKCUf0wKYtlk7OUPqP",  # key id 6D13747A8A9A1783
+)
 
 AGENT, DESKTOP = "phoenix-agent", "phoenix-desktop"
 DESKTOP_PLATFORM = "desktop"  # the store's directory for desktop releases
