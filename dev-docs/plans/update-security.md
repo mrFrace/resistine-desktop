@@ -186,6 +186,10 @@ reachable from the build VM, setting `PHOENIX_SIGN_THUMBPRINT` and
 the signer check is skipped. None of the Windows or macOS paths has been
 run on a real machine.
 
+Also done: 4 (`utils/updates/background.py`, started from `main.py`, with
+a switch in Settings). It toasts, and sends a desktop notification when the
+window is in the tray; a Dashboard row was left out.
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 

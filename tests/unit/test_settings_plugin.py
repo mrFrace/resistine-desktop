@@ -426,6 +426,15 @@ class TestHandleUninstall:
 # _check_for_updates
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _no_remembered_update_check():
+    """A check answered in one test must not prefill the next test's screen."""
+    from utils.updates import background
+    background.remember(None)
+    yield
+    background.remember(None)
+
+
 def _check_result(available=False, build=202610221500, stale=False, os_key="windows"):
     latest = MagicMock(build=build, expires="2026-10-01")
     return MagicMock(available=available, latest=latest, stale=stale, os_key=os_key)
@@ -450,6 +459,19 @@ class TestCheckForUpdates:
         text = self._run_worker(built_plugin, return_value=_check_result(available=True))
         assert "202610221500 is available" in text
         assert not built_plugin.update_install_row.isHidden()
+
+    def test_background_find_is_shown_when_the_screen_is_built(self, settings_plugin, qapp):
+        from utils.updates import background
+        background.remember(_check_result(available=True))
+        settings_plugin._test_page = settings_plugin.create_main_screen()
+        assert "202610221500 is available" in settings_plugin.update_status_label.text()
+        assert not settings_plugin.update_install_row.isHidden()
+
+    def test_automatic_check_can_be_switched_off(self, built_plugin):
+        from utils.updates import background
+        assert built_plugin.update_auto_switch.isChecked()
+        built_plugin.update_auto_switch.setChecked(False)
+        assert not background.enabled()
 
     def test_install_row_is_hidden_until_there_is_something_to_install(self, built_plugin):
         assert built_plugin.update_install_row.isHidden()

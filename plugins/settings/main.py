@@ -450,6 +450,21 @@ class Plugin(BasePlugin):
         lay.addWidget(self.update_install_row)
         self.update_status_label = _StatusLine()
         lay.addWidget(self.update_status_label)
+        from utils.updates import background
+        self.update_auto_switch = ToggleSwitch()
+        self.update_auto_switch.setChecked(background.enabled())
+        self.update_auto_switch.toggled.connect(background.set_enabled)
+        lay.addWidget(SettingRow(
+            "Check for updates automatically",
+            "Once a day Phoenix asks whether a newer build exists and tells you. "
+            "Nothing is installed until you start it.",
+            self.update_auto_switch))
+        # What the background check already found in this run.
+        found = background.last_result()
+        if found is not None and (found.available or found.stale):
+            from utils.updates import installer
+            offer = found if found.available and installer.supported(found.os_key) else None
+            self._show_update_result(offer, update_check_text(found))
         return box
 
     # ---- Sign in/out + Uninstall ------------------------------------------
@@ -606,6 +621,8 @@ class Plugin(BasePlugin):
         try:
             from utils.updates import channel, installer
             result = channel.check()
+            from utils.updates import background
+            background.remember(result)
             text = update_check_text(result)
             if result is not None and result.available and installer.supported(result.os_key):
                 offer = result
