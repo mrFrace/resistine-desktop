@@ -154,14 +154,14 @@ def _build_app() -> tuple[QApplication, object]:
     except Exception as e:
         logger.debug(f"Desktop entry setup skipped: {e}")
 
-    # Auto-update is off for now. Without init no backend starts (Sparkle,
-    # WinSparkle or the Linux scheduler), so the app never checks on its own;
-    # Settings' "Check for updates" reports updates as unavailable.
-    # try:
-    #     from utils import updates
-    #     updates.init(window)
-    # except Exception as e:
-    #     logger.warning(f"Failed to start auto-updater: {e}")
+    # The legacy auto-updater (Sparkle, WinSparkle) stays off: updates.init is
+    # never called. The signed channel is asked quietly once a day; it only
+    # tells the user, installing is theirs to start (utils/updates/background.py).
+    try:
+        from utils.updates import background
+        background.start(window)
+    except Exception as e:
+        logger.warning(f"Failed to start the update check: {e}")
 
     # Native system tray (Windows, Linux). Closing the window then hides to
     # the tray; only the tray's Quit exits. See gui/system_tray.py. A Linux
