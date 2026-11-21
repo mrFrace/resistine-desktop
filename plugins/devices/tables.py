@@ -349,7 +349,7 @@ def posture_cves(cards: list) -> list:
                 desc += f" Fixed in {fixed}."
             elif ev.get("fix_available") is False:
                 desc += " No fixed version has been released yet."
-            for cve in (ev.get("cves") or [])[:50]:
+            for cve in (ev.get("cves") or [])[:100]:  # same cap as the mitigation parser
                 cid = _text(cve, 64)
                 if not cid:
                     continue
