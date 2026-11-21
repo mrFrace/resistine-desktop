@@ -71,8 +71,8 @@ def update_check_text(result) -> str:
         text = (f"Phoenix build {result.latest.build} is available: your system's "
                 "software updates install it (or phoenix.exposed/apps)")
     elif result.available:
-        text = (f"Phoenix build {result.latest.build} is available: "
-                "download it from phoenix.exposed/apps")
+        # Windows and macOS: the "Download and install" row fetches it.
+        text = f"Phoenix build {result.latest.build} is available"
     else:
         text = "Phoenix is up to date"
     if result.stale:
@@ -438,6 +438,16 @@ class Plugin(BasePlugin):
                         f"Current version: {self._get_app_version()}",
                         on_click=self._check_for_updates)
         lay.addWidget(check)
+        # Shown once a check found a release this app can fetch itself
+        # (utils/updates/installer.py): Windows and macOS.
+        self._update_offer = None
+        self._update_busy = False
+        self.update_install_row = MenuRow(
+            "download", "Download and install",
+            "Checked against the signed Phoenix release before it starts",
+            on_click=self._install_update)
+        self.update_install_row.setVisible(False)
+        lay.addWidget(self.update_install_row)
         self.update_status_label = _StatusLine()
         lay.addWidget(self.update_status_label)
         return box
@@ -592,14 +602,64 @@ class Plugin(BasePlugin):
     def _update_check_worker(self):
         from utils import jobs
         job = jobs.start("update_check", "Update check")
+        offer = None
         try:
-            from utils.updates import channel
-            text = update_check_text(channel.check())
+            from utils.updates import channel, installer
+            result = channel.check()
+            text = update_check_text(result)
+            if result is not None and result.available and installer.supported(result.os_key):
+                offer = result
             jobs.finish(job["code"], ok=True, summary=text)
         except Exception as e:  # noqa: BLE001  PackageError messages are user-safe
             logger.warning(f"Update check failed: {e}")
             text = f"Update check failed: {e}"
             jobs.finish(job["code"], ok=False, summary=str(e))
+        self.app.after(0, lambda: self._show_update_result(offer, text))
+
+    def _show_update_result(self, offer, text):
+        self._update_offer = offer
+        try:
+            self.update_install_row.setVisible(offer is not None)
+        except RuntimeError:  # the screen was rebuilt meanwhile
+            pass
+        self._safe_set_text(self.update_status_label, text)
+
+    def _install_update(self):
+        if self._update_offer is None or self._update_busy:
+            return
+        self._update_busy = True
+        self.update_status_label.setText("Downloading the update…")
+        threading.Thread(target=self._update_install_worker, args=(self._update_offer,),
+                         name="update-install", daemon=True).start()
+
+    def _update_install_worker(self, offer):
+        from utils import jobs
+        job = jobs.start("update_install", "Update download",
+                         f"build {offer.latest.build}")
+        shown = [-1]
+
+        def progress(done, total):
+            pct = done * 100 // total if total else 0
+            if pct != shown[0]:
+                shown[0] = pct
+                self.app.after(0, lambda: self._safe_set_text(
+                    self.update_status_label, f"Downloading the update… {pct}%"))
+
+        try:
+            from utils.updates import installer
+            path = installer.download(offer, progress)
+            installer.launch(path, offer.latest)
+            if offer.os_key == "windows":
+                text = "The update is installing. Phoenix restarts when it is done."
+            else:
+                text = ("The update is open: drag Phoenix to Applications, "
+                        "then start it again.")
+            jobs.finish(job["code"], ok=True, summary=text)
+        except Exception as e:  # noqa: BLE001  PackageError messages are user-safe
+            logger.warning(f"Update install failed: {e}")
+            text = f"Update failed: {e}"
+            jobs.finish(job["code"], ok=False, summary=str(e))
+        self._update_busy = False
         self.app.after(0, lambda: self._safe_set_text(self.update_status_label, text))
 
     def _get_app_version(self):

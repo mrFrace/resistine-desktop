@@ -67,6 +67,14 @@ DisableProgramGroupPage=yes
 SetupIconFile=..\..\resources\icons\icon.ico
 UninstallDisplayIcon={app}\Phoenix.exe
 SetupLogging=yes
+; Authenticode: build-windows-installer.ps1 defines Signed and the "phoenix"
+; sign tool when PHOENIX_SIGN_THUMBPRINT is set. Setup.exe and the
+; uninstaller are then signed; the app checks that signature before it runs
+; a downloaded update (utils/updates/installer.py).
+#ifdef Signed
+SignTool=phoenix
+SignedUninstaller=yes
+#endif
 ; The acceptance screen shows the Terms of Service, the Privacy Policy and
 ; the GPL notice. InstallAgreement.txt (next to this script) is generated
 ; from docs/Terms.md, docs/Privacy.md and LICENSE.md by
@@ -108,9 +116,9 @@ Root: HKLM64; Subkey: "{#AppRegKey}"; ValueType: string; ValueName: "Build"; Val
 Root: HKLM64; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Phoenix"; ValueData: """{app}\Phoenix.exe"""; Tasks: startup; Flags: uninsdeletevalue
 
 [Run]
-; No 'skipifsilent': WinSparkle runs this installer with /SILENT during an
-; auto-update, and we still want the app relaunched afterward (otherwise the
-; update applies but "nothing happens" — the app just stays closed).
+; No 'skipifsilent': the app runs this installer with /SILENT for an update
+; (utils/updates/installer.py), and we still want the app relaunched afterward
+; (otherwise the update applies but "nothing happens": the app stays closed).
 Filename: "{app}\Phoenix.exe"; Description: "Launch {#AppName}"; Flags: nowait postinstall runasoriginaluser; Check: ShouldPerformInstallAction
 
 [UninstallDelete]

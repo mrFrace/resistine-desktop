@@ -176,6 +176,16 @@ minisign machinery above could cover this list too.
 | 8 | Remove WinSparkle, Sparkle.framework, the Sparkle signing step and secret, and the appcast backends; fix CLAUDE.md. | F7 | `Phoenix.spec`, `build-distribution.sh`, `release.yml`, `utils/updates/` |
 | 9 | Sign `optional_plugins.json` with a pinned minisign key and verify it before trusting any hash in it. | F8 | `plugins/plugin_manager.py`, plugin repo |
 
+Done on `autofixes`: 1 (`utils/updates/installer.py`, Settings → "Download
+and install", Windows and macOS) and the code half of 2 (signing in
+`build-windows-installer.ps1` and `PhoenixInstaller.iss`, signer check in
+the app). Still open for 2: buying a code-signing certificate, making it
+reachable from the build VM, setting `PHOENIX_SIGN_THUMBPRINT` and
+`PHOENIX_REQUIRE_SIGNING=1` for releases, and then
+`installer.WINDOWS_PUBLISHER`. Until then Windows builds stay unsigned and
+the signer check is skipped. None of the Windows or macOS paths has been
+run on a real machine.
+
 Order: 1 and 2 first (they close the only path by which a middleman gets
 code onto a machine), then 5 and 4, then the rest.
 
