@@ -266,8 +266,10 @@ Not covered: there is no expiry, so a host that keeps serving an old
 (still newest-seen) catalog is not noticed; a new install has seen no
 serial and accepts any signed catalog. Plugin archives are still not
 signed themselves; their hash is, which binds them as long as the catalog
-is right. The catalog repository (`DatOneOPGuy/phoenix-desktop-plugins`)
-does not exist yet (404 on 2026-11-22), so the Store lists no optional
+is right. The catalog repository
+(`gitlab.phoenix.exposed/francis/phoenix-desktop-plugins`, which must be a
+public project so the app can read it without signing in) does not exist
+yet, so the Store lists no optional
 plugins today and this has not run against a published catalog. When it is
 created: write `plugins/optional_plugins.json`, run the script, commit both
 files together.

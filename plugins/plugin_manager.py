@@ -41,7 +41,7 @@ class PluginManager:
     # signature is required there too.
     OPTIONAL_PLUGINS_URL = os.environ.get(
         "PHOENIX_PLUGINS_URL",
-        "https://raw.githubusercontent.com/DatOneOPGuy/phoenix-desktop-plugins/main/plugins/optional_plugins.json",
+        "https://gitlab.phoenix.exposed/francis/phoenix-desktop-plugins/-/raw/main/plugins/optional_plugins.json",
     )
 
     _SETTINGS_NS = "plugins"

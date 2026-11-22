@@ -126,8 +126,11 @@ Platform-specific implementations live in `*_functions_{darwin,linux,windows}.py
 
 ### CI/CD
 
+- `.gitlab-ci.yml` (`gitlab.phoenix.exposed/francis/Phoenix-Desktop`): runs on the Apple Silicon runner (tag `macos`, shell executor). compileall + unit and security tests on every push; on a `v*` tag `release-macos` builds, signs and notarizes, uploads the dmg to the project's package registry and creates a GitLab release. Its CI/CD variables are listed at the top of the file.
 - `.github/workflows/ci.yml`: compileall + pip-audit on push/PR (Python 3.13)
 - `.github/workflows/release.yml`: macOS build + sign + notarize + DMG on version tags (appcast publishing retired with the old update channel)
+
+Neither release job feeds the in-app update channel; that is `scripts/build/publish-desktop.sh`, run by hand.
 
 ### Updates
 

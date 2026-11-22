@@ -1,50 +1,170 @@
-# Phoenix Desktop CI (Linux). Mirrors the Linux jobs of
-# .github/workflows/ci.yml. Having this file also stops GitLab from falling
-# back to Auto DevOps, whose Heroku buildpack can't build a desktop app.
+# Phoenix Desktop CI on GitLab. The jobs run on the Apple Silicon runner
+# (tag "macos", shell executor): the checks of .github/workflows/ci.yml on
+# every push, and on a version tag the macOS release build of
+# .github/workflows/release.yml. Having this file also stops GitLab from
+# falling back to Auto DevOps, whose Heroku buildpack can't build a desktop app.
+#
+# The release job reads these CI/CD variables (Settings > CI/CD > Variables,
+# masked; "protected" only if v* tags are protected too). Each one may be left
+# out when the runner's own account already has what it would install:
+#   DEVELOPER_ID_CERT_P12, DEVELOPER_ID_CERT_PASSWORD
+#       base64 of the .p12 holding the Developer ID Application and Installer
+#       certificates of team KTKS453599. Unset: the runner's keychain is used.
+#   APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD
+#       stored as the notarytool profile "phoenix-notarize". Unset: the
+#       profile must already exist on the runner.
+#   PROVISIONING_PROFILE_NE, PROVISIONING_PROFILE_XPC, PROVISIONING_PROFILE_MAIN
+#       base64 of the three provisioning profiles.
+#   GH_TOKEN
+#       lets `gh` fetch the VPN and ClamAV artifacts the build bundles. Unset:
+#       `gh` on the runner must be logged in, or VPN_ARTIFACTS_DIR and
+#       CLAMAV_ARTIFACTS_DIR must point at copies on the runner.
 
 stages:
   - check
   - test
+  - release
 
 default:
-  image: python:3.13-bookworm
+  tags: [macos]
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  QT_QPA_PLATFORM: offscreen # PyQt6 without a display
+  QT_QPA_PLATFORM: offscreen # the runner has no window session
 
-cache:
-  key:
-    files:
-      - scripts/requirements/requirements-linux.txt
-      - scripts/requirements/requirements-test.txt
-  paths:
-    - .cache/pip
+.python: &python
+  # Python 3.13 when the runner has it under that name.
+  - PYTHON="$(command -v python3.13 || command -v python3)"
+  - '"$PYTHON" --version'
 
 syntax-check:
   stage: check
   script:
-    - python -m compileall -q plugins/ utils/ gui/ main.py
+    - *python
+    - '"$PYTHON" -m compileall -q plugins/ utils/ gui/ main.py'
 
 unit-tests:
   stage: test
   needs: [syntax-check]
-  before_script:
-    # Runtime libraries PyQt6's wheels load on import.
-    - apt-get update -qq
-    - >
-      apt-get install -y -qq --no-install-recommends
-      libgl1 libegl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
-    - python -m venv .venv
-    - source .venv/bin/activate
-    - pip install -q -r scripts/requirements/requirements-linux.txt
-    - pip install -q -r scripts/requirements/requirements-test.txt
+  cache:
+    key:
+      files:
+        - scripts/requirements/requirements-mac.txt
+        - scripts/requirements/requirements-test.txt
+    paths:
+      - .cache/pip
   script:
+    - *python
+    - '"$PYTHON" -m venv .venv'
+    - source .venv/bin/activate
+    - pip install -q -r scripts/requirements/requirements-mac.txt
+    - pip install -q -r scripts/requirements/requirements-test.txt
     - >
       python -m pytest tests/unit/ tests/security/ --timeout=30
-      -m "not platform_darwin and not platform_windows"
       --junitxml=report.xml
   artifacts:
     when: always
     reports:
       junit: report.xml
+
+# Build, sign, notarize and publish the macOS installer for a version tag
+# (v1.2.0, or v1.2.0-beta.1 for a pre-release). The dmg goes to this project's
+# package registry and a GitLab release links it. The in-app update channel is
+# separate: scripts/build/publish-desktop.sh, run by hand with the release key.
+release-macos:
+  stage: release
+  needs: []
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+  variables:
+    GIT_DEPTH: "0"
+    KEYCHAIN_PATH: "$CI_PROJECT_DIR.tmp/phoenix-build-$CI_JOB_ID.keychain-db"
+    KEYCHAIN_LIST: "$CI_PROJECT_DIR.tmp/phoenix-build-$CI_JOB_ID.keychains"
+  script:
+    - *python
+    - VERSION="${CI_COMMIT_TAG#v}"
+    - mkdir -p "$CI_PROJECT_DIR.tmp"
+    # Certificates: into a keychain that exists for this job only.
+    - |
+      if [ -n "${DEVELOPER_ID_CERT_P12:-}" ]; then
+        CERT_PATH="$CI_PROJECT_DIR.tmp/phoenix-build-$CI_JOB_ID.p12"
+        KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+        security list-keychains -d user > "$KEYCHAIN_LIST"
+        printf '%s' "$DEVELOPER_ID_CERT_P12" | base64 --decode > "$CERT_PATH"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+        security import "$CERT_PATH" -P "$DEVELOPER_ID_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        rm -f "$CERT_PATH"
+        security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+        security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+      else
+        echo "DEVELOPER_ID_CERT_P12 is not set: signing with the runner's keychain"
+      fi
+    - |
+      if [ -n "${APPLE_ID:-}" ]; then
+        xcrun notarytool store-credentials "phoenix-notarize" \
+          --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
+      else
+        echo "APPLE_ID is not set: using the runner's phoenix-notarize profile"
+      fi
+    - |
+      if [ -n "${PROVISIONING_PROFILE_NE:-}" ]; then
+        mkdir -p provisioning-profiles
+        printf '%s' "$PROVISIONING_PROFILE_NE" | base64 --decode > provisioning-profiles/Mac_Network_Ext.provisionprofile
+        printf '%s' "$PROVISIONING_PROFILE_XPC" | base64 --decode > provisioning-profiles/Mac_VPNXPC.provisionprofile
+        printf '%s' "$PROVISIONING_PROFILE_MAIN" | base64 --decode > provisioning-profiles/Mac_Desktop.provisionprofile
+      fi
+    - '"$PYTHON" -m venv .venv'
+    - source .venv/bin/activate
+    - pip install -q -r scripts/requirements/requirements-mac.txt
+    - pip install -q "cyclonedx-bom>=7.0.0"
+    - command -v create-dmg > /dev/null || brew install create-dmg
+    # The SBOM and the third-party license file are generated from the
+    # environment that ships; the generator also refuses AGPL/SSPL/BUSL/
+    # Commons-Clause dependencies. A tag whose committed copies are stale
+    # does not build.
+    - python scripts/sbom/generate_sbom.py
+    - |
+      if ! git diff --exit-code sbom.cdx.json LICENSE-3rd-Party.md; then
+        echo "ERROR: sbom.cdx.json / LICENSE-3rd-Party.md are out of date."
+        echo "Run scripts/sbom/generate_sbom.py in a venv with requirements-mac.txt,"
+        echo "commit both files and move the tag $CI_COMMIT_TAG."
+        exit 1
+      fi
+    - ./scripts/build/build-distribution.sh
+    # The script carries on unnotarized when the credentials don't work; a
+    # release without a stapled ticket fails here instead.
+    - xcrun stapler validate dist/Phoenix-Installer.pkg
+    - xcrun stapler validate dist/Phoenix-Installer.dmg
+    - |
+      PACKAGE_URL="$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/phoenix-desktop/$VERSION/Phoenix-Installer.dmg"
+      curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --upload-file dist/Phoenix-Installer.dmg "$PACKAGE_URL"
+      shasum -a 512 dist/Phoenix-Installer.dmg
+      VERSION="$VERSION" PACKAGE_URL="$PACKAGE_URL" python -c '
+      import json, os
+      version = os.environ["VERSION"]
+      print(json.dumps({
+          "name": "Phoenix Desktop " + version + (" (pre-release)" if "-" in version else ""),
+          "tag_name": os.environ["CI_COMMIT_TAG"],
+          "description": "macOS installer built from " + os.environ["CI_COMMIT_SHORT_SHA"] + ".",
+          "assets": {"links": [{"name": "Phoenix-Installer.dmg", "url": os.environ["PACKAGE_URL"],
+                                "link_type": "package"}]},
+      }))' > release.json
+      curl --fail --silent --show-error --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --header "Content-Type: application/json" --data @release.json \
+        "$CI_API_V4_URL/projects/$CI_PROJECT_ID/releases" > /dev/null
+  after_script:
+    - |
+      if [ -s "$KEYCHAIN_LIST" ]; then
+        xargs security list-keychains -d user -s < "$KEYCHAIN_LIST"
+      fi
+      security delete-keychain "$KEYCHAIN_PATH" 2> /dev/null || true
+      rm -f "$KEYCHAIN_LIST" "$CI_PROJECT_DIR.tmp/phoenix-build-$CI_JOB_ID.p12"
+  artifacts:
+    paths:
+      - dist/Phoenix-Installer.dmg
+      - dist/Phoenix-Installer.pkg
+      - sbom.cdx.json
+    expire_in: 90 days
